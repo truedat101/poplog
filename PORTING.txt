@@ -1,0 +1,145 @@
+The following text gives outline for porting Poplog to new
+architecture.  This is based on experience of ARM port and
+for concretness we will use ARM as example.
+
+0) Background knowledge
+
+Core part of Poplog is written is "system dialect" of Pop11.
+Developer should have resonable familarity programming
+in Pop11.  For "system dialect" old document describing
+syspop11 should be enough.  Significant part of Poplog
+runtime support is written in assembler, so familiarity
+with assembler programming is needed.  Part of runtime
+support is written in C, so familiarity with C is needed.
+Porting Poplog involves cross-compilation.  One need
+running Poplog on some machine (called host).  Machine
+on which we want the port to run is called target.
+
+1) Planning
+
+First step is determine characteristic of target machine,
+in particular word length, available registers, conventions
+used by C compiler and operating system.  Also, one needs
+to study instruction set.
+
+2) Porting popc
+
+This needs creating architecture specific subdirectory in
+'pop/src/syscomp', in case of ARM port it was
+'pop/src/syscomp/arm'.  This subdirectory should contain
+3 files: 'sysdefs.p', 'asmout.p', 'genproc.p'.  'sysdefs.p'
+contains parameters used by port.  One needs specific symbol
+to denote port, in case of ARM port this was 'ARM_LINUX'. 
+At first stage it is crucial to correctly specify lengths
+and alignment requiremnts of basic types.  popc structures
+are used for interfacing to operating system, so to avoid
+troubles Poplog definition should match system convention,
+in case of Linux meaning convention used by C compiler.
+
+'asmout.p' should be adjusted to system assembler, ARM Linux
+uses 'gas' which uses similar syntax on different machines,
+so small adjustments from other targets were enough.
+
+Function 'asm_gen_exfunc_clos_code' is very specific to architecure,
+it have to create needed sequence of instructions.  Also
+'asm_gen_poplink_code' is specific to architecure.
+
+Main part of porting popc is 'genproc.p'.  It is resposible
+generation machine instructions.  Main procedure called
+from outside is 'mc_code_generator', in current ports this
+procedure calls 'generate'.  'generate' receives list of
+abstract M-instructions.  Each M-instruction is a vector,
+such that first entry gives procedure emiting machine code
+for instructions, other entries give parameters.  Most work
+in creating 'genproc.p' goes into creating procedures
+emiting M-instructions, for example 'M_ADD' generates
+machine (non-pop) addition.  In ARM port I first defined
+all procedures corresponding to M-instructions as stubs
+which just printed error.  This allowed "compiling" simple
+source files to find out which M-instructions were in use.
+I incrementaly implemented all instructions.  Unfortunatly
+first M-instruction to implement is M_CREATE_SF which is
+rather complex.  After implementing few instructions one
+can look at generated assembly file and check if it looks
+OK.  In fact, for code doing no memory allocation one can
+provide a stub runtime and test on the target.
+
+In this stage 'mk_cross' script allows building cross-popc
+so once all needed procedures are present (possibly only as
+stubs) one can start testing.  Some M-instructions (and
+some variants of other M-instructions) are used only
+rarely, so it makes sense to go to next stage after few
+core M-instruction work OK and implement other
+M-instruction when they appear during testing.
+During ARM port I had cross-assembler so I could
+assemble on the host.  I then transferred '.o' files
+to target and linked there.  In first stages I linked
+in ad-hoc way, later used files created by 'poplink'
+in particular 'poplink_cmd'.  But I had to edit
+'poplink_cmd' since pathnames and set of files/libraries
+were slightly different during port compared to final
+version.
+
+3) Porting runtime.
+
+Poplog needs about 120 assemby support routines.  Those
+routines should go to architecture specific subdirectory
+of 'pop/src', in case of ARM it was 'pop/src/arm'.
+Runtime support is spread out into 9 '.s' files.
+'amain.s' contains 'main' functions, it should perform
+initialization needed by Poplog and than call 'setpop'.
+At first stage one can implement most assemby routines as
+stubs.  I used infinte loop so that when program
+hit a stub I could attach gdb, and examine arguments.
+Then I provided implementation.  In that way when I
+provided real implementation I was sure that runtime
+is executed so there is at least minimaly tested.
+Once all files in 'src/pop' compiled with new popc I used
+cross-poplink to get full set of files for target corepop.
+Part of runtime is written in C.  To compile it one needs
+access to targert header files.  Simplest way to do this is
+to compile C files on the target machine, just using 'mklibpop'
+script.  Also, final link need access to target system libraries
+so I did this on target machine.  corepop needs few target
+specific files.  At first they can be replaced by stubs, but
+once corepop links one should go to next stage.
+
+4) Runtime code generator.
+
+There are 4 architecture specific files needed for runtime code
+generation: 'ass.p' (main runtime code generator), 'array_cons.p'
+(generates array procedures), 'closure_cons.p' (generate closures)
+and 'pdr_compose.p' (generates composition of procedures).
+In 'ass.p' main task is to provide procedure for each I-code.
+They are similar to procedures in 'genproc.p', but I-codes
+are a bit different than M-instructions and 'ass.p' generates
+machine code in memory, while 'genproc.p' generates assembler
+file.  Code generated by 'genproc.p' is currently linked
+at specific address.  'ass.p' must produce relocatable code
+which will be moved by garbage collector.  Since relative
+positions of procedures generated by 'ass.p' may change during
+runtime, generated code must call other procedures either
+using absolute addresses (for popc compiled code and runtime
+support) or indirection via table of constants or variables
+(table of constants and variables are adjusted by garbage
+collector so always will contain right addresses).  If machine
+has limited range of (or no) absolute branches, than
+absolute branches must be implemented as indirect transfers.
+On ARM this means loading branch targets to registers and
+doing indirect branch.
+
+5) Testing and debugging
+
+Once previous stages are done one can rebuild Poplog on
+target machine, which gives some amount of testing.
+Unfortunatly, this is rather incomplete and there is
+significant work to find out which defect of port is
+responsible for high-level failure.  To run correctly
+Poplog need several environment variables.  During testing
+I used gdb, so to have correct environment I started
+gdb via poplog script like:
+
+./poplog gdb pop/pop/basepop11
+
+From gdb prompt I set up breakpoint (if needed) and started
+Poplog using 'run' (with arguments if needed).
