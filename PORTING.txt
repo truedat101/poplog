@@ -1,3 +1,5 @@
+Originally from: http://fricas.org/~hebisch/poplog/port.txt
+
 The following text gives outline for porting Poplog to new
 architecture.  This is based on experience of ARM port and
 for concretness we will use ARM as example.
