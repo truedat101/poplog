@@ -72,7 +72,7 @@ case "$HOST_ARCH" in
       CC_LINK_OPTIONS="-m32 -Wl,-x $CC_LINK_OPTIONS"
       POP_arch=i386
         ;;
-  arm64)
+  aarch64)
       POP_arch=arm64
         ;;
   arm*)
