@@ -24,7 +24,7 @@ lconstant macro (
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file "aarith.s"
 
 ;;; Wrapping in POP object

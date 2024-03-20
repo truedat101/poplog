@@ -135,7 +135,7 @@ define asm_startfile(name);
     lvars name;
     dlocal pop_max_filename_len = ASM_MAX_FILENAME_LEN;
     asmf_printf(sysfileok(name), '\t.file\t"%p"\n');
-    asmf_printf('\t.arch armv5\n');
+    asmf_printf('\t.arch armv8\n');
 enddefine;
 sysprotect("pop_max_filename_len");
 

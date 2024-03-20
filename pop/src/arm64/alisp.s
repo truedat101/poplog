@@ -18,7 +18,7 @@ lconstant macro (
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file "alisp.s"
     .text
 

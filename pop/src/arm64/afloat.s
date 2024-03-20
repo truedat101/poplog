@@ -40,7 +40,7 @@ lconstant macro (
 );
 
 >_#
-    .arch armv5
+    .arch armv8
     .fpu vfp
     .file   "afloat.s"
     .text

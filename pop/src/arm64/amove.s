@@ -16,7 +16,7 @@ lconstant macro (
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file   "amove.s"
 ;;; Wrapping in POP object
    .text

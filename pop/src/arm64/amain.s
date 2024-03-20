@@ -25,7 +25,7 @@ endsection;
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file   "amain.s"
 
 ;;; Wrapping in POP object

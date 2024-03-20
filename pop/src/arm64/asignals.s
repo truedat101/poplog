@@ -26,7 +26,7 @@ lconstant macro (
 >_#
 
         .file   "asignals.s"
-        .arch armv5
+        .arch armv8
 
         .text
 

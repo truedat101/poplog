@@ -37,7 +37,7 @@ lconstant macro MOVFL   = "ldrb";
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file   "aprocess.s"
     .text
 

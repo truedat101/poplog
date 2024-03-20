@@ -46,7 +46,7 @@ endsection;
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file   "amisc.s"
 
 ;;; Wrapping in POP object

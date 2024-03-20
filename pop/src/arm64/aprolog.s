@@ -37,7 +37,7 @@ lconstant macro (
 
 >_#
 
-    .arch armv5
+    .arch armv8
     .file   "aprolog.s"
     .text
 
