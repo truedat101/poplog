@@ -31,20 +31,52 @@ lconstant macro _ERRNO = [DO_ERRNO_VAL];
 
 /* From <sys/types.h> */
 
+#_IF DEF FREEBSD or DEF NETBSD
+deftype
+    off_t   = -double,
+    blkcnt_t= -double;
+#_ELSE
 deftype
     off_t   = -long,
     blkcnt_t= -long;
+#_ENDIF
 
 #_IF DEFV SYSTEM_V >= 4.0
 
 deftype
     dev_t   = long,
     ino_t   = long,
+#_IF DEF SOLARIS and WORD_BITS = 64
+    mode_t  = int,
+    nlink_t = int,
+#_ELSE
     mode_t  = long,
     nlink_t = long,
+#_ENDIF
     time_t  = -long,
+#_IF DEF SOLARIS and WORD_BITS = 64
+    uid_t   = -int,
+#_ELSE
     uid_t   = -long,
+#_ENDIF
     gid_t   = uid_t;
+
+#_ELSEIF DEF FREEBSD or DEF NETBSD   /* must come before BERKELEY */
+
+deftype
+    dev_t   = double,
+    ino_t   = double,
+#_IF DEF NETBSD
+    mode_t  = int,
+    nlink_t = int,
+    time_t  = -double,
+#_ELSE
+    mode_t  = short,
+    nlink_t = double,
+    time_t  = -long,
+#_ENDIF
+    uid_t   = int,
+    gid_t   = int;
 
 #_ELSEIF DEFV LINUX >= 2.0  /* must come before BERKELEY */
 
@@ -125,7 +157,7 @@ deftype
 
 /* From <sys/stat.h> */
 
-#_IF DEFV SYSTEM_V >= 4.0
+#_IF DEFV SYSTEM_V >= 4.0 and WORD_BITS = 32
 
 struct STATB
   { dev_t   ST_DEV;
@@ -150,6 +182,92 @@ struct STATB
     byte    ST_FSTYPE[16];
     long    ST_PAD4[8]; /* expansion area */
   };
+
+#_ELSEIF DEF SOLARIS
+
+struct STATB {
+    dev_t   ST_DEV;
+    ino_t   ST_INO;
+    mode_t  ST_MODE;
+    nlink_t ST_NLINK;
+    uid_t   ST_UID;
+    gid_t   ST_GID;
+    dev_t   ST_RDEV;
+    off_t   ST_SIZE;
+    time_t  ST_ATIME;
+    long    ST_ATIME_X;
+    time_t  ST_MTIME;
+    long    ST_MTIME_X;
+    time_t  ST_CTIME;
+    long    ST_CTIME_X;
+    int    ST_BLKSIZE;
+    blkcnt_t ST_BLOCKS;
+    byte    ST_FSTYPE[16];
+};
+
+#_ELSEIF DEF NETBSD         /* must come before BERKELEY */
+struct STATB {
+    dev_t   ST_DEV;
+    mode_t  ST_MODE;
+    ino_t   ST_INO;
+    nlink_t ST_NLINK;
+    uid_t   ST_UID;
+    gid_t   ST_GID;
+    dev_t   ST_RDEV;
+    time_t  ST_ATIME;
+    long    ST_ATIME_NS;
+    time_t  ST_MTIME;
+    long    ST_MTIME_NS;
+    time_t  ST_CTIME;
+    long    ST_CTIME_NS;
+    time_t  ST_BIRTHTIM;
+    long    ST_BIRTHTIM_NS;
+    off_t   ST_SIZE;
+    blkcnt_t ST_BLOCKS;
+    int     ST_BLKSIZE;
+    int     ST_FLAGS;
+    int     ST_GEN;
+    int     ST_SPARE[2];
+};
+
+#_ELSEIF DEF FREEBSD        /* must come before BERKELEY */
+struct STATB {
+    dev_t   ST_DEV;
+    ino_t   ST_INO;
+    nlink_t ST_NLINK;
+    mode_t  ST_MODE;
+    short   ST_PAD1;
+    uid_t   ST_UID;
+    gid_t   ST_GID;
+    int     ST_PAD2;
+    dev_t   ST_RDEV;
+/* times, corect conditon for extention TBD */
+#_IF WORD_BITS = 32
+    int     ST_ATIME_X;
+#_ENDIF
+    time_t  ST_ATIME;
+    long    ST_ATIME_NS;
+#_IF WORD_BITS = 32
+    int     ST_MTIME_X;
+#_ENDIF
+    time_t  ST_MTIME;
+    long    ST_MTIME_NS;
+#_IF WORD_BITS = 32
+    int     ST_CTIME_X;
+#_ENDIF
+    time_t  ST_CTIME;
+    long    ST_CTIME_NS;
+#_IF WORD_BITS = 32
+    int     ST_BIRTHTIM_X;
+#_ENDIF
+    time_t  ST_BIRTHTIM;
+    long    ST_BIRTHTIM_NS;
+    off_t   ST_SIZE;
+    blkcnt_t ST_BLOCKS;
+    int     ST_BLKSIZE;
+    long    ST_GEN;
+    long    ST_SPARE[10];
+};
 
 #_ELSEIF DEF ALPHA_LINUX    /* must come before BERKELEY */
 
@@ -289,7 +407,7 @@ lconstant macro (
     _STM_IFLNK  = _8:120000,
     );
 
-#_IF DEF LINUX_ELF or DEF NCR or DEF DGUX or DEF SOLARIS_X86
+#_IF DEF LINUX and DEF UNIX_ELF or DEF FREEBSD or DEF NETBSD or DEF NCR or DEF DGUX or DEF SOLARIS_X86
 ;;; In these systems -- all PC Unix variants -- calls to the *stat()
 ;;; functions are replaced by the C compiler with calls to *xstat()
 ;;; alternatives. In some versions of Linux, the stat() functions
@@ -341,6 +459,9 @@ struct DIRECT
     ino_t   DIR_INO;
     short   DIR_RECLEN,
             DIR_NAMLEN;
+#_IF DEF NETBSD
+    byte    DIR_TYPE;
+#_ENDIF
     byte    DIR_NAME[];
   };
 
@@ -508,7 +629,13 @@ lconstant macro (
 ;;; --- TIMES/TIMERS -------------------------------------------------------
 
 struct TMS
-  { long    TMS_UTIME,
+  {
+#_IF DEF FREEBSD or DEF NETBSD
+    int
+#_ELSE
+   long
+#_ENDIF
+        TMS_UTIME,
         TMS_STIME,
         TMS_CUTIME,
         TMS_CSTIME;

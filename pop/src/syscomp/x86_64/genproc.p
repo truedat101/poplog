@@ -2093,8 +2093,10 @@ define lconstant outinst(instr);
     lvars instr;
 #_IF DEF MASM
     lconstant COMMENT = `;`;
-#_ELSE
+#_ELSEIF DEF SOLARIS
     lconstant COMMENT = `/`;
+#_ELSE
+    lconstant COMMENT = `#`;
 #_ENDIF
     lvars opcode = f_subv(1, instr);
     if opcode == "label" then

@@ -18,7 +18,6 @@ global constant macro (
     MACHINE = [[pc]],
 
     PC = true,
-    X86_LINUX = true,
 
 
 ;;; === PROCESSOR (INTEL 80x86) =======================================
@@ -45,21 +44,23 @@ global constant macro (
 
 
     UNIX = true,
-    BERKELEY = 4.3,
-    LINUX = 2.0,
+    SUNOS = 5.6,
+    SOLARIS = SUNOS,
+    SOLARIS_X86 = SOLARIS,
     UNIX_ELF = true,
-    POSIX1 = 198808,            ;;; probably later than this ...
-    OPERATING_SYSTEM = [[unix linux ^LINUX elf posix {^POSIX1}]],
+    POSIX1 = 199309,
+    OPERATING_SYSTEM = [[unix sunos ^SUNOS posix {^POSIX1}]],
+    SYSTEM_V = 4.0,
 
     SHARED_LIBRARIES = true,
 
     BSD_MMAP        = true,      ;;; has -mmap- and -mprotect- facilities
     BSD_MPROTECT    = true,
 
-    VPAGE_OFFS = 4096,      ;;; word address offset of a virtual page
+    VPAGE_OFFS = 4096,
 
     ;;; LOWEST_ADDRESS:
-    LOWEST_ADDRESS = 0,
+    LOWEST_ADDRESS = 4096,
 
     ;;; Procedures to get and set the memory break and return the REAL end of
     ;;; memory. (We always need the real end to ensure that the end of the
