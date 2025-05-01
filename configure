@@ -65,7 +65,10 @@ else
     PACK_CONF=no
 fi
 
-HOST_ARCH=`uname -m`
+if [ -z "$HOST_ARCH" ]; then
+  HOST_ARCH=`uname -m`
+fi
+
 
 CC_LINK_OPTIONS="-Wl,-export-dynamic"
 case "$HOST_ARCH" in
