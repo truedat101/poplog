@@ -655,7 +655,8 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     /* copy the details into a memory structure that pop can access */
     __pop_sigcontext.PSC_SIG    = sig;
     __pop_sigcontext.PSC_CODE   = code;
-#if defined(__arm__)
+/* XXX TODO: porting to ARM64, this may need its own ifdef*/
+#if defined(__arm__)||defined(__aarch64__)
         __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.arm_pc;
 #else
     __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.gregs[REG_PC];
@@ -663,7 +664,8 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     __pop_sigcontext.PSC_ADDR   = (char *) addr;
 
     /* return to routine that cleans up and calls Error_signal */
-#if defined(__arm__)
+    /* XXX TODO: porting to ARM64, this may need its own ifdef*/
+#if defined(__arm__)||defined(__aarch64__)
         context->uc_mcontext.arm_pc = (greg_t) __pop_errsig;
 #else
     context->uc_mcontext.gregs[REG_PC] = (greg_t) __pop_errsig;
@@ -2079,8 +2081,9 @@ int personality (unsigned long);
 #include <sys/utsname.h>
 
 void
-linux_setper(int argc, char * * argv, char * * envp) {
-#if defined(__i386__) || defined(__x86_64__) || defined(__arm__)
+linux_setper(int argc, char * * argv, char * * envp)
+{
+#if defined(__i386__) || defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
     struct utsname name;
     int major_version = 2;
     int minor_version = 6;

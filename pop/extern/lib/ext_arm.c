@@ -1,6 +1,7 @@
 #include <string.h>
-
-#if defined(__arm__)
+/* XXX TODO: porting to ARM64, this may need its own ifdef*/
+/* XXX TODO: this will need to change for darwin arm64 possibly also */
+#if defined(__arm__)||defined(__aarch64__)
 
 struct registers_buffer {
     int i_reg[4];

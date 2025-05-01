@@ -3,6 +3,7 @@
 POP_target=target
 CC="${CC:-cc}"
 
+echo "Target subdir: $POP_target"
 usage() {
   echo "Usage:"
   echo "  configure [options]"
@@ -47,7 +48,7 @@ while [ "$*" != "" ] ; do
     esac
     shift
 done
-
+echo "Target subdir: $POP_target"
 if [ ! -f $POP_target/pop/corepop ] ; then
     echo "corepop is missing in target tree"
     exit 1
@@ -76,6 +77,9 @@ case "$HOST_ARCH" in
   i[3-6]86*)
       CC_LINK_OPTIONS="-m32 -Wl,-x $CC_LINK_OPTIONS"
       POP_arch=i386
+        ;;
+  aarch64)
+      POP_arch=arm64
         ;;
   arm*)
       POP_arch=arm
