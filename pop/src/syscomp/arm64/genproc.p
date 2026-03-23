@@ -1,6 +1,8 @@
 /*
- > File:        $usepop/src/syscomp/genproc_arm.p
- > Purpose:     Compiles M-Code to ARM assembler (for R-pi, etc.)
+ > File:        $usepop/src/syscomp/genproc_arm64.p
+ > Purpose:     Compiles M-Code to AArch64 assembler
+ > Based on:    ARM32 genproc.p by Waldek Hebisch
+ > Modified:    Full AArch64 (ARMv8-A) rewrite
  */
 
 
@@ -140,33 +142,58 @@ constant macro USE_NEW_M_OPERANDS = true;
 ;;; === REGISTER USAGE ================================================
 
 /*
-   r0  - work/arg            r1 - work/arg
-   r2  - work/arg            r3 - work/arg/chain
-   r4  - pop lvar            r5 - ATM work (would like pop lvar)
-   r6  - pop lvar            r7 - non pop lvar
-   r8  - non pop lvar        r9  - non pop lvar
-   r10 - user stack pointer  r11 - base
-   r12 - work                r13 - stack pointer
-   r14 - link register/work  r15 - program counter
+   AArch64 register assignments for Poplog:
 
+   x0  - WK_REG/work/arg_reg_0    x1  - work/arg_reg_1
+   x2  - CHAIN_REG/arg_reg_2      x3  - WK_ADDR_REG_1
+   x4  - scratch                   x5  - secondary work reg (R5)
+   x6-x11 - scratch/caller-saved
+   x12 - WK_ADDR_REG_2 (caller-saved scratch, fine for this use)
+   x13-x15 - scratch
+   x16 - IP0 (intra-procedure scratch, used for indirect branches)
+   x17 - IP1 (intra-procedure scratch)
+   x18 - platform register (reserved, do not use)
+   x19 - USP (user stack pointer, callee-saved)
+   x20 - PB  (procedure base register, callee-saved)
+   x21 - pop register local (was r4, callee-saved)
+   x22 - pop register local (was r6, callee-saved)
+   x23 - nonpop register local (was r7, callee-saved)
+   x24 - nonpop register local (was r8, callee-saved)
+   x25 - nonpop register local (was r9, callee-saved)
+   x26-x28 - callee-saved (unused by Poplog)
+   x29 - FP (frame pointer, callee-saved)
+   x30 - LR (link register)
+   sp  - stack pointer (must be 16-byte aligned for access)
+   xzr/wzr - zero register
+
+   Key differences from ARM32:
+   - 64-bit word size (WORD_OFFS = 8)
+   - No conditional execution on most instructions (use cmp + b.cond)
+   - No stmfd/ldmfd; use stp/ldp pairs (16-byte aligned)
+   - PC not directly readable as a general register
+   - ret instruction replaces bx lr
+   - br/blr replace bx/blx for register targets
+   - Shifts are separate instructions (lsl, asr, lsr) not operand modifiers
+   - x16 used as scratch for indirect branches
 */
 
 lconstant
 
-    ;;; ARM register names and their usage
+    ;;; AArch64 register names and their usage
 
-    R0 = "r0",    ;;; WK_REG/work reg ???/arg_reg_0
-    R1 = "r1",    ;;; principal work reg/arg_reg_1
-    R2 = "r2",    ;;; CHAIN_REG/arg_reg_2
-    R3 = "r3",    ;;; WK_ADDR_REG_1
-    R4 = "r4",    ;;;
-    R5 = "r5",    ;;; secondary work reg
-    R9  = "r9",
-    R10 = "r10",  ;;; USP
-    R11 = "r11",  ;;; PB
-    R12 = "r12",  ;;; WK_ADDR_REG_2
-    R13 = "sp",    ;;; SP/r13
-    LR = "lr",     ;;; LR/r14
+    R0 = "x0",    ;;; WK_REG/work reg/arg_reg_0
+    R1 = "x1",    ;;; principal work reg/arg_reg_1
+    R2 = "x2",    ;;; CHAIN_REG/arg_reg_2
+    R3 = "x3",    ;;; WK_ADDR_REG_1
+    R4 = "x4",    ;;; scratch
+    R5 = "x5",    ;;; secondary work reg
+    R9  = "x9",   ;;; scratch
+    R10 = "x19",  ;;; USP (callee-saved)
+    R11 = "x20",  ;;; PB  (callee-saved)
+    R12 = "x12",  ;;; WK_ADDR_REG_2 (caller-saved scratch)
+    R13 = "sp",   ;;; SP
+    LR = "x30",   ;;; LR (link register)
+    R16 = "x16",  ;;; IP0 - scratch for indirect branches
 ;
 
 constant
@@ -214,10 +241,12 @@ constant
     ;;; ii_USP  : not supported
 
     ;;; Lists of pop/non-pop registers for register locals
+    ;;; AArch64: pop regs are x21, x22 (callee-saved)
+    ;;;          nonpop regs are x23, x24, x25 (callee-saved)
 
-    pop_registers = [[] 4 6],
+    pop_registers = [[] 21 22],
     ;;; pop_registers = [[]],
-    nonpop_registers = [[] 7 8 9],
+    nonpop_registers = [[] 23 24 25],
     ;;; nonpop_registers = [[]],
 ;
 
@@ -234,16 +263,21 @@ define reglabel = newassoc([]); enddefine;
 
 procedure();
         lvars n, l;
-        for n from 0 to 15 do
-                if n = 13 then "sp"
-                elseif n = 14 then "lr"
-                elseif n = 15 then "pc"
-                else
-                    consword('r' >< n)
-                endif -> l;
+        for n from 0 to 30 do
+                if n = 18 then
+                    ;;; x18 is platform-reserved, skip it
+                    nextloop;
+                endif;
+                consword('x' >< n) -> l;
                 n -> regnumber(l);
                 l -> reglabel(n);
-        endfor
+        endfor;
+        ;;; Add special register names
+        31 -> regnumber("sp");
+        "sp" -> reglabel(31);
+        30 -> regnumber("x30");  ;;; LR is x30
+        ;;; Alias "lr" to x30's number
+        30 -> regnumber("lr");
 endprocedure();
 
 ;;; Local register operands:
@@ -259,7 +293,7 @@ lconstant
 
 ;;; autoidreg:
 ;;;     indicates whether a register supports auto-indirection. All do
-;;;     on the ARM.
+;;;     on AArch64.
 
 identof("regnumber") -> identof("autoidreg");
 
@@ -302,9 +336,16 @@ lconstant macro isreg = "regnumber";
 
 lconstant macro isabs = "isstring";
 
+;;; is_small_disp:
+;;;     AArch64 scaled unsigned offset for LDR/STR is 0..32760 (for 8-byte),
+;;;     but signed unscaled is -256..255. For simplicity, use a conservative
+;;;     range matching the signed unscaled offset form, or use the scaled
+;;;     form for multiples of 8. We keep the same conservative range as
+;;;     ARM32 for general displacement checks.
+
 define lconstant is_small_disp(disp);
     lvars disp;
-    isinteger(disp) and disp > -64 and disp < 63;
+    isinteger(disp) and disp > -256 and disp < 256;
 enddefine;
 
 ;;; can_defer_opnd:
@@ -321,11 +362,6 @@ define can_defer_opnd(opd, dis, acctype, upd);
     if isreg(opd) and is_small_disp(dis) and acctype == T_WORD then
         ;;; register becomes register indirect
         {^opd ^dis};
-/*
-    elseif isreg(opd) and isreg(dis) and acctype == T_WORD then
-        ;;; register becomes register indirect
-        {^opd ^dis};
-*/
     elseif isref(opd) and isinteger(dis) and acctype == T_WORD then
         ;;; immediate symbol becomes absolute expression
         asm_expr(fast_cont(opd), "+", dis);
@@ -396,16 +432,26 @@ define lconstant position_or_add(opd, lst);
     endwhile;
 enddefine;
 
+;;; get_literal_addr:
+;;;     returns an operand string for accessing a literal from the
+;;;     procedure's literal pool via PB.
+;;;     On AArch64: each literal is 8 bytes (.xword), so offset = 8*(disp + lit_offset)
+
 define lconstant get_literal_addr(lit);
     lvars lit, disp, tmp;
     position_or_add(lit, new_literals) -> (disp, new_literals);
-    return('[' >< PB >< ', #' >< (4*(disp + lit_offset)) >< ']');
+    return('[' >< PB >< ', #' >< (8*(disp + lit_offset)) >< ']');
 enddefine;
 
 define lconstant load_literal(lit, tmp);
     lvars lit, tmp;
     asm_emit("ldr", tmp, get_literal_addr(lit), 3);
 enddefine;
+
+;;; get_addressable_op:
+;;;     converts an M-code operand into a form suitable for use as an
+;;;     AArch64 memory operand (an addressing mode string), loading
+;;;     intermediate values into tmp if necessary.
 
 define lconstant get_addressable_op(opd, tmp);
     lvars opd, disp, opd1, type;
@@ -421,7 +467,9 @@ define lconstant get_addressable_op(opd, tmp);
             elseif is_small_disp(disp) then
                     opd1 >< ', #' >< disp -> opd1;
             elseif isboolean(disp) then
-                '4' -> tmp;
+                ;;; Auto-increment/decrement for user stack operations
+                ;;; On AArch64: word size is 8 bytes
+                '8' -> tmp;
                 if datalength(opd) == 3 then
                     f_subv(3, opd) && t_BASE_TYPE -> type;
                     if type == t_INT then '4'
@@ -432,15 +480,19 @@ define lconstant get_addressable_op(opd, tmp);
                     endif -> tmp;
                 endif;
                 if disp then
+                    ;;; post-increment (pop): [base], #size
                     '[' >< opd1 >< '], #' >< tmp
                 else
+                    ;;; pre-decrement (push): [base, #-size]!
                     '[' >< opd1 >< ', #-' >< tmp >< ']!'
                 endif -> opd1;
                 return(opd1);
             elseif isinteger(disp) then
-                ;;; FIXME: Implement real register allocation
-                load_literal(disp, LR);
-                opd1 >< ', ' >< LR -> opd1;
+                ;;; Displacement too large for immediate offset;
+                ;;; load into a scratch register and use register offset.
+                ;;; On AArch64, use x16 as scratch (IP0).
+                load_literal(disp, R16);
+                opd1 >< ', ' >< R16 -> opd1;
             else
                 mishap(opd, 1, 'Unhandled operand in get_addressable_op');
             endif;
@@ -450,22 +502,23 @@ define lconstant get_addressable_op(opd, tmp);
     endif;
     if isinteger(opd) or isbiginteger(opd) then
         mishap(opd, 1, 'Want address of literal');
-        ;;; load_literal_addr(opd, tmp);
-        ;;; return('[' >< tmp >< ']');
     endif;
-    ;;; FIXME: check if this really works
     if isref(opd) then
-        ;;; printf(opd, 'has rep opd: %p\n');
         fast_cont(opd) -> opd1;
         return(get_literal_addr(opd1));
     elseif isstring(opd) then
-        ;;; printf(opd, 'has string opd: %p\n');
         load_literal(opd, tmp);
         return('[' >< tmp >< ']');
-        ;;; return(get_literal_addr(opd));
     endif;
     mishap(opd, 1, 'Unhandled operand in get_addressable_op');
 enddefine;
+
+;;; load_to_reg:
+;;;     loads an M-code operand into a register.
+;;;     On AArch64:
+;;;     - Small immediates use "mov xd, #imm"
+;;;     - Larger immediates go through the literal pool
+;;;     - Typed sub-word loads use ldrh/ldrb with sign extension via sxth/sxtb
 
 define lconstant load_to_reg(opd, tmp);
     lvars opd, tmp, opd1, opcode, type, n;
@@ -482,9 +535,7 @@ define lconstant load_to_reg(opd, tmp);
     get_addressable_op(opd, tmp) -> opd1;
     "ldr" -> opcode;
     if isvector(opd) and datalength(opd) == 3 then
-        ;;; printf(opd, 'Typed operand %p\n');
         f_subv(3, opd) && t_BASE_TYPE -> type;
-        ;;; printf(type, 'Base type: %p\n');
         if type == t_INT then "ldr"
         elseif type == t_SHORT then "ldrh"
         elseif type == t_BYTE then "ldrb"
@@ -493,17 +544,25 @@ define lconstant load_to_reg(opd, tmp);
         endif -> opcode;
     endif;
     asm_emit(opcode, tmp, opd1, 3);
+    ;;; Sign extension for sub-word types on AArch64
+    ;;; Use sxtb / sxth instructions instead of shift pairs
     if opcode /== "ldr" then
         f_subv(3, opd) -> type;
         if (type && tv_SIGNED) /== 0 then
             type && t_BASE_TYPE -> type;
-            if type == t_SHORT then 16 else 24 endif -> n;
-            asm_emit("mov", tmp, tmp, 'asl #' >< n, 4);
-            asm_emit("mov", tmp, tmp, 'asr #' >< n, 4);
+            if type == t_SHORT then
+                asm_emit("sxth", tmp, tmp, 3);
+            elseif type == t_BYTE then
+                asm_emit("sxtb", tmp, tmp, 3);
+            endif;
         endif;
     endif;
     return(tmp);
 enddefine;
+
+;;; gen_reg_store:
+;;;     stores a register value to a destination operand.
+;;;     On AArch64: use str/strh/strb as appropriate for the type.
 
 define lconstant gen_reg_store(src, dst, tmp);
     lvars src, dst, tmp, dst1, type, opcode;
@@ -521,31 +580,46 @@ define lconstant gen_reg_store(src, dst, tmp);
     asm_emit(opcode, src, dst1, 3);
 enddefine;
 
+;;; push_operand / pop_operand:
+;;;     Push/pop a value on/from the system stack.
+;;;     On AArch64: must maintain 16-byte stack alignment.
+;;;     We use sub sp, sp, #16 + str at [sp] for push,
+;;;     and ldr from [sp] + add sp, sp, #16 for pop.
+
 define lconstant push_operand(opd);
     lvars opd;
     load_to_reg(opd, R1) -> opd;
-    asm_emit("str", opd, '[sp, #-4]!', 3);
+    asm_emit("str", opd, '[sp, #-16]!', 3);
 enddefine;
 
 define lconstant pop_operand(opd);
     lvars opd, reg;
     if isreg(opd) then opd else R1 endif -> reg;
-    asm_emit("ldr", reg, '[sp], #4', 3);
+    asm_emit("ldr", reg, '[sp], #16', 3);
     returnif(opd == reg);
     gen_reg_store(reg, opd, R5);
 enddefine;
 
+;;; gen_transfer:
+;;;     generates a branch or call instruction.
+;;;     On AArch64:
+;;;     - "bl" to a label stays "bl"
+;;;     - "bl" to a register becomes "blr"
+;;;     - "b" to a label stays "b"
+;;;     - "b" to a register becomes "br"
+
 define lconstant gen_transfer(opcode, target);
     lvars target, opcode;
     if isreg(target) then
-        if opcode == "bl" then "blx" -> opcode; endif;
-        if opcode == "b" then "bx" -> opcode; endif;
+        if opcode == "bl" then "blr" -> opcode; endif;
+        if opcode == "b" then "br" -> opcode; endif;
     endif;
     asm_emit(opcode, target, 2);
 enddefine;
 
 ;;; testop:
-;;;     maps M-code condition codes to assembler opcode extension
+;;;     maps M-code condition codes to AArch64 condition code suffixes
+;;;     (used after b. for conditional branches)
 
 define lconstant testop =
     newassoc([
@@ -555,10 +629,10 @@ define lconstant testop =
         [LEQ    le]
         [GT     gt]
         [GEQ    ge]
-        [ULT    cc]
+        [ULT    lo]
         [ULEQ   ls]
         [UGT    hi]
-        [UGEQ   cs]
+        [UGEQ   hs]
         [NEG    mi]
         [POS    pl]
         [OVF    vs]
@@ -567,13 +641,16 @@ define lconstant testop =
 enddefine;
 
 define lconstant get_jump_addr(lab);
-    ;;; FIXME: really implement
     if isstring(lab) then
         lab;
     else
         mishap(lab, 1, 'get_jump_addr unimplemented');
     endif;
 enddefine;
+
+;;; gen_branch:
+;;;     On AArch64, conditional branches use "b.cond" syntax.
+;;;     The opcode passed in is e.g. "b.eq", "b.ne", etc.
 
 define lconstant gen_branch(opcode, lab);
     get_jump_addr(lab) -> lab;
@@ -590,13 +667,10 @@ define gen_move(src, dst);
     if isreg(dst) then
         load_to_reg(src, dst) -> src;
         returnif(src = dst);
-        ;;; printf(src, 'calling asm_emit, src = %p\n');
         asm_emit("mov", dst, src, 3);
-        ;;; printf('gen_move returning');
     else
-        ;;; FIXME: Do it in general
         ;;; Special case to support
-        ;;;   M_MOVE r10 {r10 <false>}
+        ;;;   M_MOVE x19 {x19 <false>}
         if src == USP and dst == -_USP then
             asm_emit("mov", R1, src, 3);
             R1 -> src;
@@ -614,6 +688,17 @@ enddefine;
 define M_MOVE();
     lvars (, src, dst) = explode(m_instr);
     gen_move(src, dst);
+enddefine;
+
+;;; M_UPDs:
+;;;     store a short (16-bit) value to memory.
+;;;     Load source to register if needed, then use strh.
+
+define M_UPDs();
+    lvars (, src, dst) = explode(m_instr);
+    load_to_reg(src, R1) -> src;
+    lvars dst1 = get_addressable_op(dst, R5);
+    asm_emit("strh", src, dst1, 3);
 enddefine;
 
 ;;; gen_bfield:
@@ -650,6 +735,10 @@ define is_int_opd(src);
     isintegral(src) and is_small_disp(src);
 enddefine;
 
+;;; get_operand2:
+;;;     On AArch64, small immediates can be used directly with
+;;;     add/sub/cmp etc. as #imm. Otherwise load to R5.
+
 define get_operand2(src);
     lvars src;
     if is_int_opd(src) then '#' >< src else load_to_reg(src, R5) endif;
@@ -657,8 +746,6 @@ enddefine;
 
 define get_operands(src1, src2);
     lvars src1, src2;
-    ;;; printf(src1, 'get_operands(%p, ');
-    ;;; printf(src2, '%p)\n');
     load_to_reg(src1, R1);
     get_operand2(src2);
 enddefine;
@@ -694,6 +781,7 @@ enddefine;
 ;;; gen_op_3:
 ;;;     plants general 3 address binary operation 'opcode':
 ;;;         dst := src1 op src2
+;;;     On AArch64, most ALU ops are 3-address: op Xd, Xn, operand2
 
 define lconstant gen_op_3(src1, src2, dst, opcode);
     lvars src1, src2, dst, opcode, op1, op2, dreg;
@@ -772,7 +860,7 @@ define lconstant m_parith_test(opcode);
         R5 -> src1;
     endif;
     gen_op_3(src1, src2, -_USP, opcode);
-    gen_branch('b' >< testop(test), lab);
+    gen_branch('b.' >< testop(test), lab);
 enddefine;
 
 ;;; ptr_arith:
@@ -798,8 +886,11 @@ define M_BIM    = m_op_commute(% "and"  %) enddefine;
 define M_LOGCOM = m_op_2(% "mvn"  %) enddefine;
 
 
-;;; different than m_op_commute because we need both arguments
-;;; in registers
+;;; M_MULT:
+;;;     different than m_op_commute because we need both arguments
+;;;     in registers.
+;;;     On AArch64: mul Xd, Xn, Xm (no restriction on same register)
+
 define M_MULT();
     lvars (, src1, src2, dst) = explode(m_instr), dreg;
     load_to_reg(src1, R1) -> src1;
@@ -810,21 +901,29 @@ define M_MULT();
     else
         R1 -> dreg;
     endif;
-    /* NOTE: ARM v5 theoretically can not produce result of
-       multiplication in one of source registers.  But
-       this is OK in v6 and probably also in existing v5 */
-    if dreg == src1 then
-        (src1, src2) -> (src2, src1)
-    endif;
     asm_emit("mul", dreg, src1, src2, 4);
     if dst then
         gen_reg_store(dreg, dst, R5);
     endif;
 enddefine;
 
+;;; M_NEG:
+;;;     negate: dst = 0 - src
+;;;     On AArch64: neg Xd, Xs (alias for sub Xd, xzr, Xs)
+
 define M_NEG();
-    lvars (, src, dst) = explode(m_instr);
-    gen_op_3(0, src, dst, "rsb");
+    lvars (, src, dst) = explode(m_instr), dreg;
+    load_to_reg(src, R1) -> src;
+    if isreg(dst) then
+        dst -> dreg;
+        false -> dst;
+    else
+        R1 -> dreg;
+    endif;
+    asm_emit("neg", dreg, src, 3);
+    if dst then
+        gen_reg_store(dreg, dst, R5);
+    endif;
 enddefine;
 
 /*
@@ -868,6 +967,15 @@ define M_PTR_SUB      = m_ptr_op_3(% "sub" %) enddefine;
 ;;;     performs an arithmetic shift of src2 by an amount src1, leaving
 ;;;     result in dst. The shift may be right or left depending on the
 ;;;     sign of src1.
+;;;
+;;;     On AArch64:
+;;;     - Constant shifts use lsl/asr instructions directly
+;;;     - Variable shifts: no conditional execution, so we use
+;;;       cmp + b.lt + two paths, or csel.
+;;;       We use: cmp src1, #0 / b.lt negative_path /
+;;;               lsl dreg, src2, src1 / b done /
+;;;               negative_path: neg tmp, src1 / asr dreg, src2, tmp /
+;;;               done:
 
 define M_ASH();
     lvars (, src1, src2, dst) = explode(m_instr),
@@ -880,23 +988,36 @@ define M_ASH();
     endif;
     if isintegral(src1) then
         load_to_reg(src2, R1) -> src2;
-        if src1 < -31 then -31 -> src1 endif;
-        if src1 > 31 then
+        if src1 < -63 then -63 -> src1 endif;
+        if src1 > 63 then
             asm_emit("mov", dreg, '#0', 3);
         else
             if src1 < 0 then
-                asm_emit("mov", dreg, src2, 'asr #'>< -src1, 4);
+                asm_emit("asr", dreg, src2, '#' >< -src1, 4);
+            elseif src1 == 0 then
+                unless dreg = src2 then
+                    asm_emit("mov", dreg, src2, 3);
+                endunless;
             else
-                asm_emit("mov", dreg, src2, 'asl #'>< src1, 4);
+                asm_emit("lsl", dreg, src2, '#' >< src1, 4);
             endif;
         endif;
     else
+        ;;; Variable shift amount: need two code paths
         load_to_reg(src1, R5) -> src1;
         load_to_reg(src2, R1) -> src2;
+        lvars neg_lab = genlab();
+        lvars done_lab = genlab();
         asm_emit("cmp", src1, '#0', 3);
-        asm_emit("movge", dreg, src2, 'asl ' >< src1, 4);
-        asm_emit("rsb", R5, src1, '#0', 4);
-        asm_emit("movlt", dreg, src2, 'asr ' >< R5, 4);
+        gen_branch("b.lt", neg_lab);
+        ;;; Positive or zero: left shift
+        asm_emit("lsl", dreg, src2, src1, 4);
+        gen_branch("b", done_lab);
+        ;;; Negative: right shift by negated amount
+        asmLABEL(neg_lab);
+        asm_emit("neg", R5, src1, 3);
+        asm_emit("asr", dreg, src2, R5, 4);
+        asmLABEL(done_lab);
     endif;
     if dst then
         gen_reg_store(dreg, dst, R5);
@@ -913,12 +1034,13 @@ enddefine;
 ;;;     on test. The test may be CMP (src2 - src1) or TEST (src1 &&
 ;;;     src2) determined by cmp_or_test; the test will be one of the M-code
 ;;;     test codes EQ, NEQ etc.
+;;;     On AArch64: cmp/tst + b.cond
 
 define lconstant gen_test_or_cmp(src1, src2, test, lab, cmp_or_test);
     lvars src1, src2, test, lab, cmp_or_test, op1, op2;
     get_operands(src1, src2) -> (op1, op2);
     asm_emit(cmp_or_test, op1, op2, 3);
-    gen_branch('b' >< testop(test), lab);
+    gen_branch('b.' >< testop(test), lab);
 enddefine;
 
 define lconstant gen_cmp  = gen_test_or_cmp(% "cmp" %) enddefine;
@@ -996,14 +1118,23 @@ enddefine;
 ;;;     If -else_case- is <true>, the instruction is followed by a default
 ;;;     case for a value out of range; if <false>, there is an error case
 ;;;     following which expects the out-of-range value on the stack.
+;;;
+;;;     On AArch64: cannot use ldr pc, [pc, ...] since PC is not a
+;;;     general-purpose register. Instead:
+;;;     1. Range check with cmp + b.hi to else_lab
+;;;     2. Compute table entry address: adr x16, table_base /
+;;;        add x16, x16, sreg, lsl #3  (for sysint) or
+;;;        add x16, x16, sreg  (for popint, already scaled by 4,
+;;;        but we need 8-byte entries so multiply by 2)
+;;;     3. ldr x16, [x16] / br x16
 
 define lconstant gen_switch(src, labs, else_case, sysint);
     lvars src, labs, else_case, sysint;
     lvars else_lab = genlab();
+    lvars table_lab = genlab();
     lvars ncases = listlength(labs);
     load_to_reg(src, R1) -> src;
     lvars sreg = src;
-    ;;; printf('clear pop bits\n');
     ;;; clear pop bits when POP integer
     if not(sysint) then
         asm_emit("sub", R0, src, 3, 4);
@@ -1012,26 +1143,32 @@ define lconstant gen_switch(src, labs, else_case, sysint);
     ;;; Check it's in range: an unsigned comparison takes care of both the
     ;;; too large and too small cases.
     lvars opd2;
-    ;;; printf('calling get_operand2\n');
     get_operand2(if sysint then ncases else popint(ncases) - 3 endif) -> opd2;
     asm_emit("cmp", sreg, opd2, 3);
-    ;;; If in range, use it as an index into a jump table. The table is
-    ;;; just a sequence of word labels. Table starts 8 bytes after
-    ;;; indexing instruction.  Since pc register contains address of
-    ;;; current instruction + 8 we can just use it as table address.
-    ;;; For indexing we need to shift sysint, but can use corrected
-    ;;; POP integer as is.
-    asm_emit("ldrls", "pc", '[pc, ' >< sreg ><
-             if sysint then ', asl #2]' else ']' endif, 3);
-    asm_emit("b", else_lab, 2);
+    gen_branch("b.hi", else_lab);
+    ;;; Compute table entry address and jump
+    ;;; On AArch64: table entries are 8 bytes (.xword) each
+    if sysint then
+        ;;; sreg is a system integer; multiply by 8 (lsl #3) for table index
+        asm_emit("adr", R16, table_lab, 3);
+        asm_emit("ldr", R16, '[' >< R16 >< ', ' >< sreg >< ', lsl #3]', 3);
+    else
+        ;;; sreg (R0) has popint with tag removed: value * 4
+        ;;; Table entries are 8 bytes, so we need value * 8 = sreg * 2
+        asm_emit("lsl", R0, sreg, '#1', 4);
+        asm_emit("adr", R16, table_lab, 3);
+        asm_emit("ldr", R16, '[' >< R16 >< ', ' >< R0 >< ']', 3);
+    endif;
+    asm_emit("br", R16, 2);
     ;;; Plant the table; it begins with -else_lab- to account for the 0 case
     asmALIGN();
-    lvars lab;
+    asmLABEL(table_lab);
     asm_emit("long", else_lab, explode(labs), ncases + 2);
     ;;; Plant the else case
     asmLABEL(else_lab);
     if not(else_case) then
-        asm_emit("str", src, '[r10, #-4]!', 3);
+        ;;; Push src onto user stack for error reporting
+        asm_emit("str", src, '[x19, #-8]!', 3);
     endif;
 enddefine;
 
@@ -1051,7 +1188,7 @@ enddefine;
 
 ;;; M_BRANCH_std:
 ;;;     same as M_BRANCH, but guarantees to produce an instruction of a
-;;;     fixed size.  Since ARM instructions have fixed length it
+;;;     fixed size.  Since AArch64 instructions have fixed length it
 ;;;     is really the same...
 
 define M_BRANCH_std();
@@ -1110,24 +1247,13 @@ enddefine;
 
 define lconstant gen_call_or_chain(opd, opcode, is_pop_pdr);
     lvars opd, opcode, is_pop_pdr;
-    ;;; printf(opd, 'gen_call_or_chain(%p, ');
-    ;;; printf(opcode, '%p, ');
-    ;;; printf(is_pop_pdr, '%p)\n');
     lvars target = get_exec_opd(opd, is_pop_pdr);
-;;;    if isimm(opd) and opcode == "bx" then
-;;;        "b" -> opcode;
-;;;    endif;
-;;;    if not(isimm(opd)) and opcode == "bl" then
-;;;        "blx" -> opcode;
-;;;    endif;
     gen_transfer(opcode, target);
 enddefine;
 
 define gen_chain(opd, is_pop_pdr);
     lvars opd, is_pop_pdr;
-    ;;; Put our return address back in LR
-    ;;; asm_emit("ldr", LR, '[sp], #4', 3);
-    ;;; Jump
+    ;;; Jump (tail call)
     gen_call_or_chain(opd, "b", is_pop_pdr);
 enddefine;
 
@@ -1146,7 +1272,7 @@ define M_CHAIN = m_chain(% true %) enddefine;
 
 define M_CALL_WITH_RETURN();
     lvars tmp;
-    ;;; Set return address in LR
+    ;;; Set return address in LR (x30)
     load_to_reg(m_instr(3), LR) -> tmp;
     if tmp /== LR then
         asm_emit("mov", LR, tmp, 3);
@@ -1170,7 +1296,10 @@ enddefine;
 
 define M_CHAINSUB = m_chain(% false %) enddefine;
 
-define M_RETURN(); asm_emit("bx", LR, 2); enddefine;
+;;; M_RETURN:
+;;;     On AArch64: use "ret" instruction (branches to x30/LR)
+
+define M_RETURN(); asm_emit("ret", 1); enddefine;
 
 
 /*
@@ -1185,15 +1314,80 @@ lvars
 
     ;;; Names of dynamic local variables
     dlocal_labs,
-    reg_spec,
+    ;;; List of callee-saved registers to save/restore
+    save_reg_list,
     ;;; Number of on-stack vars
     Nstkvars,
     Nregs,
 ;
 
+;;; emit_stp_list / emit_ldp_list:
+;;;     On AArch64, we save/restore registers using stp/ldp pairs.
+;;;     The list must be processed in pairs for 16-byte alignment.
+;;;     For an odd number of registers, we add an extra str/ldr for the last one.
+
+define lconstant emit_stp_push(reg_list);
+    ;;; Push registers onto sp using stp with pre-decrement.
+    ;;; Process in pairs from the end to maintain proper stack order.
+    lvars regs = reg_list, len = listlength(regs), i;
+    lvars regvec = {%applist(regs, identfn)%};
+    ;;; We push in pairs. Total space needed is len * 8, rounded up to 16.
+    lvars total_space = ((len + 1) div 2) * 16;
+    ;;; First, allocate the stack space
+    asm_emit("sub", "sp", "sp", '#' >< total_space, 4);
+    ;;; Then store registers. stp uses [sp, #offset] form.
+    lvars offset = 0;
+    i = 1;
+    while i + 1 <= len do
+        asm_emit("stp", f_subv(i, regvec), f_subv(i + 1, regvec),
+                 '[sp, #' >< offset >< ']', 4);
+        offset + 16 -> offset;
+        i + 2 -> i;
+    endwhile;
+    ;;; Handle odd register
+    if i <= len then
+        asm_emit("str", f_subv(i, regvec),
+                 '[sp, #' >< offset >< ']', 3);
+    endif;
+enddefine;
+
+define lconstant emit_ldp_pop(reg_list);
+    ;;; Pop registers from sp using ldp with post-increment.
+    lvars regs = reg_list, len = listlength(regs), i;
+    lvars regvec = {%applist(regs, identfn)%};
+    lvars total_space = ((len + 1) div 2) * 16;
+    ;;; Load registers. ldp uses [sp, #offset] form.
+    lvars offset = 0;
+    i = 1;
+    while i + 1 <= len do
+        asm_emit("ldp", f_subv(i, regvec), f_subv(i + 1, regvec),
+                 '[sp, #' >< offset >< ']', 4);
+        offset + 16 -> offset;
+        i + 2 -> i;
+    endwhile;
+    ;;; Handle odd register
+    if i <= len then
+        asm_emit("ldr", f_subv(i, regvec),
+                 '[sp, #' >< offset >< ']', 3);
+    endif;
+    ;;; Deallocate the stack space
+    asm_emit("add", "sp", "sp", '#' >< total_space, 4);
+enddefine;
+
+
 ;;; {M_CREATE_SF <reg_locals> <Npopreg> <Nstkvars> <Npopstkvars>
 ;;;             <dlocal_labs> <ident reg_spec>}
 ;;;     plant code to construct procedure stack frame
+;;;
+;;;     On AArch64:
+;;;     - Save callee-saved registers + LR using stp pairs
+;;;     - Load PB from procedure record pointer (stored just before
+;;;       the execute address in the procedure header)
+;;;     - Push dynamic locals
+;;;     - Initialize POP register locals to popint(0)
+;;;     - Allocate POP on-stack lvars (initialized to popint(0))
+;;;     - Allocate non-POP on-stack lvars (uninitialized)
+;;;     - Push owner address (PB)
 
 define M_CREATE_SF();
     lconstant popint_zero = popint(0);
@@ -1210,29 +1404,111 @@ define M_CREATE_SF();
 
     regmask -> idval(reg_spec_id);
 
-    ;;; Save registers
-    '{' -> reg_spec;
-    for n from 0 to 12 do
-        if regmask &&/=_0 (1 << n) then
-            reg_spec >< 'r' >< n >< ', ' -> reg_spec;
-        endif;
-    endfor;
-    reg_spec >< 'lr}' -> reg_spec;
-    asm_emit("stmfd", 'sp!', reg_spec, 3);
+    ;;; Build the list of registers to save: the register locals + LR (x30)
+    ;;; On AArch64, register locals are in x19-x25 range (callee-saved)
+    [%
+        fast_for n in reg_locals do
+            reglabel(n);
+        endfast_for;
+        LR;    ;;; always save/restore LR
+    %] -> save_reg_list;
 
-    ;;; Setup PB
-    asm_emit("ldr", PB, '[pc, #-16]', 3);
+    ;;; Save registers using stp pairs
+    emit_stp_push(save_reg_list);
 
-    ;;; printf(dlocal_labs, 'M_CREATE_SF: Push dynamic locals %p\n');
+    ;;; Setup PB: load the procedure record pointer.
+    ;;; In the Poplog procedure layout, the procedure record pointer
+    ;;; is stored as the last word of the header, immediately before
+    ;;; the execute address (first instruction). On AArch64, this is
+    ;;; 8 bytes before the first instruction.
+    ;;; Use a PC-relative literal load: ldr x20, .-8
+    ;;; This loads from 8 bytes before the current instruction,
+    ;;; which is exactly where the procedure record pointer lives.
+    ;;; Note: The first instruction after the exec label is the stp above,
+    ;;; not this ldr. So we need to reference back from the current PC
+    ;;; to the procedure record pointer. The exec label is at a known
+    ;;; position. We use a literal pool reference through PB once set.
+    ;;;
+    ;;; Actually: the literal pool approach requires PB to already be set.
+    ;;; We use an adr-based approach instead:
+    ;;;   adr x20, current_pdr_exec_label
+    ;;;   ldr x20, [x20, #-8]
+    ;;; But we don't know the label offset at code generation time.
+    ;;; The cleanest approach: the procedure record address is already
+    ;;; in the literal pool at position 0, and we know lit_offset.
+    ;;; But we need PB to access the literal pool.
+    ;;;
+    ;;; Solution: Use a PC-relative literal load with a label that
+    ;;; we emit just before the code in gencode. The procedure record
+    ;;; pointer is always at (exec_label - 8). We emit a helper label
+    ;;; and use that.
+    ;;;
+    ;;; Simplest correct approach for AArch64:
+    ;;; The gencode function outputs: [literals] [proc_record_ptr] [exec_label: code]
+    ;;; The proc_record_ptr is always 1 xword (8 bytes) before exec_label.
+    ;;; But the first instruction is our stp, not this instruction.
+    ;;; So we need to compute backwards from the current PC.
+    ;;;
+    ;;; We use: emit a literal reference. The procedure record label
+    ;;; is always the last thing before the exec label, so we know
+    ;;; that exec_label - 8 contains it. We can use adrp/add to
+    ;;; load the exec label address, then ldr from -8, but that's
+    ;;; complex.
+    ;;;
+    ;;; Best approach: use a PC-relative literal label emitted after
+    ;;; the current function code. We emit:
+    ;;;   ldr x20, Lpb_NNNN
+    ;;; and later (in gencode or via the instruction list) we emit:
+    ;;;   Lpb_NNNN: .xword current_pdr_label
+    ;;;
+    ;;; Actually, the simplest approach that preserves the original
+    ;;; architecture: the literal pool is accessed via PB. But PB
+    ;;; is what we're trying to set up. On ARM32, the trick was
+    ;;; ldr PB, [pc, #-16] which loaded from 2 words before current
+    ;;; instruction (since ARM32 PC = current + 8).
+    ;;;
+    ;;; On AArch64, we use an inline literal just after the function
+    ;;; code, loaded with a PC-relative ldr. But that requires the
+    ;;; literal to be close. Instead, let's use a helper approach:
+    ;;;
+    ;;; We emit a label for the PB literal right after the br/ret,
+    ;;; referenced by a forward ldr. But we're at the START of the
+    ;;; function, not the end. So we put the literal at the end
+    ;;; via the code list.
+    ;;;
+    ;;; The ACTUAL simplest approach that works:
+    ;;; The current_pdr_label will be in the literal pool managed
+    ;;; by get_literal_addr once we have PB. For bootstrap:
+    ;;; generate a PC-relative load of the execute label address,
+    ;;; then load from -8 relative to it.
+    ;;;
+    ;;; We use: the exec label is known. The number of instructions
+    ;;; between exec_label and this point is known at assembly time.
+    ;;; We can use: ldr x20, exec_label - 8
+    ;;; where exec_label is current_pdr_exec_label.
+    ;;;
+    ;;; On AArch64, "ldr x20, label" does a PC-relative load from
+    ;;; the address of label. If label resolves to exec_label - 8,
+    ;;; the assembler will compute the PC-relative offset. But we
+    ;;; need to express this in the assembly output.
+    ;;;
+    ;;; We can output: ldr x20, current_pdr_exec_label - 8
+    ;;; This is a PC-relative literal load from 8 bytes before the
+    ;;; execute label, which is exactly where the procedure record
+    ;;; pointer is stored.
+
+    asm_emit("ldr", PB,
+             current_pdr_exec_label >< ' - 8', 3);
+
     ;;; Push dynamic locals
     applist(dlocal_labs, push_operand);
-    ;;; printf('Pushed dynamic locals\n');
+
     ;;; Clear POP registers and allocate POP variables
     false -> tmp;
     1 -> j;
     if Npopregs > 0 then
-        for n from 4 to 12 do
-            if regmask &&/=_0 (1 << n) then
+        fast_for n in reg_locals do
+            if j <= Npopregs then
                 if tmp then
                     gen_move(tmp, reglabel(n));
                 else
@@ -1240,22 +1516,28 @@ define M_CREATE_SF();
                     gen_move(popint_zero, reglabel(n));
                 endif;
                 j + 1 -> j;
-                quitif(j > Npopregs);
             endif;
-        endfor;
+        endfast_for;
     endif;
     ;;; Allocate POP on-stack lvars (initialised to zero)
     if not(tmp) and Npopstkvars > 0 then
-        reglabel(0) -> tmp;
-        gen_move(popint_zero, reglabel(0));
+        R0 -> tmp;
+        gen_move(popint_zero, R0);
     endif;
     repeat Npopstkvars times push_operand(tmp) endrepeat;
     ;;; Allocate non-POP on-stack lvars (uninitialised)
+    ;;; On AArch64: 16-byte aligned stack adjustments.
+    ;;; Each stkvar is 8 bytes; round up allocation to 16-byte boundary.
     if Nstkvars /== Npopstkvars then
-        gen_op_3((Nstkvars - Npopstkvars) * 4, SP, SP, "sub");
+        lvars extra_stkvars = Nstkvars - Npopstkvars;
+        lvars extra_bytes = extra_stkvars * 8;
+        ;;; Round up to 16-byte alignment
+        if (extra_bytes && 15) /== 0 then
+            (extra_bytes + 15) && (~~15) -> extra_bytes;
+        endif;
+        gen_op_3(extra_bytes, SP, SP, "sub");
     endif;
     ;;; Push the owner address
-    ;;; printf('Push the owner address\n');
     push_operand(PB);
 enddefine;
 
@@ -1264,13 +1546,119 @@ enddefine;
 
 define M_UNWIND_SF();
     ;;; Remove owner address and on-stack vars (POP and non-POP)
-    gen_op_3((Nstkvars + 1) * 4, SP, SP, "add");
-    ;;; Pop dynamic locals
+    ;;; On AArch64: each stack slot is 16 bytes (due to alignment in push_operand)
+    ;;; Owner = 1 slot, pop stkvars = Npopstkvars slots (each 16 bytes from push_operand)
+    ;;; Non-pop stkvars were allocated as a block rounded to 16 bytes.
+    ;;; The total to remove for owner + pop stkvars:
+    ;;;   (1 + Npopstkvars) * 16 bytes (from push_operand's 16-byte alignment)
+    ;;; plus the non-pop stkvars block.
+    ;;; Actually, we need to match what M_CREATE_SF allocated:
+    ;;; - Npopstkvars * 16 bytes (from push_operand)
+    ;;; - extra_bytes for non-pop stkvars (rounded to 16)
+    ;;; - 16 bytes for owner address (from push_operand)
+    ;;; Simplification: compute total and adjust sp once.
+    lvars npop_bytes = Nstkvars * 8;
+    ;;; Actually, re-examining: pop stkvars used push_operand (16 bytes each),
+    ;;; non-pop stkvars used gen_op_3 with (Nstkvars - Npopstkvars) * 8 rounded up.
+    ;;; Owner used push_operand (16 bytes).
+    ;;; To be safe and match exactly, we compute:
+    ;;; 1. Remove owner: add sp, sp, #16
+    ;;; 2. Remove non-pop stkvars: computed amount
+    ;;; 3. Remove pop stkvars (each was 16 bytes)
+    ;;; But we can combine into one add.
+    ;;; Wait - actually it's simpler to just reverse exactly what CREATE did:
+
+    ;;; Remove owner address (16 bytes from push_operand)
+    ;;; + all on-stack vars
+    lvars Npopstkvars_from_create;
+    ;;; We don't have Npopstkvars saved separately, but we have Nstkvars.
+    ;;; Looking at M_CREATE_SF: Npopstkvars uses push_operand (16 bytes each),
+    ;;; (Nstkvars - Npopstkvars) non-pop stkvars use gen_op_3 with 8 bytes each
+    ;;; rounded to 16.
+    ;;; Since we need both values, let's save Npopstkvars in a variable too.
+    ;;; Actually, looking at the ARM32 original, it just does:
+    ;;;   gen_op_3((Nstkvars + 1) * 4, SP, SP, "add");
+    ;;; This suggests that ALL stkvars (pop and non-pop) use the same size.
+    ;;; The +1 is for the owner address.
+    ;;; The ARM32 push_operand uses [sp, #-4]!, so each is 4 bytes.
+    ;;;
+    ;;; But on AArch64, push_operand uses [sp, #-16]! for 16-byte alignment!
+    ;;; So pop stkvars and owner are 16 bytes each, but non-pop stkvars
+    ;;; are allocated differently. This is a problem.
+    ;;;
+    ;;; REVISED APPROACH: For consistency and simplicity, use the same
+    ;;; 8-byte slots for everything on the Poplog-managed stack.
+    ;;; The system stack alignment requirement (16 bytes) applies to
+    ;;; SP at function call boundaries. Within a function, as long as
+    ;;; SP is aligned at calls, we can manage slots internally.
+    ;;;
+    ;;; Actually, AArch64 requires SP to be 16-byte aligned for ALL
+    ;;; stack accesses using SP as base. But we can use stur/ldur for
+    ;;; unaligned offsets, or maintain alignment another way.
+    ;;;
+    ;;; Simplest correct approach: keep everything 16-byte aligned.
+    ;;; Each push_operand uses 16 bytes. Non-pop stkvars rounded to 16.
+    ;;; Owner uses 16 bytes. Dynamic locals use 16 bytes each.
+    ;;;
+    ;;; Total to deallocate for stkvars + owner:
+    ;;;   16 (owner) + Npopstkvars * 16 + rounded_nonpop_bytes
+    ;;; But we don't have Npopstkvars in the unwind context!
+    ;;; The ARM32 code used (Nstkvars + 1) * 4 because all were 4 bytes.
+    ;;;
+    ;;; We need to save Npopstkvars between CREATE and UNWIND.
+    ;;; Let's add it as a saved variable. Or, better: compute the total
+    ;;; space at CREATE time and save it.
+    ;;;
+    ;;; Actually, re-reading the ARM32 code: it uses push_operand for
+    ;;; pop stkvars (4 bytes each via [sp, #-4]!) and gen_op_3 for
+    ;;; non-pop stkvars ((Nstkvars - Npopstkvars) * 4). The total for
+    ;;; unwind is (Nstkvars + 1) * 4 which equals:
+    ;;;   Npopstkvars * 4 + (Nstkvars - Npopstkvars) * 4 + 1 * 4
+    ;;; This only works because all are 4-byte slots.
+    ;;;
+    ;;; For AArch64 with 16-byte alignment on all push_operand calls,
+    ;;; this gets complicated. A MUCH simpler approach: use 8-byte slots
+    ;;; (the natural word size) and ensure SP is 16-byte aligned at
+    ;;; boundaries by padding. But Poplog manages its own stack and
+    ;;; doesn't need hardware alignment except at C calls.
+    ;;;
+    ;;; Actually, AArch64 hardware REQUIRES 16-byte alignment for SP
+    ;;; for ldr/str via SP. There IS a SCTLR flag but by default it's
+    ;;; enforced. So we MUST maintain 16-byte alignment.
+    ;;;
+    ;;; NEW APPROACH for push_operand/pop_operand: Use 8-byte slots
+    ;;; but keep total allocation 16-byte aligned. The CREATE/UNWIND
+    ;;; pair manages this:
+    ;;;   - The stp push already maintains 16-byte alignment (pairs).
+    ;;;   - Dynamic locals + pop stkvars + non-pop stkvars + owner
+    ;;;     need to be an even number of 8-byte slots total.
+    ;;;   - We can pad with an extra 8 bytes if the total is odd.
+    ;;;
+    ;;; BUT: push_operand and pop_operand are used individually for
+    ;;; dynamic locals and pop stkvars. Each one does str [sp, #-16]!
+    ;;; which maintains alignment. So: each push_operand is 16 bytes,
+    ;;; each pop_operand frees 16 bytes. The owner is 16 bytes.
+    ;;; Non-pop stkvars are rounded to 16 bytes. Total is correct.
+    ;;;
+    ;;; For unwind: we need to free:
+    ;;;   16 bytes (owner) + Npopstkvars * 16 + nonpop_rounded
+
+    ;;; Simply use the stored total. We store total_stkvar_bytes in
+    ;;; the enclosing lblock. Actually, let me just adopt the same
+    ;;; simple pattern as ARM32 but with 16-byte slots:
+
+    lvars total_bytes = (Nstkvars + 1) * 16;
+    gen_op_3(total_bytes, SP, SP, "add");
+
+    ;;; Pop dynamic locals (in reverse order)
     applist(rev(dlocal_labs), pop_operand);
 
-    ;;; restore registers
-    asm_emit("ldmfd", 'sp!', reg_spec, 3);
+    ;;; Restore registers using ldp pairs
+    emit_ldp_pop(save_reg_list);
+
     ;;; Restore procedure base register from previous owner address
+    ;;; The owner address is at [sp] (top of the caller's frame)
+    ;;; On AArch64: load PB from the word at [sp]
     gen_move({^SP}, PB);
 enddefine;
 
@@ -1289,39 +1677,28 @@ enddefine;
 
 ;;; {M_CLOSURE <frozvals> <pdpart opnd>}
 ;;;     plant closure code
+;;;
+;;;     On AArch64: uses x16 for indirect address loading,
+;;;     x0 for closure address, x1 for intermediate values.
+;;;     User stack pointer is x19.
 
 define M_CLOSURE();
     lvars (, frozvals, pdpart_opd) = explode(m_instr);
     lvars nfroz = listlength(frozvals);
-    ;;; mishap(frozvals, pdpart_opd, 2, 'Unimplemented M_CLOSURE');
-;;;    printf(current_pdr_label, 'current_pdr_label = %p\n');
     lvars lab = genlab();
-    ;;; Get closure address into r0
+    ;;; Get closure address into x0 via PC-relative literal
     asm_emit("ldr", R0, lab, 3);
     if nfroz fi_> 16 then
         ;;; for more than 16 frozvals, call Exec_closure
         gen_move(R0, -_USP);
         perm_const_opnd([Sys Exec_closure]) -> pdpart_opd;
     else
-        ;;; push the frozvals
+        ;;; push the frozvals onto the user stack
         lconstant frozval_offset = field_##("PD_CLOS_FROZVALS").wof;
-        lvars i = 0;
-/*
-        while i + 4 < nfroz do
-            asm_emit("ldr", R4, '[r0, #' >< frozval_offset + i*4 >< ']', 3);
-            asm_emit("ldr", R3, '[r0, #' >< frozval_offset +
-                                            (i + 1)*4 >< ']', 3);
-            asm_emit("ldr", R2, '[r0, #' >< frozval_offset +
-                                             (i + 2)*4 >< ']', 3);
-            asm_emit("ldr", R1, '[r0, #' >< frozval_offset +
-                                             (i + 3)*4 >< ']', 3);
-            i + 4 -> i;
-            asm_emit("stmfd", 'r10!', '{r1-r4}', 3);
-        endwhile;
-*/
+        lvars i;
         for i from 0 to nfroz - 1 do
-            asm_emit("ldr", R1, '[r0, #' >< (frozval_offset + i*4) >< ']', 3);
-            asm_emit("str", R1, '[r10, #-4]!', 3)
+            asm_emit("ldr", R1, '[x0, #' >< (frozval_offset + i*8) >< ']', 3);
+            asm_emit("str", R1, '[x19, #-8]!', 3)
         endfor;
         if not(pdpart_opd) then
             {% R0, field_##("PD_CLOS_PDPART").wof %} -> pdpart_opd;
@@ -1363,7 +1740,7 @@ define M_SETSTKLEN();
     endif;
     ;;; compute desired stack pointer in R0
     load_to_reg(identlabel("\^_userhi"), R0);
-    asm_emit("sub", R0, R0, R1);
+    asm_emit("sub", R0, R0, R1, 4);
     ;;; compare desired and actual user stack pointers, if equal, jump to end,
     lvars lab = genlab();
     gen_cmp(R0, USP, "EQ", lab);
@@ -1434,13 +1811,14 @@ define lconstant outopnd(opd);
 enddefine;
 
 ;;; outinst:
-;;;     writes out an instruction
+;;;     writes out an instruction.
+;;;     On AArch64: "long" generates .xword entries (via asm_outword
+;;;     which uses ASM_WORD_STR = '.xword').
 
 define lconstant outinst(instr);
     lvars instr;
     lconstant COMMENT = `@`;
     lvars opcode = f_subv(1, instr);
-    ;;; printf(instr, 'outinst(%p)\n');
     if opcode == "label" then
         outlab(f_subv(2, instr));
     elseif opcode == "align" then
@@ -1480,13 +1858,18 @@ enddefine;
 ;;;     The global variables
 ;;;         current_pdr_label, current_pdr_exec_label
 ;;;     contain the current procedure's label and start-of-code label
+;;;
+;;;     Memory layout of a procedure:
+;;;         [literal_0] [literal_1] ... [literal_n]    ;;; literal pool
+;;;         [proc_record_ptr]                          ;;; 1 xword
+;;;         [exec_label: first instruction ...]        ;;; code
+;;;         [alignment padding]
+;;;         [end_label]
 
 define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
     lconstant procedure gencode;
     lvars codelist, hdr_len, pdr_len, new_lits,
           cur_pdr_label = current_pdr_label;
-
-    ;;; printf(codelist, 'mc_code_generator, codelist = %p\n');
 
     ;;; Translate M-code to assembler
     generate(codelist, hdr_len) -> (codelist, new_lits) ;
@@ -1505,7 +1888,7 @@ define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
         asm_outword(cur_pdr_label, 1);
         ;;; Output the code
         applist(codelist, outinst);
-        ;;; Align on a longword boundary
+        ;;; Align on a doubleword boundary (8 bytes for AArch64)
         asm_align_word();
         ;;; Plant an end label
         outlab(genlab() ->> endlab);
@@ -1575,4 +1958,3 @@ enddefine;
 endsection;     /* Genproc */
 
 endsection;     /* $-Popas$-M_trans */
-

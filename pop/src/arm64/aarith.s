@@ -1,8 +1,9 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Assembler arithmetic routines for ARM
+   Purpose: Assembler arithmetic routines for AArch64
    Author:  Waldek Hebisch
+   AArch64 port
 */
 
 #_<
@@ -11,9 +12,9 @@
 
 lconstant macro (
 
-    USP   = "r10",
+    USP   = "x19",
     LR    = "lr",
-    PB    = "r11",
+    PB    = "x20",
 
     _PD_EXECUTE             = @@PD_EXECUTE,
     _PD_ARRAY_TABLE         = @@PD_ARRAY_TABLE,
@@ -24,379 +25,446 @@ lconstant macro (
 
 >_#
 
-    .arch armv8
+    .arch armv8-a
     .file "aarith.s"
 
 ;;; Wrapping in POP object
    .text
-   .word   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+   .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
 ;;; Bit operations
 DEF_C_LAB 4 (_biset)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    orr r1, r0, r1
-    str r1, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    orr x1, x0, x1
+    str x1, [USP]
+    ret
 
 DEF_C_LAB 4 (_biclear)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    bic r1, r0, r1
-    str r1, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    bic x1, x0, x1
+    str x1, [USP]
+    ret
 
 DEF_C_LAB 4 (_bimask)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    and r1, r0, r1
-    str r1, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    and x1, x0, x1
+    str x1, [USP]
+    ret
 
 DEF_C_LAB 4 (_bixor)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    eor r1, r0, r1
-    str r1, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    eor x1, x0, x1
+    str x1, [USP]
+    ret
 
 ;;; Machine and POP arithmetic
 DEF_C_LAB 4 (_mult)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    mul r1, r0, r1
-    str r1, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    mul x1, x0, x1
+    str x1, [USP]
+    ret
 
 DEF_C_LAB 4 (_pmult)
-    ldr r1, [USP], #4
-    mov r1, r1, asr #2
-    ldr r0, [USP]
-    sub r0, r0, #3
-    mul r1, r0, r1
-    add r1, r1, #3
-    str r1, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    asr x1, x1, #2
+    ldr x0, [USP]
+    sub x0, x0, #3
+    mul x1, x0, x1
+    add x1, x1, #3
+    str x1, [USP]
+    ret
 
+;;; _div: signed division with remainder
+;;; USP[0] = divisor, USP[8] = dividend
+;;; Result: USP[0] = quotient, USP[8] = remainder
 DEF_C_LAB 4 (_div)
-    stmfd   sp!, {r0, lr}
-    ldr r0, [USP, #4]
-    ldr r1, [USP]
-    bl do_div
-    ldr r1, [USP]
-    ldr r3, [USP, #4]
-    str r0, [USP]
-    mul r2, r1, r0
-    sub r3, r3, r2
-    str r3, [USP, #4]
-    ldmfd   sp!, {r0, pc}
+    ldr x1, [USP]          /* divisor */
+    ldr x0, [USP, #8]      /* dividend */
+    sdiv x2, x0, x1        /* quotient = dividend / divisor */
+    msub x3, x2, x1, x0    /* remainder = dividend - quotient * divisor */
+    str x2, [USP]           /* store quotient */
+    str x3, [USP, #8]       /* store remainder */
+    ret
 
+;;; _divq: signed division, quotient only
+;;; Pops divisor, replaces dividend with quotient
 DEF_C_LAB 2 (_divq)
-    stmfd   sp!, {r0, lr}
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    bl do_div
-    str r0, [USP]
-    ldmfd   sp!, {r0, pc}
+    ldr x1, [USP], #8      /* pop divisor */
+    ldr x0, [USP]           /* dividend */
+    sdiv x0, x0, x1         /* quotient */
+    str x0, [USP]
+    ret
 
+;;; _pdiv: pop integer division
+;;; USP[0] = divisor (popint), USP[8] = dividend (popint)
+;;; Result: USP[0] = quotient (popint), USP[8] = remainder (popint)
 DEF_C_LAB 4 (_pdiv)
-    stmfd   sp!, {r0, lr}
-    ldr r0, [USP, #4]
-    mov r0, r0, asr #2
-    ldr r1, [USP]
-    mov r1, r1, asr #2
-    bl do_div
-    ldr r1, [USP]
-    mov r1, r1, asr #2
-    ldr r3, [USP, #4]
-    mov r3, r3, asr #2
-    mul r2, r1, r0
-    mov r0, r0, asl #2
-    orr r0, r0, #3
-    str r0, [USP]
-    sub r3, r3, r2
-    mov r3, r3, asl #2
-    orr r3, r3, #3
-    str r3, [USP, #4]
-    ldmfd   sp!, {r0, pc}
+    ldr x1, [USP]           /* divisor (popint) */
+    asr x1, x1, #2          /* mcint(divisor) */
+    ldr x0, [USP, #8]       /* dividend (popint) */
+    asr x0, x0, #2          /* mcint(dividend) */
+    sdiv x2, x0, x1         /* quotient */
+    msub x3, x2, x1, x0     /* remainder = dividend - quotient * divisor */
+    lsl x2, x2, #2
+    orr x2, x2, #3          /* popint(quotient) */
+    str x2, [USP]
+    lsl x3, x3, #2
+    orr x3, x3, #3          /* popint(remainder) */
+    str x3, [USP, #8]
+    ret
 
+;;; _pmult_testovf: pop integer multiply with overflow test
+;;; USP[0] = shift/multiplier (popint), USP[8] = value (popint)
+;;; Result: USP[8] = product (popint), USP[0] = true/false
 DEF_C_LAB (_pmult_testovf)
-    ldr r0, [USP]
-    ldr r1, [USP, #4]
-    mov r0, r0, asr #2
-    sub r1, r1, #3
-    smulls r0, r3, r1, r0
-    cmp r0, #0
-    orr r0, #3
-    str r0, [USP, #4]
-    mov r1, #0
-    movmi r1, #-1
-    cmp r3, r1
-    ldreq r0, L.true
-    ldrne r0, L.false
-    str r0, [USP]
-    bx LR
+    ldr x0, [USP]           /* multiplier (popint) */
+    ldr x1, [USP, #8]       /* value (popint) */
+    asr x0, x0, #2          /* mcint(multiplier) */
+    sub x1, x1, #3          /* remove pop tag from value */
+    mul x2, x1, x0          /* low 64 bits of product */
+    smulh x3, x1, x0        /* high 64 bits of product */
+    /* Check for overflow: high must be sign extension of low */
+    cmp x2, #0
+    orr x2, x2, #3          /* add pop tag to product */
+    str x2, [USP, #8]
+    /* If x2 (before orr) was negative, x3 should be -1; if positive, x3 should be 0 */
+    asr x4, x2, #63         /* sign extend: 0 or -1 */
+    /* But we ORed #3 into x2, so use the original mul result.
+       Recompute: check if smulh == asr(mul_result, 63) */
+    mul x5, x1, x0          /* redo mul for clean comparison */
+    asr x4, x5, #63
+    cmp x3, x4
+    b.eq .Lpmult_no_ovf
+    adrp x0, C_LAB(false)
+    ldr x0, [x0, #:lo12:C_LAB(false)]
+    str x0, [USP]
+    ret
+.Lpmult_no_ovf:
+    adrp x0, C_LAB(true)
+    ldr x0, [x0, #:lo12:C_LAB(true)]
+    str x0, [USP]
+    ret
 
+;;; _pint_testovf: test if machine integer fits in a pop integer
+;;; USP[0] = machine integer
+;;; If fits: push popint below, USP[0] = true
+;;; If not: USP[0] = false
 DEF_C_LAB (_pint_testovf)
-    ldr r0, [USP]
-    mov r1, r0, asl #2
-    mov r2, r1, asr #2
-    orr r1, #3
-    cmp r2, r0
-    streq r1, [USP], #-4
-    ldreq r0, L.true
-    ldrne r0, L.false
-    str r0, [USP]
-    bx LR
+    ldr x0, [USP]
+    lsl x1, x0, #2          /* shift left by tag bits */
+    asr x2, x1, #2          /* shift back */
+    orr x1, x1, #3          /* add pop tag */
+    cmp x2, x0              /* did we lose bits? */
+    b.ne .Lpint_ovf
+    str x1, [USP, #-8]!     /* push popint result */
+    adrp x0, C_LAB(true)
+    ldr x0, [x0, #:lo12:C_LAB(true)]
+    str x0, [USP]
+    ret
+.Lpint_ovf:
+    adrp x0, C_LAB(false)
+    ldr x0, [x0, #:lo12:C_LAB(false)]
+    str x0, [USP]
+    ret
 
+;;; _pshift_testovf: pop integer shift with overflow test
+;;; USP[0] = shift amount (machine int), USP[8] = value (popint)
+;;; Result: USP[8] = shifted value or unchanged, USP[0] = true/false
 DEF_C_LAB (_pshift_testovf)
-    ldr r0, [USP, #4]
-    subs r0, r0, #3
-    beq L.pshift_done
-    ldr r1, [USP]
-    cmp r1, #30
-    bcs L.pshift_ovf
-    mov r2, r0, asl r1
-    mov r3, r2, asr r1
-    cmp r0, r3
-    bne L.pshift_ovf
-    orr r2, #3
-    str r2, [USP, #4]
-L.pshift_done:
-    ldr r0, L.true
-    str r0, [USP]
-    bx LR
-L.pshift_ovf:
-    ldr r0, L.false
+    ldr x0, [USP, #8]       /* value (popint) */
+    subs x0, x0, #3          /* remove pop tag */
+    b.eq .Lpshift_done       /* zero value, nothing to shift */
+    ldr x1, [USP]            /* shift amount (machine int) */
+    cmp x1, #62              /* max useful shift for 64-bit */
+    b.hs .Lpshift_ovf
+    lsl x2, x0, x1           /* shift left */
+    asr x3, x2, x1           /* shift back to check */
+    cmp x0, x3
+    b.ne .Lpshift_ovf
+    orr x2, x2, #3           /* add pop tag */
+    str x2, [USP, #8]
+.Lpshift_done:
+    adrp x0, C_LAB(true)
+    ldr x0, [x0, #:lo12:C_LAB(true)]
+    str x0, [USP]
+    ret
+.Lpshift_ovf:
+    adrp x0, C_LAB(false)
+    ldr x0, [x0, #:lo12:C_LAB(false)]
     ;;; pop one arg and replace the other
-    str r0, [USP, #4]!
-    bx LR
-
-L.false:
-    .word C_LAB(false)
-L.true:
-    .word C_LAB(true)
+    str x0, [USP, #8]!
+    ret
 
 ;;; Helper for random number generator
+;;; Multiply two positive words, return high word
 DEF_C_LAB (_posword_mul_high)
-    ldr r0, [USP, #4]
-    ldr r2, [USP], #4
-    mov r3, r0, asl #1
-    umull   r0, r1, r3, r2
-    str r1, [USP]
-    bx      lr
+    ldr x0, [USP, #8]       /* first arg */
+    ldr x2, [USP], #8       /* second arg, pop */
+    lsl x3, x0, #1
+    umulh x1, x3, x2        /* high 64 bits of unsigned multiply */
+    str x1, [USP]
+    ret
 
 ;;; Bignum routines
+;;; AArch64 AAPCS64: arguments in x0-x7, return in x0
+
+;;; _bgi_add: 5 args on USP
+;;; Args (top to bottom): arg0, arg1, arg2, arg3, arg4
+;;; Call do_bgi_add(arg0, arg1, arg2, arg3, arg4)
 DEF_C_LAB (_bgi_add)
-    ;;; Push last argument and link register to the control stack
-    ldr r0, [USP, #16]
-    stmfd sp!, {r0, lr}
-    ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #20
+    ;;; Save link register (16-byte aligned)
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ;;; Load 5th argument and pass on control stack
+    ldr x4, [USP, #32]
+    ;;; Load arguments to registers per AAPCS64
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #40        /* pop 5 args */
     bl do_bgi_add
     ;;; Clean control stack and return
-    ldmfd sp!, {r0, pc}
+    ldp x29, x30, [sp], #16
+    ret
 
 DEF_C_LAB (_bgi_sub)
-    ;;; Push last argument and link register to the control stack
-    ldr r0, [USP, #16]
-    stmfd sp!, {r0, lr}
-    ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #20
+    ;;; Save link register (16-byte aligned)
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ;;; Load 5th argument
+    ldr x4, [USP, #32]
+    ;;; Load arguments to registers per AAPCS64
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #40        /* pop 5 args */
     bl do_bgi_sub
     ;;; Clean control stack and return
-    ldmfd sp!, {r0, pc}
+    ldp x29, x30, [sp], #16
+    ret
 
 DEF_C_LAB (_bgi_negate)
-    ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r0, [USP], #12
-    ;;; transfer control to C code
+    ;;; Load arguments to registers (3 args)
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    add USP, USP, #24        /* pop 3 args */
+    ;;; transfer control to C code (tail call)
     b do_bgi_negate
 
 DEF_C_LAB (_bgi_negate_no_ov)
-    ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r0, [USP], #12
-    ;;; transfer control to C code
+    ;;; Load arguments to registers (3 args)
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    add USP, USP, #24        /* pop 3 args */
+    ;;; transfer control to C code (tail call)
     b do_bgi_negate_no_ov
 
 ;;; left shift
-;;; Arguments:
-;;;   destination is on top of the user stack
-;;;   next is shift amount
-;;;   next is lenght of biginit argument
-;;;   next is biginit argument
+;;; Arguments (4 on USP, top to bottom):
+;;;   arg0 = destination (top of USP)
+;;;   arg1 = shift amount
+;;;   arg2 = length of bigint argument
+;;;   arg3 = bigint argument
 DEF_C_LAB (_bgi_lshift)
-    stmfd sp!, {r0, lr}
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
     ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #12
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #24        /* pop 3, keep 1 slot for result */
     bl do_bgi_lshift
-    str r0, [USP]
-    ldmfd sp!, {r0, pc}
+    str x0, [USP]
+    ldp x29, x30, [sp], #16
+    ret
 
-;;; logical right shift
+;;; logical right shift (4 args, tail call)
 DEF_C_LAB (_bgi_rshiftl)
     ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #16
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #32        /* pop all 4 args */
     b do_bgi_rshiftl
 
-;;; Multiply unsigned biginit by unsigned machine integer (slice)
-;;; Arguments:
-;;;   destination is on top of the user stack
-;;;   next is length of biginit argument
-;;;   next is biginit argument
-;;;   next is machine integer
+;;; Multiply unsigned bigint by unsigned machine integer (slice)
+;;; Arguments (4 on USP, top to bottom):
+;;;   arg0 = destination (top of USP)
+;;;   arg1 = length of bigint argument
+;;;   arg2 = bigint argument
+;;;   arg3 = machine integer
 DEF_C_LAB (_bgi_mult)
     ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #16
-    ;;; transfer control to C code
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #32        /* pop all 4 args */
+    ;;; transfer control to C code (tail call)
     b do_bgi_mult
 
 DEF_C_LAB (_bgi_mult_add)
     ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #16
-    ;;; transfer control to C code
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #32        /* pop all 4 args */
+    ;;; transfer control to C code (tail call)
     b do_bgi_mult_add
 
-;;; Subtruct product from destination
+;;; Subtract product from destination (4 args, tail call)
 DEF_C_LAB (_bgi_sub_mult)
     ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #16
-    ;;; transfer control to C code
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #32        /* pop all 4 args */
+    ;;; transfer control to C code (tail call)
     b do_bgi_sub_mult
 
 DEF_C_LAB (_bgi_div)
-    stmfd sp!, {r0, lr}
-    ;;; Load arguments to registers
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r3, [USP, #12]
-    ldr r0, [USP], #12
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ;;; Load arguments to registers (4 args)
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    ldr x3, [USP, #24]
+    add USP, USP, #24        /* pop 3, keep 1 slot for result */
     ;;; call C code
     bl do_bgi_div
-    str r0, [USP]
-    ldmfd sp!, {r0, pc}
+    str x0, [USP]
+    ldp x29, x30, [sp], #16
+    ret
 
 DEF_C_LAB (_quotient_estimate_init)
-    stmfd sp!, {r0, lr}
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r0, [USP], #8
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    add USP, USP, #16        /* pop 2, keep 1 slot for result */
     ;;; call C code
     bl do_quotient_estimate_init
-    str r0, [USP]
-    ldmfd sp!, {r0, pc}
+    str x0, [USP]
+    ldp x29, x30, [sp], #16
+    ret
 
 DEF_C_LAB (_quotient_estimate)
-    stmfd sp!, {r0, lr}
-    ldr r1, [USP, #4]
-    ldr r2, [USP, #8]
-    ldr r0, [USP], #8
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ldr x0, [USP]
+    ldr x1, [USP, #8]
+    ldr x2, [USP, #16]
+    add USP, USP, #16        /* pop 2, keep 1 slot for result */
     ;;; call C code
     bl do_quotient_estimate
-    str r0, [USP]
-    ldmfd sp!, {r0, pc}
+    str x0, [USP]
+    ldp x29, x30, [sp], #16
+    ret
 
 ;;; Array indexing
     ;;; Register usage
-    ;;; r2   - running pointer in array descriptor
-    ;;; r12  - running total offset
+    ;;; x2   - running pointer in array descriptor
+    ;;; x12  - running total offset
 DEF_C_LAB (_array_sub)
     ;;; initialize pointer to array descriptor
-    add r2, PB, #_PD_ARRAY_TABLE
-    ;;; get inital offset
-    ldr r12, [r2], #4
+    add x2, PB, #_PD_ARRAY_TABLE
+    ;;; get initial offset
+    ldr x12, [x2], #8
     ;;; load dimension, check if end
-    ldr r1, [r2]
-    tst r1, r1
-    beq .Lfin
+    ldr x1, [x2]
+    cbz x1, .Lfin
 .Larg_loop:
-    ldr r3, [USP], #4
-    tst r3, #2
-    beq .Lsub_error
-    ldr r0, [r2, #4]
-    sub r3, r3, r0
-    cmp r3, r1
-    bcs .Lsub_error
-    ldr r0, [r2, #8]
-    tst r0, r0
-    ;;; Zero means multiplication by 1
-    ;;; FIXME: avoid this
-    beq .Lmul
-    mul r3, r0, r3
+    ldr x3, [USP], #8
+    tst x3, #2
+    b.eq .Lsub_error
+    ldr x0, [x2, #8]
+    sub x3, x3, x0
+    cmp x3, x1
+    b.hs .Lsub_error
+    ldr x0, [x2, #16]
+    cbz x0, .Lmul
+    mul x3, x0, x3
 .Lmul:
-    ;;; load next dimension
-    ldr r1, [r2, #12]!
+    ;;; load next dimension (advance pointer by 3 words = 24 bytes)
+    add x2, x2, #24
+    ldr x1, [x2]
     ;;; update total
-    add r12, r12, r3
+    add x12, x12, x3
     ;;; check if end
-    tst r1, r1
-    bne .Larg_loop
+    cbnz x1, .Larg_loop
 .Lfin:
-    str r12, [USP, #-4]!
-    ldr r0, [PB, #_PD_ARRAY_VECTOR]
-    str r0, [USP, #-4]!
-    ldr r0, [PB, #_PD_ARRAY_SUBSCR_PDR]
-    ldr pc, [r0, #_PD_EXECUTE]
+    str x12, [USP, #-8]!
+    ldr x0, [PB, #_PD_ARRAY_VECTOR]
+    str x0, [USP, #-8]!
+    ldr x0, [PB, #_PD_ARRAY_SUBSCR_PDR]
+    ldr x9, [x0, #_PD_EXECUTE]
+    br x9
 .Lsub_error:
-    sub USP, USP, #4
+    sub USP, USP, #8
     b XC_LAB(weakref Sys$-Array$-Sub_error)
     bl XC_LAB(setpop)
 
 ;;; Shifts
 
+;;; _rshift: pop integer right shift (negative count = left shift)
+;;; USP[0] = shift count (popint), USP[8] = value (popint)
 DEF_C_LAB (_rshift)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    mov r1, r1, asr #2
-    mov r0, r0, asr #2
-    cmp r1, #0
-    movge r0, r0, asr r1
-    rsblt r1, r1, #0
-    movlt r0, r0, asl r1
-    mov r0, r0, asl #2
-    orr r0, r0, #3
-    str r0, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    asr x1, x1, #2          /* mcint(shift count) */
+    asr x0, x0, #2          /* mcint(value) */
+    cmp x1, #0
+    b.lt .Lrshift_left
+    ;;; positive shift count: shift right
+    asr x0, x0, x1
+    b .Lrshift_done
+.Lrshift_left:
+    ;;; negative shift count: shift left
+    neg x1, x1
+    lsl x0, x0, x1
+.Lrshift_done:
+    lsl x0, x0, #2
+    orr x0, x0, #3          /* popint(result) */
+    str x0, [USP]
+    ret
 
+;;; _shift: pop integer left shift (negative count = right shift)
+;;; USP[0] = shift count (popint), USP[8] = value (popint)
 ;;; DEF_C_LAB (_shift)
-    ldr r1, [USP], #4
-    ldr r0, [USP]
-    mov r1, r1, asr #2
-    mov r0, r0, asr #2
-    cmp r1, #0
-    movge r0, r0, asl r1
-    rsblt r1, r1, #0
-    movlt r0, r0, asr r1
-    mov r0, r0, asl #2
-    orr r0, r0, #3
-    str r0, [USP]
-    bx LR
+    ldr x1, [USP], #8
+    ldr x0, [USP]
+    asr x1, x1, #2          /* mcint(shift count) */
+    asr x0, x0, #2          /* mcint(value) */
+    cmp x1, #0
+    b.lt .Lshift_right
+    ;;; positive shift count: shift left
+    lsl x0, x0, x1
+    b .Lshift_done
+.Lshift_right:
+    ;;; negative shift count: shift right
+    neg x1, x1
+    asr x0, x0, x1
+.Lshift_done:
+    lsl x0, x0, #2
+    orr x0, x0, #3          /* popint(result) */
+    str x0, [USP]
+    ret
 
     .align  3
 

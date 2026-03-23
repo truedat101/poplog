@@ -1,8 +1,9 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Assembly routines supporting process switching for ARM
+   Purpose: Assembly routines supporting process switching for AArch64
    Author:  Waldek Hebisch
+   AArch64 port by truedat101
 */
 
 #_<
@@ -12,8 +13,8 @@
 
 lconstant macro (
 
-    USP                     = "r10",
-    PB                      = "r11",
+    USP                     = "x19",
+    PB                      = "x20",
     SP                      = "sp",
 
     _PD_EXECUTE             = @@PD_EXECUTE,
@@ -37,7 +38,7 @@ lconstant macro MOVFL   = "ldrb";
 
 >_#
 
-    .arch armv8
+    .arch armv8-a
     .file   "aprocess.s"
     .text
 
@@ -45,276 +46,308 @@ lconstant macro MOVFL   = "ldrb";
     */
 DEF_C_LAB (_swap_out_callstack)
     ;;; load process from user stack
-    ldr  r0, [USP]
-    ldr  r3, [r0, #_PS_CALLSTACK_LIM]
-    str  r3, [r0, #_PS_CALLSTACK_PARTIAL]
+    ldr  x0, [USP]
+    ldr  x3, [x0, #_PS_CALLSTACK_LIM]
+    str  x3, [x0, #_PS_CALLSTACK_PARTIAL]
     b so_test_finished
 
 so_loop:
     ;;; make lr relative
-    sub   lr, lr, PB
+    sub   x30, x30, PB
 
     ;;; If needed run dlocal expressions
-    ldrb r1, [PB, #_PD_FLAGS]
-    tst  r1, #_:M_PD_PROC_DLEXPR_CODE
-    bne  so_do_dlexpr
+    ldrb w1, [PB, #_PD_FLAGS]
+    tst  w1, #_:M_PD_PROC_DLEXPR_CODE
+    b.ne so_do_dlexpr
 
 so_cont:
-    ;;; Continue swap out after runnig dlocal expressions
-    ;;; Stack pointer here still point to the stack frame
+    ;;; Continue swap out after running dlocal expressions
+    ;;; Stack pointer here still points to the stack frame
 
-    MOVFL r1, [PB, #_PD_FRAME_LEN]
-    sub   r3, r1, asl #2
-    str   r3, [r0, #_PS_CALLSTACK_PARTIAL]
+    MOVFL w1, [PB, #_PD_FRAME_LEN]
+    ;;; Frame length is in words; shift left by 3 for 8-byte words
+    sub   x3, x3, x1, lsl #3
+    str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
 
-    str   lr, [r3], #4
-    str   PB, [r3], #4
-    add SP, SP, #4
+    str   x30, [x3], #8
+    str   PB,  [x3], #8
+    add   SP, SP, #16
 
     ;;; Save on-stack lvars into the process record
 
-    MOVFL r0, [PB, #_PD_NUM_STK_VARS]
-    cmp   r0, #0
-    beq   do_save_dl
+    MOVFL w0, [PB, #_PD_NUM_STK_VARS]
+    cbz   w0, do_save_dl
 l_save_loop:
-    ldr   r12, [SP], #4
-    str   r12, [r3], #4
-    subs  r0, #1
-    bne   l_save_loop
+    ldr   x12, [SP], #8
+    str   x12, [x3], #8
+    subs  w0, w0, #1
+    b.ne  l_save_loop
 do_save_dl:
     ;;; Save dynamic locals
 
     ;;;   test if any
 
-    MOVFL r0, [PB, #_PD_NLOCALS]
-    cmp   r0, #0
-    beq   perm_reg_save
+    MOVFL w0, [PB, #_PD_NLOCALS]
+    cbz   w0, perm_reg_save
 
-    add   r2, PB, r0, asl #2
-    add   r2, r2, #(_PD_TABLE - 4)
+    ;;; Compute pointer to end of PD_TABLE array
+    ;;; Each entry is 8 bytes (pointer-sized)
+    add   x2, PB, x0, lsl #3
+    add   x2, x2, #(_PD_TABLE - 8)
 
 dl_save_loop:
     ;;;      save idval in process record and restore previous from stack
 
-    ldr   r1,  [r2], #-4
-    ldr   r12, [r1]
-    str   r12, [r3], #4
-    ldr   r12, [SP], #4
-    str   r12, [r1]
+    ldr   x1,  [x2], #-8
+    ldr   x12, [x1]
+    str   x12, [x3], #8
+    ldr   x12, [SP], #8
+    str   x12, [x1]
 
-    subs  r0, #1
-    bne   dl_save_loop
+    subs  w0, w0, #1
+    b.ne  dl_save_loop
 
 perm_reg_save:
     ;;; Save permanent registers to process struct, restore
     ;;; previous values from stack frame
+    ;;; Bit positions in _PD_REGMASK:
+    ;;;   bit 9 = x25, bit 8 = x24, bit 7 = x23,
+    ;;;   bit 6 = x22, bit 4 = x21
 
-    ldrh   r0, [PB, #_PD_REGMASK]
+    ldrh  w0, [PB, #_PD_REGMASK]
 
-    and    r12, r0, #512
-    cmp    r12, #0
-    strne  r9, [r3], #4
-    ldrne  r9, [SP], #4
+    ;;; bit 9 -> x25
+    tst   w0, #512
+    b.eq  1f
+    str   x25, [x3], #8
+    ldr   x25, [SP], #8
+1:
+    ;;; bit 8 -> x24
+    tst   w0, #256
+    b.eq  2f
+    str   x24, [x3], #8
+    ldr   x24, [SP], #8
+2:
+    ;;; bit 7 -> x23
+    tst   w0, #128
+    b.eq  3f
+    str   x23, [x3], #8
+    ldr   x23, [SP], #8
+3:
+    ;;; bit 6 -> x22
+    tst   w0, #64
+    b.eq  4f
+    str   x22, [x3], #8
+    ldr   x22, [SP], #8
+4:
+    ;;; bit 5 currently not needed
+    ;;; tst   w0, #32
+    ;;; b.eq  5f
+    ;;; str   ..., [x3], #8
+    ;;; ldr   ..., [SP], #8
+    ;;; 5:
 
-    tst    r0, #256
-    strne  r8, [r3], #4
-    ldrne  r8, [SP], #4
-
-    tst    r0, #128
-    strne  r7, [r3], #4
-    ldrne  r7, [SP], #4
-
-    tst    r0, #64
-    strne  r6, [r3], #4
-    ldrne  r6, [SP], #4
-
-    ;;; Currently not needed
-    ;;; tst    r0, #32
-    ;;; strne  r5, [r3], #4
-    ;;; ldrne  r5, [SP], #4
-
-    tst    r0, #16
-    strne  r4, [r3], #4
-    ldrne  r4, [SP], #4
-
-    ldr   lr, [SP], #4
-    ldr   PB, [SP]
+    ;;; bit 4 -> x21
+    tst   w0, #16
+    b.eq  6f
+    str   x21, [x3], #8
+    ldr   x21, [SP], #8
+6:
+    ;;; Restore LR and PB from the caller's stack frame
+    ldr   x30, [SP], #8
+    ldr   PB,  [SP]
 
 so_test_finished:
-    ldr   r0, [USP]
-    ldr   r1, [r0, #_PS_STATE]
-    ldr   r3, [r0, #_PS_CALLSTACK_PARTIAL]
-    cmp   r3, r1
-    bhi   so_loop
+    ldr   x0, [USP]
+    ldr   x1, [x0, #_PS_STATE]
+    ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    cmp   x3, x1
+    b.hi  so_loop
 
     ;;; Finished, save flags and chain to procedure on user stack
-    add   USP, USP, #4
-    mov   r1, #0
-    str   r1, [r0, #_PS_CALLSTACK_PARTIAL]
-    strh  r1, [r0, #_PS_FLAGS]
-    ldr   r0, [USP], #4
-    ldr   pc, [r0, #_PD_EXECUTE]
+    add   USP, USP, #8
+    mov   x1, #0
+    str   x1, [x0, #_PS_CALLSTACK_PARTIAL]
+    strh  w1, [x0, #_PS_FLAGS]
+    ldr   x0, [USP], #8
+    ldr   x16, [x0, #_PD_EXECUTE]
+    br    x16
 
 so_do_dlexpr:
-    str   lr, [r0, #_PS_PARTIAL_RETURN]
+    str   x30, [x0, #_PS_PARTIAL_RETURN]
     ;;; Jump to suspend code
-    ldr   r0, [PB, #_PD_EXIT]
-    sub   pc, r0, #(BRANCH_std << 1)
+    ldr   x16, [PB, #_PD_EXIT]
+    sub   x16, x16, #(BRANCH_std << 1)
+    br    x16
 
 DEF_C_LAB (_swap_out_continue)
-    ldr   r0, [USP]
-    ldr   r3, [r0, #_PS_CALLSTACK_PARTIAL]
-    ldr   lr, [r0, #_PS_PARTIAL_RETURN]
+    ldr   x0, [USP]
+    ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    ldr   x30, [x0, #_PS_PARTIAL_RETURN]
     b so_cont
 
     ;;; Swap in (resume) process
 DEF_C_LAB (_swap_in_callstack)
     ;;; load process from user stack
-    ldr   r0, [USP]
-    ldr   r3, [r0, #_PS_STATE]
-    str   r3, [r0, #_PS_CALLSTACK_PARTIAL]
+    ldr   x0, [USP]
+    ldr   x3, [x0, #_PS_STATE]
+    str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
     b si_test_finished
 
 si_loop:
-    str   lr, [SP, #-4]!
-    ldr   PB, [r3, #4]
-    MOVFL r1, [PB, #_PD_FRAME_LEN]
-    add   r3, r1, asl #2
-    str   r3, [r0, #_PS_CALLSTACK_PARTIAL]
-    sub   r3, #4
+    str   x30, [SP, #-16]!
+    ldr   PB,  [x3, #8]
+    MOVFL w1, [PB, #_PD_FRAME_LEN]
+    ;;; Advance x3 by frame_len words (8 bytes each)
+    add   x3, x3, x1, lsl #3
+    str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    sub   x3, x3, #8
 
     ;;; Restore registers from process record and store values
     ;;; to stack
 
-    ldrh   r0, [PB, #_PD_REGMASK]
+    ldrh  w0, [PB, #_PD_REGMASK]
 
-    tst    r0, #16
-    strne  r4, [SP, #-4]!
-    ldrne  r4, [r3], #-4
+    ;;; bit 4 -> x21
+    tst   w0, #16
+    b.eq  1f
+    str   x21, [SP, #-16]!
+    ldr   x21, [x3], #-8
+1:
+    ;;; bit 5 currently not needed
+    ;;; tst   w0, #32
+    ;;; b.eq  2f
+    ;;; str   ..., [SP, #-16]!
+    ;;; ldr   ..., [x3], #-8
+    ;;; 2:
 
-    ;;; Not currently not needed
-    ;;; tst    r0, #32
-    ;;; strne  r5, [SP, #-4]!
-    ;;; ldrne  r5, [r3], #-4
-
-    tst    r0, #64
-    strne  r6, [SP, #-4]!
-    ldrne  r6, [r3], #-4
-
-    tst    r0, #128
-    strne  r7, [SP, #-4]!
-    ldrne  r7, [r3], #-4
-
-    tst    r0, #256
-    strne  r8, [SP, #-4]!
-    ldrne  r8, [r3], #-4
-
-    and    r12, r0, #512
-    cmp    r12, #0
-    strne  r9, [SP, #-4]!
-    ldrne  r9, [r3], #-4
-
+    ;;; bit 6 -> x22
+    tst   w0, #64
+    b.eq  3f
+    str   x22, [SP, #-16]!
+    ldr   x22, [x3], #-8
+3:
+    ;;; bit 7 -> x23
+    tst   w0, #128
+    b.eq  4f
+    str   x23, [SP, #-16]!
+    ldr   x23, [x3], #-8
+4:
+    ;;; bit 8 -> x24
+    tst   w0, #256
+    b.eq  5f
+    str   x24, [SP, #-16]!
+    ldr   x24, [x3], #-8
+5:
+    ;;; bit 9 -> x25
+    tst   w0, #512
+    b.eq  6f
+    str   x25, [SP, #-16]!
+    ldr   x25, [x3], #-8
+6:
     ;;; Restore dynamic locals
 
     ;;;   test if any
 
-    MOVFL r0, [PB, #_PD_NLOCALS]
-    cmp   r0, #0
-    beq   do_restore_lvars
+    MOVFL w0, [PB, #_PD_NLOCALS]
+    cbz   w0, do_restore_lvars
 
-    add   r2, PB, #_PD_TABLE
+    add   x2, PB, #_PD_TABLE
 
 dl_restore_loop:
     ;;;      save idval in stack and restore previous from process record
-    ldr   r1,  [r2], #4
-    ldr   r12, [r1]
-    str   r12, [SP, #-4]!
-    ldr   r12, [r3], #-4
-    str   r12, [r1]
+    ldr   x1,  [x2], #8
+    ldr   x12, [x1]
+    str   x12, [SP, #-16]!
+    ldr   x12, [x3], #-8
+    str   x12, [x1]
 
-    subs  r0, #1
-    bne   dl_restore_loop
+    subs  w0, w0, #1
+    b.ne  dl_restore_loop
 
 do_restore_lvars:
     ;;; Restore on-stack lvars from the process record
-    MOVFL r0, [PB, #_PD_NUM_STK_VARS]
-    cmp   r0, #0
-    beq   si_lvars_done
+    MOVFL w0, [PB, #_PD_NUM_STK_VARS]
+    cbz   w0, si_lvars_done
 l_restore_loop:
-    ldr   r12, [r3], #-4
-    str   r12, [SP, #-4]!
-    subs  r0, #1
-    bne   l_restore_loop
+    ldr   x12, [x3], #-8
+    str   x12, [SP, #-16]!
+    subs  w0, w0, #1
+    b.ne  l_restore_loop
 
 si_lvars_done:
-    str   PB, [SP, #-4]!
-    ldr   lr, [r3, #-4]
+    str   PB, [SP, #-16]!
+    ldr   x30, [x3, #-8]
 
-    ldr   r0, [USP]
+    ldr   x0, [USP]
 
     ;;; If needed run dlocal expressions
-    ldrb  r1, [PB, #_PD_FLAGS]
-    tst   r1, #_:M_PD_PROC_DLEXPR_CODE
-    bne   si_do_dlexpr
+    ldrb  w1, [PB, #_PD_FLAGS]
+    tst   w1, #_:M_PD_PROC_DLEXPR_CODE
+    b.ne  si_do_dlexpr
 
 si_cont:
-    add   lr, lr, PB
+    add   x30, x30, PB
 
 si_test_finished:
-    ldr   r0, [USP]
-    ldr   r1, [r0, #_PS_CALLSTACK_LIM]
-    ldr   r3, [r0, #_PS_CALLSTACK_PARTIAL]
-    cmp   r3, r1
-    bcc   si_loop
+    ldr   x0, [USP]
+    ldr   x1, [x0, #_PS_CALLSTACK_LIM]
+    ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    cmp   x3, x1
+    b.lo  si_loop
     ;;; Finished, chain to procedure on user stack
-    add   USP, USP, #4
-    mov   r1, #0
-    str   r1, [r0, #_PS_CALLSTACK_PARTIAL]
-    ldr   r0, [USP], #4
-    ldr   pc, [r0, #_PD_EXECUTE]
+    add   USP, USP, #8
+    mov   x1, #0
+    str   x1, [x0, #_PS_CALLSTACK_PARTIAL]
+    ldr   x0, [USP], #8
+    ldr   x16, [x0, #_PD_EXECUTE]
+    br    x16
 
 si_do_dlexpr:
-    str   lr, [r0, #_PS_PARTIAL_RETURN]
+    str   x30, [x0, #_PS_PARTIAL_RETURN]
     ;;; Jump to resume code
-    ldr   r0, [PB, #_PD_EXIT]
-    sub   pc, r0, #BRANCH_std
+    ldr   x16, [PB, #_PD_EXIT]
+    sub   x16, x16, #BRANCH_std
+    br    x16
 
 
-    ;;; Continue swap in after runnig procedure init code
+    ;;; Continue swap in after running procedure init code
 DEF_C_LAB (_swap_in_continue)
-    ldr   r0, [USP]
-    ldr   r3, [r0, #_PS_CALLSTACK_PARTIAL]
-    ldr   lr, [r0, #_PS_PARTIAL_RETURN]
+    ldr   x0, [USP]
+    ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    ldr   x30, [x0, #_PS_PARTIAL_RETURN]
     b si_cont
 
+    .align 3
 usrhi_lab:
-    .word I_LAB(_userhi)
+    .xword I_LAB(_userhi)
 DEF_C_LAB (_ussave)
     b C_LAB (_ussave)
 
 DEF_C_LAB (_usrestore)
-    ldr   r0, [USP, #4]
-    ldr   r1, [USP], #8
-    cmp   r0, #0
-    bxeq  lr
-    ldr   r2, usrhi_lab
-    mov   r3, USP
-    ldr   r2, [r2]
-    sub   USP, USP, r0
-    cmp   r2, r3
-    mov   r0, USP
-    beq   usr_loop2
+    ldr   x0, [USP, #8]
+    ldr   x1, [USP], #16
+    cbz   x0, usr_done
+    adrp  x2, I_LAB(_userhi)
+    add   x2, x2, :lo12:I_LAB(_userhi)
+    mov   x3, USP
+    ldr   x2, [x2]
+    sub   USP, USP, x0
+    cmp   x2, x3
+    mov   x0, USP
+    b.eq  usr_loop2
 usr_loop1:
-    ldr   r12, [r3], #4
-    str   r12, [r0], #4
-    cmp   r3, r2
-    bne   usr_loop1
+    ldr   x12, [x3], #8
+    str   x12, [x0], #8
+    cmp   x3, x2
+    b.ne  usr_loop1
 usr_loop2:
-    ldr   r12, [r1], #4
-    str   r12, [r0], #4
-    cmp   r0, r2
-    bne   usr_loop2
-    bx lr
+    ldr   x12, [x1], #8
+    str   x12, [x0], #8
+    cmp   x0, x2
+    b.ne  usr_loop2
+usr_done:
+    ret
 
 DEF_C_LAB (_userasund)
     b C_LAB (_userasund)

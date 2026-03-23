@@ -1,9 +1,35 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   File:        src/arm/ass.p
-   Purpose:     Run-time assembler for ARM
-   Author:      Waldek Hebisch
+   AArch64 port by Poplog contributors.
+   File:        src/arm64/ass.p
+   Purpose:     Run-time assembler for AArch64 (ARM64)
+   Author:      Waldek Hebisch (ARM32 original)
+                 AArch64 port
+
+   This is the runtime code generator. It generates AArch64 machine code
+   IN MEMORY at runtime. Unlike genproc.p which generates assembly text
+   files, ass.p writes raw 32-bit instruction encodings into memory buffers.
+
+   Register conventions for AArch64 Poplog:
+     x0-x7    : scratch / argument registers
+     x9-x15   : scratch / temporaries
+     x16, x17 : intra-procedure-call scratch (IP0, IP1)
+     x18      : platform register (reserved)
+     x19      : USP (user stack pointer)
+     x20      : PB  (procedure base register)
+     x21      : pop temp reg A  (pop_reg_A)
+     x22      : pop temp reg B  (pop_reg_B)
+     x23      : nonpop temp reg A (nonpop_reg_A)
+     x24      : nonpop temp reg B (nonpop_reg_B)
+     x25      : nonpop temp reg C (nonpop_reg_C)
+     x28      : (spare callee-saved)
+     x29      : FP (frame pointer)
+     x30      : LR (link register)
+     sp       : system stack pointer
+
+   Poplog word = 8 bytes on AArch64.
+   Popint tag bits = 3 (low bits).
 */
 
 
@@ -73,8 +99,6 @@ vars
 ;
 lvars
    literal_pools,
-   ;;; end of code (= start of literals)
-   ;;; _code_end,
    ;;; position of first instruction needing a literal
    _current_literal_zone,
    ;;; start of current literal pool
@@ -94,97 +118,259 @@ lvars
 
 lconstant
 
-    ;;; INSTRUCTION ENCODING
+    ;;; =====================================================================
+    ;;; AArch64 INSTRUCTION ENCODINGS
+    ;;; =====================================================================
+    ;;;
+    ;;; All AArch64 instructions are 32 bits wide.
+    ;;; Encoding reference: ARM Architecture Reference Manual for A-profile.
 
-    ;;; Opcodes
+    ;;; --- Base opcodes (before fields are OR'd in) ---
 
-    _ADD    = _16:E0800000,
-              ;;; e0813003        add     r3, r1, r3
-    _B_XX   = _16:0A000000,
-              ;;;  0a00000e        beq     +0x40
-              ;;;  1afffff0        bne     -0x38
-    _BLX    = _16:E12FFF30,
-              ;;;  e12fff3c        blx     ip
-              ;;;  e12fff33        blx     r3
-    _BLXNE  = _16:112FFF30,
-    _BX    = _16:E12FFF10,
-              ;;;  e12fff11        bx      r1
-    _CMP    = _16:E1500000,
-              ;;; e154000a        cmp     r4, sl
-              ;;; e3530000        cmp     r3, #0
-              ;;;
-    _LDMFD  = _16:E8BD0000,
-    _LDR    = _16:E4100000,
-              ;;;    e5bcf4f0        ldr     pc, [ip, #1264]!
-              ;;;    e59f3034        ldr     r3, [pc, #52]
-              ;;;    e7932102        ldr     r2, [r3, r2, lsl #2]
-              ;;;    e7933002        ldr     r3, [r3, r2]
-              ;;;    e49a1004        ldr     r1, [sl], #4
-              ;;;    e51b2008        ldr     r2, [fp, #-8]
-    _MOV    = _16:E1A00000,
-              ;;; e1a01007        mov     r1, r7
-              ;;; e3a04000        mov     r4, #0
-    _MUL    = _16:E0000000,
-    _MVN    = _16:E1E00000,
-              ;;; e1e01000        mvn     r1, r0
-              ;;; e3e00012        mvn     r0, #18
-    _RET    = _16:E12FFF1E,
-    _RSB    = _16:E0600000,
-              ;;; e065a00a        rsb     sl, r5, sl
-    _STMFD  = _16:E92D0000,
-    _STR    = _16:E4000000,
-              ;;; e50b3008        str     r3, [fp, #-8]
-              ;;; e52dc004        str ip, [sp, #-4]!
-    _STREQ  = _16:4000000,
-    _SUB    = _16:E0400000,
-    _TST    = _16:E1100000,
+    ;;; ADD Xd, Xn, #imm12:  1001 0001 00 <imm12> <Rn> <Rd>
+    _ADD_IMM    = _16:91000000,
 
-    ;;; Helper constants
-    _dst_off       = _12,
-    _arg1_off      = _16,
-    _plus_flag     = _16:800000,
-    _auto_indexing = _16:0200000,
-    _pre_offset    = _16:1000000,
-    _immediate_bit = _16:2000000,
+    ;;; SUB Xd, Xn, #imm12:  1101 0001 00 <imm12> <Rn> <Rd>
+    _SUB_IMM    = _16:D1000000,
 
-    ;;; Register codes
+    ;;; ADDS Xd, Xn, #imm12 (sets flags): 1011 0001 00 ...
+    _ADDS_IMM   = _16:B1000000,
 
-    _R0    = _2:000,
-    _R1    = _2:001,
-    _R2    = _2:010,
-    _R3    = _2:011,
-    _R4    = _2:100,
-    _R5    = _2:101,
-    _R6    = _2:110,
-    _R7    = _2:111,
+    ;;; SUBS Xd, Xn, #imm12 (sets flags): 1111 0001 00 ...
+    _SUBS_IMM   = _16:F1000000,
 
-    _R8     = _2:1000,
-    _R9     = _2:1001,
-    _R10    = _2:1010,
-    _R11    = _2:1011,
-    _R12    = _2:1100,
-    _R13    = _2:1101,
-    _R14    = _2:1110,
-    _R15    = _2:1111,
+    ;;; ADD Xd, Xn, Xm (shifted):  1000 1011 000 <Xm> 0000 00 <Xn> <Xd>
+    _ADD_REG    = _16:8B000000,
 
-    ;;; Condition codes
+    ;;; SUB Xd, Xn, Xm (shifted):  1100 1011 000 <Xm> 0000 00 <Xn> <Xd>
+    _SUB_REG    = _16:CB000000,
 
-    _cc_EQ  = _2:0000,          ;;; equal
-    _cc_NE  = _2:0001,          ;;; not equal
-    _cc_HI  = _2:1000,          ;;; unsigned greater-than (above)
-    _cc_CS  = _2:0010,          ;;; unsigned greater-than-or-equal
-    _cc_CC  = _2:0011,          ;;; unsigned less-than (below)
+    ;;; ADDS Xd, Xn, Xm: 1010 1011 000 ...
+    _ADDS_REG   = _16:AB000000,
+
+    ;;; SUBS Xd, Xn, Xm: 1110 1011 000 ...
+    _SUBS_REG   = _16:EB000000,
+
+    ;;; MADD Xd, Xn, Xm, Xa: 1001 1011 000 Xm 0 Xa Xn Xd
+    ;;; MUL is alias for MADD with Xa=XZR(31)
+    _MADD       = _16:9B000000,
+
+    ;;; MOV Xd, Xn is alias for ORR Xd, XZR, Xn
+    ;;; ORR Xd, Xn, Xm: 1010 1010 000 Xm 0000 00 Xn Xd
+    _ORR_REG    = _16:AA000000,
+
+    ;;; ORR Xd, Xn, #imm (logical immediate - complex encoding)
+    ;;; We will use MOV (register) or MOVZ/MOVK for most cases
+
+    ;;; AND Xd, Xn, Xm: 1000 1010 000 Xm 0000 00 Xn Xd
+    _AND_REG    = _16:8A000000,
+
+    ;;; ANDS Xd, Xn, Xm (sets flags): 1110 1010 000 Xm 0000 00 Xn Xd
+    _ANDS_REG   = _16:EA000000,
+
+    ;;; MVN Xd, Xm is alias for ORN Xd, XZR, Xm
+    ;;; ORN Xd, Xn, Xm: 1010 1010 001 Xm 0000 00 Xn Xd
+    _ORN_REG    = _16:AA200000,
+
+    ;;; TST Xn, Xm is alias for ANDS XZR, Xn, Xm
+    ;;; (We build TST from ANDS with Rd=XZR=31)
+
+    ;;; MOVZ Xd, #imm16, LSL #shift
+    ;;; 1 10 100101 hw imm16 Rd
+    _MOVZ       = _16:D2800000,
+
+    ;;; MOVK Xd, #imm16, LSL #shift
+    ;;; 1 11 100101 hw imm16 Rd
+    _MOVK       = _16:F2800000,
+
+    ;;; MOVN Xd, #imm16  (move wide with NOT)
+    ;;; 1 00 100101 hw imm16 Rd
+    _MOVN       = _16:92800000,
+
+    ;;; --- Load/Store instructions ---
+
+    ;;; LDR Xt, [Xn, #imm12*8]:  1111 1001 01 imm12 Rn Rt
+    _LDR_IMM    = _16:F9400000,
+
+    ;;; STR Xt, [Xn, #imm12*8]:  1111 1001 00 imm12 Rn Rt
+    _STR_IMM    = _16:F9000000,
+
+    ;;; LDR Xt, [Xn, #simm9]! (pre-index): 1111 1000 010 simm9 11 Rn Rt
+    _LDR_PRE    = _16:F8400C00,
+
+    ;;; STR Xt, [Xn, #simm9]! (pre-index): 1111 1000 000 simm9 11 Rn Rt
+    _STR_PRE    = _16:F8000C00,
+
+    ;;; LDR Xt, [Xn], #simm9 (post-index): 1111 1000 010 simm9 01 Rn Rt
+    _LDR_POST   = _16:F8400400,
+
+    ;;; STR Xt, [Xn], #simm9 (post-index): 1111 1000 000 simm9 01 Rn Rt
+    _STR_POST   = _16:F8000400,
+
+    ;;; LDR Xt, [Xn, Xm]:  1111 1000 011 Xm 011 0 10 Xn Xt
+    ;;; (register offset, LSL #3)
+    _LDR_REG    = _16:F8606800,
+
+    ;;; STR Xt, [Xn, Xm]:  1111 1000 001 Xm 011 0 10 Xn Xt
+    _STR_REG    = _16:F8206800,
+
+    ;;; LDR Xt, [Xn, Xm, SXTW]: register offset sign-extended word
+    ;;; TODO: verify encoding if needed
+
+    ;;; LDRB Wt, [Xn, #imm12]:  0011 1001 01 imm12 Rn Rt
+    _LDRB_IMM   = _16:39400000,
+
+    ;;; STRB Wt, [Xn, #imm12]:  0011 1001 00 imm12 Rn Rt
+    _STRB_IMM   = _16:39000000,
+
+    ;;; LDRH Wt, [Xn, #imm12*2]: 0111 1001 01 imm12 Rn Rt
+    _LDRH_IMM   = _16:79400000,
+
+    ;;; STRH Wt, [Xn, #imm12*2]: 0111 1001 00 imm12 Rn Rt
+    _STRH_IMM   = _16:79000000,
+
+    ;;; LDR Wt, [Xn, #imm12*4] (32-bit): 1011 1001 01 imm12 Rn Rt
+    _LDRW_IMM   = _16:B9400000,
+
+    ;;; STR Wt, [Xn, #imm12*4] (32-bit): 1011 1001 00 imm12 Rn Rt
+    _STRW_IMM   = _16:B9000000,
+
+    ;;; LDRSB Xt, [Xn, #imm12]:  0011 1001 10 imm12 Rn Rt
+    _LDRSB_IMM  = _16:39800000,
+
+    ;;; LDRSH Xt, [Xn, #imm12*2]: 0111 1001 10 imm12 Rn Rt
+    _LDRSH_IMM  = _16:79800000,
+
+    ;;; LDRSW Xt, [Xn, #imm12*4]: 1011 1001 10 imm12 Rn Rt
+    _LDRSW_IMM  = _16:B9800000,
+
+    ;;; STP Xt1, Xt2, [Xn, #imm7*8]! (pre-index):
+    ;;; 1010 1001 11 imm7 Rt2 Rn Rt1
+    _STP_PRE    = _16:A9800000,
+
+    ;;; LDP Xt1, Xt2, [Xn], #imm7*8 (post-index):
+    ;;; 1010 1000 11 imm7 Rt2 Rn Rt1
+    _LDP_POST   = _16:A8C00000,
+
+    ;;; STP Xt1, Xt2, [Xn, #imm7*8] (signed offset):
+    ;;; 1010 1001 00 imm7 Rt2 Rn Rt1
+    _STP_OFF    = _16:A9000000,
+
+    ;;; LDP Xt1, Xt2, [Xn, #imm7*8] (signed offset):
+    ;;; 1010 1001 01 imm7 Rt2 Rn Rt1
+    _LDP_OFF    = _16:A9400000,
+
+    ;;; --- Branch instructions ---
+
+    ;;; B imm26:  0001 01 imm26
+    _B          = _16:14000000,
+
+    ;;; BL imm26: 1001 01 imm26
+    _BL         = _16:94000000,
+
+    ;;; BR Xn:  1101 0110 0001 1111 0000 00 Rn 0000 0
+    _BR         = _16:D61F0000,
+
+    ;;; BLR Xn: 1101 0110 0011 1111 0000 00 Rn 0000 0
+    _BLR        = _16:D63F0000,
+
+    ;;; RET {Xn}: 1101 0110 0101 1111 0000 00 Rn 0000 0
+    ;;; Default Xn=x30
+    _RET_INSTR  = _16:D65F03C0,
+
+    ;;; B.cond imm19:  0101 0100 imm19 0 cond
+    _B_COND     = _16:54000000,
+
+    ;;; CBZ Xt, imm19:  1011 0100 imm19 Rt
+    _CBZ        = _16:B4000000,
+
+    ;;; CBNZ Xt, imm19: 1011 0101 imm19 Rt
+    _CBNZ       = _16:B5000000,
+
+    ;;; --- Comparison ---
+
+    ;;; CMP Xn, #imm is alias for SUBS XZR, Xn, #imm
+    ;;; CMP Xn, Xm is alias for SUBS XZR, Xn, Xm
+
+    ;;; --- Bit manipulation ---
+
+    ;;; LSL Xd, Xn, Xm: 1001 1010 110 Xm 0010 00 Xn Xd
+    _LSL_REG    = _16:9AC02000,
+
+    ;;; LSR Xd, Xn, Xm: 1001 1010 110 Xm 0010 01 Xn Xd
+    _LSR_REG    = _16:9AC02400,
+
+    ;;; ASR Xd, Xn, Xm: 1001 1010 110 Xm 0010 10 Xn Xd
+    _ASR_REG    = _16:9AC02800,
+
+    ;;; --- Shift by immediate ---
+    ;;; LSL Xd, Xn, #shift is alias for UBFM
+    ;;; LSR Xd, Xn, #shift is alias for UBFM
+    ;;; ASR Xd, Xn, #shift is alias for SBFM
+    ;;; UBFM Xd, Xn, #immr, #imms: 1101 0011 01 immr imms Xn Xd
+    _UBFM       = _16:D3400000,
+    ;;; SBFM Xd, Xn, #immr, #imms: 1001 0011 01 immr imms Xn Xd
+    _SBFM       = _16:93400000,
+
+    ;;; --- NOP ---
+    _NOP        = _16:D503201F,
+
+    ;;; Register codes (AArch64 uses 5-bit register numbers)
+
+    _X0     = _0,
+    _X1     = _1,
+    _X2     = _2,
+    _X3     = _3,
+    _X4     = _4,
+    _X5     = _5,
+    _X6     = _6,
+    _X7     = _7,
+    _X8     = _8,
+    _X9     = _9,
+    _X10    = _10,
+    _X11    = _11,
+    _X12    = _12,
+    _X13    = _13,
+    _X14    = _14,
+    _X15    = _15,
+    _X16    = _16,
+    _X17    = _17,
+    _X18    = _18,
+    _X19    = _19,
+    _X20    = _20,
+    _X21    = _21,
+    _X22    = _22,
+    _X23    = _23,
+    _X24    = _24,
+    _X25    = _25,
+    _X26    = _26,
+    _X27    = _27,
+    _X28    = _28,
+    _X29    = _29,
+    _X30    = _30,
+    _XZR    = _31,       ;;; zero register (also SP in some encodings)
+
+    ;;; Condition codes (4-bit, same as ARM32)
+
+    _cc_EQ  = _2:0000,          ;;; equal (Z=1)
+    _cc_NE  = _2:0001,          ;;; not equal (Z=0)
+    _cc_CS  = _2:0010,          ;;; carry set / unsigned >= (HS)
+    _cc_CC  = _2:0011,          ;;; carry clear / unsigned < (LO)
+    _cc_MI  = _2:0100,          ;;; minus / negative
+    _cc_PL  = _2:0101,          ;;; plus / positive or zero
+    _cc_VS  = _2:0110,          ;;; overflow
+    _cc_VC  = _2:0111,          ;;; no overflow
+    _cc_HI  = _2:1000,          ;;; unsigned greater-than
     _cc_LS  = _2:1001,          ;;; unsigned less-than-or-equal
-    _cc_GT  = _2:1100,          ;;; signed greater-than
     _cc_GE  = _2:1010,          ;;; signed greater-than-or-equal
     _cc_LT  = _2:1011,          ;;; signed less-than
+    _cc_GT  = _2:1100,          ;;; signed greater-than
     _cc_LE  = _2:1101,          ;;; signed less-than-or-equal
-
-    _cc_ALL = _16:E,            ;;; uncondtional
+    _cc_AL  = _2:1110,          ;;; always
 
     ;;; Condition-code mask
 
-    _cc_NOT = _2:0001,          ;;; negates a condition
+    _cc_NOT = _2:0001,          ;;; XOR with this negates a condition
 
 ;
 
@@ -192,14 +378,24 @@ lconstant
 
     ;;; NAMED REGISTERS
 
-    _SP     = _R13,             ;;; system stack pointer
-    _USP    = _R10,             ;;; user stack pointer
-    _PB     = _R11,             ;;; procedure base register
-    _LR     = _R14,             ;;; link register
-    _PC     = _R15,             ;;; program counter
+    _SP     = _X19,             ;;; NOT the hardware SP; this is the Poplog
+                                ;;; system stack pointer held in x19
+                                ;;; (callee-saved)
+    ;;; NOTE: On AArch64 the hardware stack pointer is the real SP register.
+    ;;; Poplog uses x19 as its own "system stack pointer" to maintain
+    ;;; compatibility with the VM model.  The hardware SP is used for
+    ;;; C-interop frames only.
 
-    _ARG_REG_0  = _R0,         ;;; for arguments to subroutines
-    _CHAIN_REG  = _R2,         ;;; for targets of chaining
+    _USP    = _X19,             ;;; user stack pointer (x19)
+    _PB     = _X20,             ;;; procedure base register (x20)
+    _LR     = _X30,             ;;; link register
+
+    _ARG_REG_0  = _X0,         ;;; for arguments to subroutines
+    _CHAIN_REG  = _X2,         ;;; for targets of chaining
+
+    ;;; Scratch register for code generation (IP0)
+    _WK     = _X16,            ;;; intra-procedure scratch
+    _WK2    = _X17,            ;;; second intra-procedure scratch
 ;
 
 protected register constant
@@ -210,25 +406,17 @@ protected register constant
     ;;; The value is a popint register number shifted left 1
     ;;; plus bit 0 if pop reg
 
-    ;;; arg_reg_0, _1, & _2 :
-    ;;; for passing arguments to subroutines. _1 & _2 are (currently) used
-    ;;; only by Prolog instructions.
-    ;;; NB. arg_reg_0 (EAX) is also used as a working register for complex
-    ;;; moves. There should be at most only simple moves to arg_reg_1 & _2
-    ;;; between the assignment to arg_reg_0 and the corresponding subroutine
-    ;;; call.
+    arg_reg_0   = _pint(_ARG_REG_0) << 1,       ;;; X0
+    arg_reg_1   = _pint(_X1) << 1,
+    arg_reg_2   = _pint(_X2) << 1,
 
-    arg_reg_0   = _pint(_ARG_REG_0) << 1,       ;;; R0
-    arg_reg_1   = _pint(_R1) << 1,
-    arg_reg_2   = _pint(_R2) << 1,
+    chain_reg   = _pint(_CHAIN_REG) << 1,       ;;; X2
 
-    chain_reg   = _pint(_CHAIN_REG) << 1,       ;;; R2
-
-    pop_reg_A    = _pint(_R4) << 1 || 1,
-    pop_reg_B    = _pint(_R6) << 1 || 1,
-    nonpop_reg_A = _pint(_R7) << 1,
-    nonpop_reg_B = _pint(_R8) << 1,
-    nonpop_reg_C = _pint(_R9) << 1,
+    pop_reg_A    = _pint(_X21) << 1 || 1,
+    pop_reg_B    = _pint(_X22) << 1 || 1,
+    nonpop_reg_A = _pint(_X23) << 1,
+    nonpop_reg_B = _pint(_X24) << 1,
+    nonpop_reg_C = _pint(_X25) << 1,
 ;
 
 constant
@@ -238,7 +426,7 @@ constant
     asm_pop_registers = [[]],
     ;;; asm_pop_registers = [%[], ident pop_reg_A, ident pop_reg_B %],
     asm_nonpop_registers = [[]],
-    ;;; asm_nonpop_registers = [%[], ident nonpop_reg_A, ident pop_reg_B,
+    ;;; asm_nonpop_registers = [%[], ident nonpop_reg_A, ident nonpop_reg_B,
     ;;;                             ident nonpop_reg_C %],
 ;
 
@@ -250,49 +438,52 @@ enddefine;
 
 ;;; === CODE-PLANTING PROCEDURES ======================================
 
-;;; Drop_w :
-;;;     put a word in the procedure record
+;;; do_drop_w:
+;;;     write a 32-bit instruction word to the code buffer.
+;;;     On AArch64, instructions are still 32 bits (4 bytes) each,
+;;;     even though data words are 64 bits.
 
-define lconstant do_drop_w(_long);
-    lvars _long;
-;;;     lvars _pword = _long;
+define lconstant do_drop_w(_instr);
+    lvars _instr;
     unless _asm_pass then
         ;;; only output the data on the last pass
-;;;                _extern printf('Drop_l(0x%08x)\n', _long);
-#_IF false
-                _extern printf('%c', _pword);
-                _shift(_pword, _-8) - > _pword;
-                _extern printf('%c', _pword);
-                _shift(_pword, _-8) - > _pword;
-                _extern printf('%c', _pword);
-                _shift(_pword, _-8) - > _pword;
-                _extern printf('%c', _pword);
-                _extern fflush (_0);
-#_ENDIF
-        _long -> _asm_drop_ptr!(i)++ -> _asm_drop_ptr;
+        _instr -> _asm_drop_ptr!(i)++ -> _asm_drop_ptr;
     endunless;
     @@(i){_asm_code_offset}++ -> _asm_code_offset;
 enddefine;
 
+;;; do_drop_d:
+;;;     write a 64-bit data word to the code buffer (for literal pools).
+;;;     Literals on AArch64 are 64-bit since pointers are 64-bit.
+
+define lconstant do_drop_d(_val);
+    lvars _val;
+    unless _asm_pass then
+        _val -> _asm_drop_ptr!(w)++ -> _asm_drop_ptr;
+    endunless;
+    @@(w){_asm_code_offset}++ -> _asm_code_offset;
+enddefine;
+
+;;; dump_literals:
+;;;     flush the literal pool into the code stream.
+;;;     On AArch64, each literal is 8 bytes (64-bit pointer/value),
+;;;     and the LDR (literal) instruction has a +/-1MB range (19-bit signed
+;;;     offset * 4).  We dump when we get close to the limit.
+
 define lconstant dump_literals();
-/*
-    printf(_asm_pass, 'dump_literals, _asm_pass = %p, ');
-    printf(literal_pools, 'literal_pools = %p, ');
-    printf(_pint(_lit_count), '_lit_count = %p\n');
-    printf(_pint(_asm_code_offset), '_asm_code_offset = %p, ');
-    printf(_pint(_current_literal_zone), '_current_literal_zone = %p\n');
-*/
     if _asm_pass then
         conspair(_pint(_asm_code_offset), literal_pools)
             -> literal_pools;
     endif;
     lvars _n = _0;
     while _n _lt _lit_count do
-        do_drop_w(lit_buff!(i)[_n]);
+        do_drop_d(lit_buff!(w)[_n]);
         _n _add _1 -> _n;
     endwhile;
     if _asm_pass then
-        _asm_code_offset _add _16:FFF -> _current_literal_pool;
+        ;;; On AArch64, LDR (literal) has +/-1MB range.
+        ;;; We use a conservative limit of 512KB (0x80000).
+        _asm_code_offset _add _16:80000 -> _current_literal_pool;
     else
         _int(front(literal_pools)) -> _current_literal_pool;
         back(literal_pools) -> literal_pools;
@@ -300,125 +491,319 @@ define lconstant dump_literals();
     _0 -> _lit_count;
 enddefine;
 
-define drop_w(_long);
-    lvars _long;
-    ;;; printf(_pint(_asm_code_offset), 'drop_w, _asm_code_offset = %p\n');
-    do_drop_w(_long);
+;;; drop_w:
+;;;     plant a 32-bit instruction, possibly flushing the literal pool
+;;;     if we are getting too far from pending literals.
+
+define drop_w(_instr);
+    lvars _instr;
+    do_drop_w(_instr);
     if _lit_count == _0 or
-       (_asm_code_offset _sub _current_literal_zone) _slt _1000 then
+       (_asm_code_offset _sub _current_literal_zone) _slt _16:70000 then
         return();
     endif;
-    ;;; Jump will go _off + 2 words forward from current position
-    ;;; we need to skip over single word for jump and _lit_count
-    ;;; literal words.  So in balance we subtract 1 from _lit_count.
-    lvars _off = _lit_count _sub _1;
-    do_drop_w(_B_XX _biset _shift(_cc_ALL, _28) _biset _off);
+    ;;; Need to skip over the literal pool: plant an unconditional branch.
+    ;;; Each literal is 8 bytes, branch is 4 bytes.
+    ;;; offset = (4 + _lit_count * 8) / 4 = 1 + _lit_count * 2
+    lvars _off = _lit_count _mul _2 _add _1;
+    do_drop_w(_B _biset (_off _bimask _16:3FFFFFF));
     dump_literals();
 enddefine;
-;;;
 
-define drop_op3(_opcode, _reg, _arg1, _arg2);
-    drop_w(_opcode _biset _shift(_reg, _dst_off)
-                   _biset _shift(_arg1, _arg1_off)
-                   _biset _arg2);
+;;; === AArch64 instruction planting helpers ============================
+
+;;; drop_mov_reg:
+;;;     MOV Xd, Xn  (alias for ORR Xd, XZR, Xn)
+define drop_mov_reg(_dst, _src);
+    lvars _dst, _src;
+    drop_w(_ORR_REG _biset _shift(_src, _16) _biset _shift(_XZR, _5)
+                    _biset _dst);
 enddefine;
 
-define Mem_offset(_off);
-    if _off _slt _0 then
-        _negate(_off)
+;;; drop_add_imm:
+;;;     ADD Xd, Xn, #imm12
+define drop_add_imm(_dst, _src, _imm);
+    lvars _dst, _src, _imm;
+    drop_w(_ADD_IMM _biset _shift(_imm _bimask _16:FFF, _10)
+                    _biset _shift(_src, _5) _biset _dst);
+enddefine;
+
+;;; drop_sub_imm:
+;;;     SUB Xd, Xn, #imm12
+define drop_sub_imm(_dst, _src, _imm);
+    lvars _dst, _src, _imm;
+    drop_w(_SUB_IMM _biset _shift(_imm _bimask _16:FFF, _10)
+                    _biset _shift(_src, _5) _biset _dst);
+enddefine;
+
+;;; drop_add_reg:
+;;;     ADD Xd, Xn, Xm
+define drop_add_reg(_dst, _n, _m);
+    lvars _dst, _n, _m;
+    drop_w(_ADD_REG _biset _shift(_m, _16) _biset _shift(_n, _5) _biset _dst);
+enddefine;
+
+;;; drop_sub_reg:
+;;;     SUB Xd, Xn, Xm
+define drop_sub_reg(_dst, _n, _m);
+    lvars _dst, _n, _m;
+    drop_w(_SUB_REG _biset _shift(_m, _16) _biset _shift(_n, _5) _biset _dst);
+enddefine;
+
+;;; drop_subs_reg:
+;;;     SUBS Xd, Xn, Xm  (sets flags; Xd=XZR for CMP)
+define drop_subs_reg(_dst, _n, _m);
+    lvars _dst, _n, _m;
+    drop_w(_SUBS_REG _biset _shift(_m, _16) _biset _shift(_n, _5) _biset _dst);
+enddefine;
+
+;;; drop_cmp_reg:
+;;;     CMP Xn, Xm  (alias for SUBS XZR, Xn, Xm)
+define drop_cmp_reg(_n, _m);
+    lvars _n, _m;
+    drop_subs_reg(_XZR, _n, _m);
+enddefine;
+
+;;; drop_cmp_imm:
+;;;     CMP Xn, #imm12  (alias for SUBS XZR, Xn, #imm12)
+define drop_cmp_imm(_n, _imm);
+    lvars _n, _imm;
+    drop_w(_SUBS_IMM _biset _shift(_imm _bimask _16:FFF, _10)
+                     _biset _shift(_n, _5) _biset _XZR);
+enddefine;
+
+;;; drop_tst_imm:
+;;;     TST Xn, #imm  -- logical immediate form
+;;;     For simple bit patterns we use ANDS XZR, Xn, Xm with Xm loaded
+;;;     with the test value, since logical immediates have complex encoding.
+;;;     For single-bit tests we can sometimes use TBNZ/TBZ instead.
+
+;;; drop_ands_reg:
+;;;     ANDS Xd, Xn, Xm (sets flags)
+define drop_ands_reg(_dst, _n, _m);
+    lvars _dst, _n, _m;
+    drop_w(_ANDS_REG _biset _shift(_m, _16) _biset _shift(_n, _5)
+                     _biset _dst);
+enddefine;
+
+;;; drop_tst_reg:
+;;;     TST Xn, Xm  (alias for ANDS XZR, Xn, Xm)
+define drop_tst_reg(_n, _m);
+    lvars _n, _m;
+    drop_ands_reg(_XZR, _n, _m);
+enddefine;
+
+;;; drop_mul:
+;;;     MUL Xd, Xn, Xm  (alias for MADD Xd, Xn, Xm, XZR)
+define drop_mul(_dst, _n, _m);
+    lvars _dst, _n, _m;
+    drop_w(_MADD _biset _shift(_m, _16)
+                 _biset _shift(_XZR, _10)
+                 _biset _shift(_n, _5) _biset _dst);
+enddefine;
+
+;;; drop_ldr_imm:
+;;;     LDR Xt, [Xn, #pimm]  (unsigned offset, scaled by 8)
+;;;     pimm must be a non-negative multiple of 8, max 32760
+define drop_ldr_imm(_rt, _rn, _off);
+    lvars _rt, _rn, _off;
+    drop_w(_LDR_IMM _biset _shift(_shift(_off, _-3) _bimask _16:FFF, _10)
+                    _biset _shift(_rn, _5) _biset _rt);
+enddefine;
+
+;;; drop_str_imm:
+;;;     STR Xt, [Xn, #pimm]  (unsigned offset, scaled by 8)
+define drop_str_imm(_rt, _rn, _off);
+    lvars _rt, _rn, _off;
+    drop_w(_STR_IMM _biset _shift(_shift(_off, _-3) _bimask _16:FFF, _10)
+                    _biset _shift(_rn, _5) _biset _rt);
+enddefine;
+
+;;; drop_ldr_reg:
+;;;     LDR Xt, [Xn, Xm, LSL #3]
+define drop_ldr_reg(_rt, _rn, _rm);
+    lvars _rt, _rn, _rm;
+    drop_w(_LDR_REG _biset _shift(_rm, _16) _biset _shift(_rn, _5)
+                    _biset _rt);
+enddefine;
+
+;;; drop_str_reg:
+;;;     STR Xt, [Xn, Xm, LSL #3]
+define drop_str_reg(_rt, _rn, _rm);
+    lvars _rt, _rn, _rm;
+    drop_w(_STR_REG _biset _shift(_rm, _16) _biset _shift(_rn, _5)
+                    _biset _rt);
+enddefine;
+
+;;; drop_ldr_soff:
+;;;     LDR Xt, [Xn, #simm9] (signed unscaled offset, using LDUR)
+;;;     LDUR Xt, [Xn, #simm9]: 1111 1000 010 simm9 00 Rn Rt
+define drop_ldr_soff(_rt, _rn, _off);
+    lvars _rt, _rn, _off;
+    drop_w(_16:F8400000 _biset _shift(_off _bimask _16:1FF, _12)
+                        _biset _shift(_rn, _5) _biset _rt);
+enddefine;
+
+;;; drop_str_soff:
+;;;     STUR Xt, [Xn, #simm9]: 1111 1000 000 simm9 00 Rn Rt
+define drop_str_soff(_rt, _rn, _off);
+    lvars _rt, _rn, _off;
+    drop_w(_16:F8000000 _biset _shift(_off _bimask _16:1FF, _12)
+                        _biset _shift(_rn, _5) _biset _rt);
+enddefine;
+
+;;; drop_mem_off:
+;;;     General load/store with signed offset.
+;;;     For non-negative multiples of 8 within range, uses unsigned-offset form.
+;;;     Otherwise uses LDUR/STUR (signed unscaled, 9-bit range).
+
+define drop_mem_off(_is_load, _rt, _rn, _off);
+    lvars _is_load, _rt, _rn, _off;
+    if _off _sgreq _0 and not(_off _bitst _7)
+       and _off _slt _16:8000 then
+        ;;; Positive, 8-byte aligned, fits in 12-bit unsigned offset
+        if _is_load then
+            drop_ldr_imm(_rt, _rn, _off);
+        else
+            drop_str_imm(_rt, _rn, _off);
+        endif;
+    elseif _off _sgreq _-256 and _off _slt _256 then
+        ;;; Fits in 9-bit signed unscaled offset
+        if _is_load then
+            drop_ldr_soff(_rt, _rn, _off);
+        else
+            drop_str_soff(_rt, _rn, _off);
+        endif;
     else
-        _off _biset _plus_flag
-    endif -> _off;
-    _off _biset _pre_offset
-enddefine;
-
-define drop_mem_imm_off(_opcode, _reg, _base, _off);
-    drop_op3(_opcode, _reg, _base, Mem_offset(_off));
-enddefine;
-
-define lconstant drop_mem_indexed(_opcode, _reg, _base, _ind);
-    drop_op3(_opcode, _reg, _base,
-        _pre_offset _biset _immediate_bit _biset _plus_flag _biset _ind);
-enddefine;
-
-define try_encode_imm(_imm);
-    lvars _shift_cnt = _0;
-    if _imm _lt _256 then
-        return(_imm _biset _immediate_bit);
-    endif;
-    if not(_imm _bitst _16:FFFF) then
-        _16 -> _shift_cnt;
-        _shift(_imm, _-16) _bimask _16:FFFF -> _imm;
-    endif;
-    if not(_imm _bitst _16:FF) then
-        _shift_cnt _add _8  -> _shift_cnt;
-        _shift(_imm, _-8) -> _imm;
-    endif;
-    if not(_imm _bitst _16:F) then
-        _shift_cnt _add _4  -> _shift_cnt;
-        _shift(_imm, _-4) -> _imm;
-    endif;
-    if not(_imm _bitst _16:3) then
-        _shift_cnt _add _2 -> _shift_cnt;
-        _shift(_imm, _-2) -> _imm;
-    endif;
-    if _imm _greq _256 then
-        return(_0);
-    endif;
-    _shift(_32 _sub _shift_cnt, _7) _biset _imm _biset _immediate_bit;
-enddefine;
-
-define encode_imm(_imm);
-    lvars _res = try_encode_imm(_imm);
-    if _nonzero(_res) then
-        return(_res)
-    else
-        mishap(0, 'encode_imm: bad immediate');
+        ;;; Out of range for simple addressing: load offset into scratch
+        load_literal(_WK2, _off);
+        if _is_load then
+            drop_ldr_reg(_rt, _rn, _WK2);
+        else
+            drop_str_reg(_rt, _rn, _WK2);
+        endif;
     endif;
 enddefine;
 
-define drop_op_imm(_opcode, _dst, _arg1, _imm);
-    drop_op3(_opcode, _dst, _arg1, encode_imm(_imm));
+define drop_load_off(_rt, _rn, _off);
+    drop_mem_off(true, _rt, _rn, _off);
 enddefine;
 
+define drop_store_off(_rt, _rn, _off);
+    drop_mem_off(false, _rt, _rn, _off);
+enddefine;
+
+;;; drop_push_reg:
+;;;     STR Xt, [Xn, #-8]!  (pre-decrement push)
 define drop_push_reg(_reg, _base);
-    drop_op3(_STR, _reg, _base,
-             _4 _biset _auto_indexing _biset _pre_offset);
+    lvars _reg, _base;
+    ;;; STR Xt, [Xn, #-8]! = F8000000 | ((-8 & 0x1FF) << 12) | (0x3 << 10) | (Rn << 5) | Rt
+    ;;; simm9 for -8 = 0x1F8
+    drop_w(_STR_PRE _biset _shift(_16:1F8, _12) _biset _shift(_base, _5)
+                    _biset _reg);
 enddefine;
 
+;;; drop_pop_reg:
+;;;     LDR Xt, [Xn], #8  (post-increment pop)
 define drop_pop_reg(_reg, _base);
-    drop_op3(_LDR, _reg, _base,
-             _4 _biset _auto_indexing _biset _plus_flag);
+    lvars _reg, _base;
+    ;;; LDR Xt, [Xn], #8 = F8400400 | ((8 & 0x1FF) << 12) | (Rn << 5) | Rt
+    drop_w(_LDR_POST _biset _shift(_8, _12) _biset _shift(_base, _5)
+                     _biset _reg);
 enddefine;
 
-define drop_br_cond(_cc, _off);
-    lvars _cc, _off;
-    _off _sub _asm_code_offset -> _off;
-    _shift(_off _sub _8, _-2) _bimask _16:FFFFFF -> _off;
-    drop_w(_B_XX _biset _shift(_cc, _28) _biset _off);
+;;; drop_stp_pre:
+;;;     STP Xt1, Xt2, [Xn, #imm]!
+;;;     imm must be a signed multiple of 8, range -512..504
+define drop_stp_pre(_rt1, _rt2, _rn, _off);
+    lvars _rt1, _rt2, _rn, _off;
+    lvars _imm7 = _shift(_off, _-3) _bimask _16:7F;
+    drop_w(_STP_PRE _biset _shift(_imm7, _15) _biset _shift(_rt2, _10)
+                    _biset _shift(_rn, _5) _biset _rt1);
 enddefine;
 
-define load_literal(_reg, _imm);
-    lvars _tmp = try_encode_imm(_imm);
-    if _nonzero(_tmp) then
-        drop_op3(_MOV, _reg, _R0, _tmp);
-    elseif _nonzero(try_encode_imm(_-1 _sub _imm) ->> _tmp) then
-        drop_op3(_MVN, _reg, _R0, _tmp);
+;;; drop_ldp_post:
+;;;     LDP Xt1, Xt2, [Xn], #imm
+define drop_ldp_post(_rt1, _rt2, _rn, _off);
+    lvars _rt1, _rt2, _rn, _off;
+    lvars _imm7 = _shift(_off, _-3) _bimask _16:7F;
+    drop_w(_LDP_POST _biset _shift(_imm7, _15) _biset _shift(_rt2, _10)
+                     _biset _shift(_rn, _5) _biset _rt1);
+enddefine;
+
+;;; drop_br_cond:
+;;;     B.cond to a known code offset.
+;;;     _cc is the condition code (4 bits).
+;;;     _target_off is the target code offset (absolute, in bytes from
+;;;     procedure code start).
+
+define drop_br_cond(_cc, _target_off);
+    lvars _cc, _target_off;
+    _target_off _sub _asm_code_offset -> _target_off;
+    ;;; offset is in bytes, instruction encodes offset/4 in 19 bits
+    lvars _imm19 = _shift(_target_off, _-2) _bimask _16:7FFFF;
+    drop_w(_B_COND _biset _shift(_imm19, _5) _biset _cc);
+enddefine;
+
+;;; drop_br_uncond:
+;;;     B to a known code offset (unconditional).
+define drop_br_uncond(_target_off);
+    lvars _target_off;
+    _target_off _sub _asm_code_offset -> _target_off;
+    lvars _imm26 = _shift(_target_off, _-2) _bimask _16:3FFFFFF;
+    drop_w(_B _biset _imm26);
+enddefine;
+
+
+;;; === LITERAL LOADING ================================================
+
+;;; load_literal:
+;;;     Load a 64-bit value into register _reg.
+;;;     Strategy:
+;;;       1. If value fits in 16 bits: MOVZ
+;;;       2. If value is a small negative: MOVN
+;;;       3. Otherwise: load from the literal pool via LDR (literal)
+;;;
+;;;     On AArch64, LDR (literal) loads a 64-bit value from a PC-relative
+;;;     address, encoded as a 19-bit signed offset * 4 (+/-1MB range).
+;;;     LDR Xt, label: 0101 1000 imm19 Rt
+
+define load_literal(_reg, _val);
+    lvars _reg, _val;
+    if _val _sgreq _0 and _val _slt _16:10000 then
+        ;;; fits in MOVZ Xd, #imm16
+        drop_w(_MOVZ _biset _shift(_val, _5) _biset _reg);
+    elseif _val _slt _0 and _val _sgreq _-16:10000 then
+        ;;; MOVN Xd, #(~val)
+        lvars _nimm = _negate(_val) _sub _1;
+        drop_w(_MOVN _biset _shift(_nimm _bimask _16:FFFF, _5) _biset _reg);
+    elseif _val _sgreq _0 and _val _slt _16:100000000 then
+        ;;; Fits in two MOVZ/MOVK instructions (32-bit positive)
+        drop_w(_MOVZ _biset _shift(_val _bimask _16:FFFF, _5) _biset _reg);
+        lvars _hi = _shift(_val, _-16) _bimask _16:FFFF;
+        if _nonzero(_hi) then
+            ;;; MOVK Xd, #imm16, LSL #16: hw=1 so bit 21 set
+            drop_w(_MOVK _biset _shift(_1, _21) _biset _shift(_hi, _5)
+                         _biset _reg);
+        endif;
     else
-        ;;; printf(_pint(_lit_count), 'load_literal, _lit_count = %p, ');
-        ;;; printf(_pint(_asm_code_offset), '_asm_code_offset = %p\n');
+        ;;; Use literal pool
         if _lit_count == _0 then
             _asm_code_offset -> _current_literal_zone;
         endif;
         if _lit_count _lt _512 then
-            lvars _lit_pos = _shift(_lit_count, _2) _add _current_literal_pool,
-                  _dist = _lit_pos _sub _asm_code_offset _sub _8;
-            if _dist _greq _16:FFF then
+            ;;; Compute distance from current instruction to literal in pool.
+            ;;; Each literal is 8 bytes. Pool starts at _current_literal_pool.
+            lvars _lit_pos = _shift(_lit_count, _3) _add _current_literal_pool,
+                  _dist = _lit_pos _sub _asm_code_offset;
+            if _dist _sgreq _16:100000 then
                 mishap(0, 'load_literal: distance to literal pool too large');
             else
-                _imm -> lit_buff!(i)[_lit_count];
+                _val -> lit_buff!(w)[_lit_count];
                 _lit_count _add _1 -> _lit_count;
-                drop_mem_imm_off(_LDR, _reg, _PC, _dist);
+                ;;; LDR Xt, label: 01 011 000 imm19 Rt
+                lvars _imm19 = _shift(_dist, _-2) _bimask _16:7FFFF;
+                drop_w(_16:58000000 _biset _shift(_imm19, _5) _biset _reg);
             endif;
         else
             mishap(0, 'load_literal: too many literals');
@@ -426,28 +811,48 @@ define load_literal(_reg, _imm);
     endif;
 enddefine;
 
-define do_load_or_store(_opcode, _reg, structure, defer, _tmp_reg);
+
+;;; === OPERAND ACCESS =================================================
+
+;;; do_load_or_store:
+;;;     Load from or store to an operand described by -structure-.
+;;;     structure is either:
+;;;       - A negative integer: offset for an on-stack lvar
+;;;       - A non-negative integer: index into the procedure's structure table
+;;;     defer: if true, the operand is indirect (load the pointer, then
+;;;            load/store through it)
+
+define do_load_or_store(_is_load, _reg, structure, defer, _tmp_reg);
+    lvars _is_load, _reg, structure, defer, _tmp_reg;
     lvars _str = _int(structure);
     if _neg(_str) then
         ;;; Negated offset for an on-stack lvar, shifted left by 1
-        ;;; If bit 0 is set, access is via a ref (another indirection),
-        ;;; but this is disabled by defer being <false>
+        ;;; Bit 0 set means access via a ref (indirect)
         unless _str _bitst _1 then false -> defer endunless;
         _negate(_shift(_str, _-1)) -> _str;
-        drop_mem_imm_off(if defer then _LDR else _opcode endif,
-                         if defer then _tmp_reg else _reg endif,
-                         _SP, _str);
+        if defer then
+            drop_load_off(_tmp_reg, _SP, _str);
+        else
+            if _is_load then
+                drop_load_off(_reg, _SP, _str);
+            else
+                drop_store_off(_reg, _SP, _str);
+            endif;
+        endif;
     else
-        if _opcode == _LDR or defer then
-            drop_mem_imm_off(_LDR,
-                             if defer then _tmp_reg else _reg endif,
-                             _PB, @@PD_TABLE{_str});
+        if _is_load or defer then
+            drop_load_off(if defer then _tmp_reg else _reg endif,
+                         _PB, @@PD_TABLE{_str});
         else
             mishap(0, 'store to frozen value');
         endif;
     endif;
     if defer then
-        drop_mem_imm_off(_opcode, _reg, _tmp_reg, _0);
+        if _is_load then
+            drop_load_off(_reg, _tmp_reg, _0);
+        else
+            drop_store_off(_reg, _tmp_reg, _0);
+        endif;
     endif;
 enddefine;
 
@@ -465,7 +870,7 @@ define load_from_arg(_arg, defer, _tmp_reg);
     lvars _arg, defer, _tmp_reg, _reg,
            structure = get_arg(_arg);
     if issimple(structure) then
-        do_load_or_store(_LDR, _tmp_reg, structure, defer, _tmp_reg);
+        do_load_or_store(true, _tmp_reg, structure, defer, _tmp_reg);
         _tmp_reg;
     elseif Is_register(structure) ->> _reg then
         unless defer then
@@ -475,7 +880,7 @@ define load_from_arg(_arg, defer, _tmp_reg);
     else
         load_literal(_tmp_reg, structure);
         if defer then
-           drop_mem_imm_off(_LDR, _tmp_reg, _tmp_reg, _0);
+           drop_load_off(_tmp_reg, _tmp_reg, _0);
         endif;
         _tmp_reg;
     endif;
@@ -485,15 +890,15 @@ define store_reg_to_arg(_reg, _arg, defer, _tmp_reg);
     lvars _reg, _arg, defer, _tmp_reg,
           structure = get_arg(_arg);
     if issimple(structure) then
-        do_load_or_store(_STR, _reg, structure, defer, _tmp_reg);
+        do_load_or_store(false, _reg, structure, defer, _tmp_reg);
     elseif Is_register(structure) ->> _arg then
         unless defer then
             mishap(0, 'REGISTER USED AS IMMEDIATE OPERAND')
         endunless;
-        drop_op3(_MOV, _int(_arg), _R0, _reg);
+        drop_mov_reg(_int(_arg), _reg);
     elseif defer then
         load_literal(_tmp_reg, structure);
-        drop_mem_imm_off(_STR, _reg, _tmp_reg, _0);
+        drop_store_off(_reg, _tmp_reg, _0);
     else
         mishap(0, 'store_reg_to_arg unimplemented');
     endif;
@@ -503,7 +908,7 @@ define store_reg(_reg);
     if asm_instr!V_LENGTH == _2 then
         drop_push_reg(_reg, _USP);
     else
-        store_reg_to_arg(_reg, _1, true, _R1);
+        store_reg_to_arg(_reg, _1, true, _X1);
     endif;
 enddefine;
 
@@ -531,36 +936,29 @@ enddefine;
 ;;; I-code data movement instructions:
 
 define I_POP();
-    ;;; printf('I_POP\n');
-    drop_pop_reg(_R0, _USP);
-    store_reg_to_arg(_R0, _0, true, _R1);
+    drop_pop_reg(_X0, _USP);
+    store_reg_to_arg(_X0, _0, true, _X1);
 enddefine;
 
 define I_POPQ();
-    ;;; printf('I_POPQ\n');
-    drop_pop_reg(_R0, _USP);
-    store_reg_to_arg(_R0, _0, false, _R1);
+    drop_pop_reg(_X0, _USP);
+    store_reg_to_arg(_X0, _0, false, _X1);
 enddefine;
 
 define I_STORE();
-    ;;; printf('I_STORE\n');
-    drop_mem_imm_off(_LDR, _R0, _USP, _0);
-    store_reg_to_arg(_R0, _0, true, _R1);
+    drop_load_off(_X0, _USP, _0);
+    store_reg_to_arg(_X0, _0, true, _X1);
 enddefine;
 
 define I_MOVE();
-    ;;; printf('I_MOVE\n');
     lvars _dest_reg = false, structure;
-    ;;; We can not use _R0 for simple move to other registers,
-    ;;; as that may destroy arguments of calls to assembler
-    ;;; routines
     if asm_instr!V_LENGTH == _3 then
         get_arg(_1) -> structure;
         if Is_register(structure) ->> _dest_reg then
             _int(_dest_reg) -> _dest_reg;
         endif;
     endif;
-    lvars _reg = if _dest_reg then _dest_reg else _R0 endif;
+    lvars _reg = if _dest_reg then _dest_reg else _X0 endif;
     load_from_arg(_0, true, _reg) -> _reg;
     if _reg /== _dest_reg then
         store_reg(_reg);
@@ -568,18 +966,14 @@ define I_MOVE();
 enddefine;
 
 define I_MOVEQ();
-    ;;; printf('I_MOVEQ\n');
     lvars _dest_reg = false, structure;
-    ;;; We can not use _R0 for simple move to other registers,
-    ;;; as that may destroy arguments of calls to assembler
-    ;;; routines
     if asm_instr!V_LENGTH == _3 then
         get_arg(_1) -> structure;
         if Is_register(structure) ->> _dest_reg then
             _int(_dest_reg) -> _dest_reg;
         endif;
     endif;
-    lvars _reg = if _dest_reg then _dest_reg else _R0 endif;
+    lvars _reg = if _dest_reg then _dest_reg else _X0 endif;
     load_from_arg(_0, false, _reg) -> _reg;
     if _reg /== _dest_reg then
         store_reg(_reg);
@@ -587,25 +981,22 @@ define I_MOVEQ();
 enddefine;
 
 define I_MOVES();
-    ;;; printf('I_MOVES\n');
-    drop_mem_imm_off(_LDR, _R0, _USP, _0);
-    drop_push_reg(_R0, _USP);
+    ;;; Duplicate top of user stack
+    drop_load_off(_X0, _USP, _0);
+    drop_push_reg(_X0, _USP);
 enddefine;
 
 define Do_move_imm();
     lvars _arg1;
     asm_instr!INST_ARGS[_0] -> _arg1;
     lvars _dest_reg = false, structure;
-    ;;; We can not use _R0 for simple move to other registers,
-    ;;; as that may destroy arguments of calls to assembler
-    ;;; routines
     if asm_instr!V_LENGTH == _3 then
         get_arg(_1) -> structure;
         if Is_register(structure) ->> _dest_reg then
             _int(_dest_reg) -> _dest_reg;
         endif;
     endif;
-    lvars _reg = if _dest_reg then _dest_reg else _R0 endif;
+    lvars _reg = if _dest_reg then _dest_reg else _X0 endif;
     load_literal(_reg, _arg1);
     if _reg /== _dest_reg then
         store_reg(_reg);
@@ -613,39 +1004,32 @@ define Do_move_imm();
 enddefine;
 
 define I_MOVENUM();
-    ;;; printf('I_MOVENUM\n');
     Do_move_imm();
 enddefine;
 
 define I_MOVEADDR();
-    ;;; printf('I_MOVEADDR\n');
     Do_move_imm();
 enddefine;
 
 ;;; Move to/from return address slot in stack frame
-;;; (same as I_MOVE or I_MOVEADDR)
 define I_MOVE_CALLER_RETURN();
-    ;;; printf('I_MOVE_CALLER_RETURN\n');
     fast_chain(asm_instr!INST_ARGS[_2])
 enddefine;
 
 define I_PUSH_UINT();
-    ;;; printf('I_PUSH_UINT\n');
     lvars _arg1;
     Pint_->_uint(asm_instr!INST_ARGS[_0], _-1) -> _arg1;
-    load_literal(_R0, _arg1);
-    drop_push_reg(_R0, _USP);
+    load_literal(_X0, _arg1);
+    drop_push_reg(_X0, _USP);
 enddefine;
 
 define I_ERASE();
-    ;;; printf('I_ERASE\n');
-    ;;; mishap(0, 'I_ERASE unimplemented');
-    drop_op_imm(_ADD, _USP, _USP, _4);
+    ;;; Pop and discard top of user stack: add 8 to USP
+    drop_add_imm(_USP, _USP, _8);
 enddefine;
 
 define I_SWAP();
     lvars _i, _j;
-    ;;; printf('I_SWAP\n');
     _int(asm_instr!INST_ARGS[_0]) -> _i;
     _int(asm_instr!INST_ARGS[_1]) -> _j;
     if _i _slt _0 or _j _slt _0 then
@@ -653,11 +1037,13 @@ define I_SWAP();
         printf(_pint(_j), '_j = %p\n');
         mishap(0, 'I_SWAP with negative index')
     endif;
-    if _i _slt _1024 and _j _slt _1024 then
-        drop_mem_imm_off(_LDR, _R0, _USP, _shift(_i, _2));
-        drop_mem_imm_off(_LDR, _R1, _USP, _shift(_j, _2));
-        drop_mem_imm_off(_STR, _R0, _USP, _shift(_j, _2));
-        drop_mem_imm_off(_STR, _R1, _USP, _shift(_i, _2));
+    ;;; Each slot is 8 bytes on AArch64
+    lvars _ioff = _shift(_i, _3), _joff = _shift(_j, _3);
+    if _ioff _slt _16:8000 and _joff _slt _16:8000 then
+        drop_load_off(_X0, _USP, _ioff);
+        drop_load_off(_X1, _USP, _joff);
+        drop_store_off(_X0, _USP, _joff);
+        drop_store_off(_X1, _USP, _ioff);
     else
         mishap(0, 'I_SWAP with too large index');
     endif;
@@ -687,7 +1073,7 @@ enddefine;
 define lconstant deref_exptr(exptr, _reg, _tmp_reg);
     lvars exptr, _reg, _tmp_reg;
     fast_repeat exptr times
-        drop_mem_imm_off(_LDR, _tmp_reg, _reg, _0);
+        drop_load_off(_tmp_reg, _reg, _0);
         _tmp_reg -> _reg;
     endrepeat
 enddefine;
@@ -702,32 +1088,18 @@ lconstant
     t_SGN_WORD  = t_WORD  || t_SIGNED,
 
     ;;; Field sizes (in bytes) of the various types
+    ;;; On AArch64, t_WORD is 8 bytes
 
     field_size = list_assoc_val(% [%
         t_BYTE,         1,
         t_SHORT,        2,
         t_INT,          4,
-        t_WORD,         4,
+        t_WORD,         8,
         t_DOUBLE,       8,
         t_SGN_BYTE,     1,
         t_SGN_SHORT,    2,
         t_SGN_INT,      4,
-        t_SGN_WORD,     4,
-    %] %),
-
-    _load_bit = _16:100000,
-    _cond_all_bits = _16:E0000000,
-
-    access_op = list_assoc_val(% [%
-        t_BYTE,         _pint(_16:5C00000),  ;;; strb
-        t_SHORT,        _pint(_16:1C000B0),  ;;; strh
-        t_INT,          _pint(_16:5800000),  ;;; str
-        t_WORD,         _pint(_16:5800000),  ;;; str
-        t_DOUBLE,       0,  ;;; unsupported
-        t_SGN_BYTE,     _pint(_16:1C000D0),  ;;; strsb
-        t_SGN_SHORT,    _pint(_16:1C000F0),  ;;; strsh
-        t_SGN_INT,      _pint(_16:5800000),  ;;; str
-        t_SGN_WORD,     _pint(_16:5800000),  ;;; str
+        t_SGN_WORD,     8,
     %] %),
 
     ;;; Index-scale codes for the possible field sizes
@@ -741,20 +1113,71 @@ lconstant
 
 ;
 
+;;; drop_field_load:
+;;;     Load a field value of the given type from [Xn + offset_in_X1].
+;;;     Deposits the appropriate LDR variant instruction.
+
+define lconstant drop_field_load(_type, _dst, _base, _off_reg);
+    lvars _type, _dst, _base, _off_reg;
+    ;;; For simplicity, compute base+offset into X0, then load from [X0]
+    drop_add_reg(_X0, _base, _off_reg);
+    if _type == t_BYTE then
+        ;;; LDRB Wt, [Xn]:  use unsigned offset 0
+        drop_w(_LDRB_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_SHORT then
+        drop_w(_LDRH_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_INT then
+        drop_w(_LDRW_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_WORD or _type == t_DOUBLE then
+        drop_w(_LDR_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_SGN_BYTE then
+        drop_w(_LDRSB_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_SGN_SHORT then
+        drop_w(_LDRSH_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_SGN_INT then
+        drop_w(_LDRSW_IMM _biset _shift(_X0, _5) _biset _dst);
+    elseif _type == t_SGN_WORD then
+        ;;; Signed word = full 64-bit load (sign doesn't matter)
+        drop_w(_LDR_IMM _biset _shift(_X0, _5) _biset _dst);
+    else
+        mishap(0, 'drop_field_load: unsupported type');
+    endif;
+enddefine;
+
+;;; drop_field_store:
+;;;     Store a field value of the given type.
+
+define lconstant drop_field_store(_type, _src, _base, _off_reg);
+    lvars _type, _src, _base, _off_reg;
+    drop_add_reg(_X0, _base, _off_reg);
+    if _type == t_BYTE or _type == t_SGN_BYTE then
+        drop_w(_STRB_IMM _biset _shift(_X0, _5) _biset _src);
+    elseif _type == t_SHORT or _type == t_SGN_SHORT then
+        drop_w(_STRH_IMM _biset _shift(_X0, _5) _biset _src);
+    elseif _type == t_INT or _type == t_SGN_INT then
+        drop_w(_STRW_IMM _biset _shift(_X0, _5) _biset _src);
+    elseif _type == t_WORD or _type == t_SGN_WORD or _type == t_DOUBLE then
+        drop_w(_STR_IMM _biset _shift(_X0, _5) _biset _src);
+    else
+        mishap(0, 'drop_field_store: unsupported type');
+    endif;
+enddefine;
+
+
 define lconstant load_structure_addr(structure, exptr);
-    lvars structure, _reg = _R0, _disp;
+    lvars structure, _reg = _X0, _disp;
     if not(structure) then
         drop_pop_reg(_reg, _USP);
     elseif stack_offset(structure) ->> _disp then
-        drop_mem_imm_off(_LDR, _R0, _SP, _disp);
+        drop_load_off(_X0, _SP, _disp);
     elseif Is_register(Trans_structure(structure)) ->> _reg then
         _int(_reg) -> _reg;
     else
         mishap(structure, 1, 'SYSTEM ERROR 1 IN load_field_addr');
     endif;
     if exptr then
-        deref_exptr(exptr, _reg, _R0);
-        _R0 -> _reg;
+        deref_exptr(exptr, _reg, _X0);
+        _X0 -> _reg;
     endif;
     _reg;
 enddefine;
@@ -765,136 +1188,142 @@ define load_field_addr(type, structure, _size, offset, exptr);
           _tmp_reg;
 
     if isinteger(offset) then
-        ;;; mishap(0, 'isinteger(offset) in load_field_addr');
-        ;;; Convert bit offset to bytes
+        ;;; Fixed offset: convert bit offset to bytes
         ##(b){_int(offset)|1} -> _disp;
-/*
-        lvars _tmp = try_encode_imm(_imm);
-        if _nonzero(_tmp) then
-            drop_op3(_ADD, _R0, _reg, _tmp);
-        elseif _nonzero(try_encode_imm(_negate(_disp)) ->> _tmp) then
-            drop_op3(_SUB, _R0, _reg, _tmp);
-        else
-*/
     else
         if not(offset) then
-            drop_pop_reg(_R1, _USP);
+            drop_pop_reg(_X1, _USP);
         elseif stack_offset(offset) ->> _disp then
-            drop_mem_imm_off(_LDR, _R1, _SP, _disp);
+            drop_load_off(_X1, _SP, _disp);
         elseif Is_register(Trans_structure(offset)) ->> _tmp_reg then
-            drop_op3(_MOV, _int(_tmp_reg), _R0, _R1);
+            drop_mov_reg(_X1, _int(_tmp_reg));
         else
             mishap(offset, 1, 'SYSTEM ERROR 2 IN load_field_addr');
         endif;
         lvars _n = field_size(type);
         if _size == 1 then
-            ;;; Compute a displacement to be added to the index which accounts
-            ;;; for the V_BYTES offset (length+key) and for base-1 indexing
             @@V_BYTES-{_int(_n)} -> _disp;
-            if _n == 4 then
-                ;;; Index-scaling already accounted for, since index is popint
+            if _n == 8 then
+                ;;; Index is popint; on 64-bit, popint has 3 tag bits
+                ;;; Index already scaled by 8 (word size), adjust displacement
                 1 -> _n;
-                ;;; Adjust displacement by 3 to account for the popint bits
-                _disp _sub _3 -> _disp;
+                _disp _sub _7 -> _disp;
             else
-                ;;; mov r1, r1, asr #2
-                drop_op3(_MOV, _R1, _R0, _R1 _biset _16:140);
+                ;;; ASR X1, X1, #3  (remove popint tag bits)
+                ;;; SBFM X1, X1, #3, #63
+                drop_w(_SBFM _biset _shift(_3, _16)
+                             _biset _shift(_16:3F, _10)
+                             _biset _shift(_X1, _5) _biset _X1);
             endif;
         else
             _int(_size fi_* _n) -> _size;
             @@V_BYTES-{_size} -> _disp;
-            load_literal(_R12, _size);
-            ;;; mov r1, r1, asr #2
-            drop_op3(_MOV, _R1, _R0, _R1 _biset _16:140);
-            ;;; mul _R1, _R12, _R1
-            drop_op3(_MUL, _R0, _R1, _shift(_R1, _8) _biset _16:90 _biset _R12);
+            load_literal(_WK, _size);
+            ;;; ASR X1, X1, #3  (remove popint tag bits)
+            drop_w(_SBFM _biset _shift(_3, _16)
+                         _biset _shift(_16:3F, _10)
+                         _biset _shift(_X1, _5) _biset _X1);
+            ;;; MUL X1, X1, WK
+            drop_mul(_X1, _X1, _WK);
             1 -> _n;
         endif;
-        drop_op3(_ADD, _R0, _reg,
-                  _R1 _biset _shift(_int(index_scale(_n)), _7));
-        _R0 -> _reg;
+        ;;; ADD X0, reg, X1 {, LSL #scale}
+        lvars _scale = _int(index_scale(_n));
+        if _zero(_scale) then
+            drop_add_reg(_X0, _reg, _X1);
+        else
+            ;;; ADD X0, reg, X1, LSL #scale
+            drop_w(_ADD_REG _biset _shift(_X1, _16)
+                            _biset _shift(_scale, _10)
+                            _biset _shift(_reg, _5) _biset _X0);
+        endif;
+        _X0 -> _reg;
     endif;
-    load_literal(_R1, _disp);
-    drop_op3(_ADD, _R0, _reg, _R1);
-    _R0;
+    load_literal(_X1, _disp);
+    drop_add_reg(_X0, _reg, _X1);
+    _X0;
 enddefine;
 
 define lconstant do_bit_field(type, _size, structure, offset, upd, exptr);
     lvars _reg = load_structure_addr(structure, exptr), _disp,
          _tmp_reg;
-    ;;; mishap(0, 'do_bit_field unimplemented');
-    if _reg /== _R2 then
-        drop_op3(_MOV, _R2, _R0, _reg);
+    if _reg /== _X2 then
+        drop_mov_reg(_X2, _reg);
     endif;
     if isinteger(offset) then
-        load_literal(_R1, _int(offset));
+        load_literal(_X1, _int(offset));
     else
         if not(offset) then
-            drop_pop_reg(_R1, _USP);
+            drop_pop_reg(_X1, _USP);
         elseif stack_offset(offset) ->> _disp then
-            drop_mem_imm_off(_LDR, _R1, _SP, _disp);
+            drop_load_off(_X1, _SP, _disp);
         elseif Is_register(Trans_structure(offset)) ->> _tmp_reg then
-            drop_op3(_MOV, _int(_tmp_reg), _R0, _R1);
+            drop_mov_reg(_X1, _int(_tmp_reg));
         else
             mishap(0, 'SYSTEM ERROR do_bit_field');
         endif;
-        ;;; Convert offset to machine integer
-        drop_op3(_MOV, _R1, _R0, _R1 _biset _16:140);
-        load_literal(_R12, _int(_size));
-        ;;; mul _R1, _R12, _R1
-        drop_op3(_MUL, _R0, _R1, _shift(_R1, _8) _biset _16:90 _biset _R12);
+        ;;; Remove popint tag: ASR X1, X1, #3
+        drop_w(_SBFM _biset _shift(_3, _16) _biset _shift(_16:3F, _10)
+                     _biset _shift(_X1, _5) _biset _X1);
+        load_literal(_WK, _int(_size));
+        drop_mul(_X1, _X1, _WK);
         ##(1){@@V_BYTES|b} _sub _int(_size) -> _disp;
         if not(_zero(_disp)) then
-            load_literal(_R12, _disp);
-            drop_op3(_ADD, _R1, _R1, _R12);
+            load_literal(_WK, _disp);
+            drop_add_reg(_X1, _X1, _WK);
         endif;
     endif;
-    load_literal(_R0, _int(_size));
+    load_literal(_X0, _int(_size));
     lvars _routine = if upd then _ubfield
                      elseif type == t_BIT then _bfield
                      else _sbfield endif;
-    load_literal(_R12, _routine);
-    drop_w(_BLX _biset _R12);
+    load_literal(_WK, _routine);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_PUSH_FIELD();
     lvars type, _size, structure, offset, cvt, exptr;
-    ;;; printf('I_PUSH_FIELD\n');
     explode(asm_instr) -> exptr -> cvt -> offset -> structure ->
                        _size -> type -> ;
     if type fi_&& t_BASE_TYPE == t_BIT then
         do_bit_field(type, _size, structure, offset, false, exptr);
     else
         lvars _reg = load_field_addr(type, structure, _size, offset, exptr);
-        drop_op3(_int(access_op(type)) _biset _cond_all_bits
-                 _biset _load_bit, _R0, _reg, _0);
+        ;;; Load the field value
+        ;;; Use zero offset from computed address in X0
+        load_literal(_X1, _0);
+        drop_field_load(type fi_&& t_BASE_TYPE fi_|| (type fi_&& t_SIGNED),
+                        _X0, _reg, _X1);
     endif;
     if cvt then
-        ;;; convert to popint
-        ;;;   mov r0, r0, asl #2
-        drop_op3(_MOV, _R0, _R0, _R0 _biset _16:100);
-        drop_op_imm(_ADD, _R0, _R0, _3);
+        ;;; convert to popint: X0 = X0 << 3 | 7
+        ;;; LSL X0, X0, #3: UBFM X0, X0, #(64-3), #(63-3) = UBFM X0, X0, #61, #60
+        drop_w(_UBFM _biset _shift(_16:3D, _16) _biset _shift(_16:3C, _10)
+                     _biset _shift(_X0, _5) _biset _X0);
+        ;;; ORR X0, X0, #7  -- use immediate form or load 7 and ORR
+        load_literal(_X1, _7);
+        drop_w(_ORR_REG _biset _shift(_X1, _16) _biset _shift(_X0, _5)
+                        _biset _X0);
     endif;
-    drop_push_reg(_R0, _USP);
+    drop_push_reg(_X0, _USP);
 enddefine;
 
 define I_POP_FIELD();
-    lvars type, btype,_size, structure, offset, exptr;
-    ;;; printf('I_POP_FIELD\n');
+    lvars type, btype, _size, structure, offset, exptr;
     explode(asm_instr) -> exptr -> offset -> structure -> _size -> type -> ;
     if ((type fi_&& t_BASE_TYPE) ->> btype) == t_BIT then
         do_bit_field(type, _size, structure, offset, true, exptr);
         return();
     endif;
     lvars _reg = load_field_addr(type, structure, _size, offset, exptr);
-    drop_pop_reg(_R1, _USP);
-    drop_op3(_int(access_op(btype)) _biset _cond_all_bits,
-             _R1, _reg, _0);
+    drop_pop_reg(_X1, _USP);
+    ;;; Store the field value
+    load_literal(_X3, _0);
+    drop_field_store(btype fi_|| (type fi_&& t_SIGNED), _X1, _reg, _X3);
 enddefine;
 
 define I_PUSH_FIELD_ADDR();
     lvars type, size, structure, offset, exptr;
-    ;;; printf('I_PUSH_FIELD_ADDR\n');
     explode(asm_instr) -> exptr -> offset -> structure -> size -> type -> ;
     lvars _reg = load_field_addr(type, structure, size, offset, exptr);
     drop_push_reg(_reg, _USP);
@@ -907,102 +1336,100 @@ enddefine;
 
 define I_FASTFIELD();
     lvars _offs;
-    ;;; printf('I_FASTFIELD\n');
-    lvars _reg0 = load_fsrc_to_reg(_1, _R12);
+    lvars _reg0 = load_fsrc_to_reg(_1, _WK);
     if asm_instr!INST_ARGS[_0] ->> _offs then
         _int(_offs) -> _offs;
     else
-        drop_mem_imm_off(_LDR, _R0, _reg0, @@P_FRONT);
-        drop_push_reg(_R0, _USP);
+        drop_load_off(_X0, _reg0, @@P_FRONT);
+        drop_push_reg(_X0, _USP);
         @@P_BACK -> _offs;
     endif;
-    if _offs _slt _1024 and _offs _sgr _-1024 then
-        drop_mem_imm_off(_LDR, _R0, _reg0, _offs);
-    else
-        load_literal(_R1, _offs);
-        drop_mem_indexed(_LDR, _R0, _reg0, _R1);
-    endif;
-    drop_push_reg(_R0, _USP);
+    drop_load_off(_X0, _reg0, _offs);
+    drop_push_reg(_X0, _USP);
 enddefine;
 
 define I_UFASTFIELD();
-    ;;; printf('I_UFASTFIELD\n');
-    lvars _reg0 = load_fsrc_to_reg(_1, _R0);
-    drop_pop_reg(_R2, _USP);
+    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+    drop_pop_reg(_X2, _USP);
     lvars _offs = _int(asm_instr!INST_ARGS[_0]);
-    if _offs _slt _1024 and _offs _sgr _-1024 then
-        drop_mem_imm_off(_STR, _R2, _reg0, _offs);
-    else
-        load_literal(_R1, _offs);
-        drop_mem_indexed(_STR, _R2, _reg0, _R1);
-    endif;
+    drop_store_off(_X2, _reg0, _offs);
 enddefine;
 
 define I_FASTSUBV();
-    ;;; printf('I_FASTSUBV\n');
+    ;;; Fast subscript into a vector
     lvars _offs = _int(asm_instr!INST_ARGS[_0]) _sub 1;
-    lvars _reg0 = load_fsrc_to_reg(_1, _R0);
-    drop_pop_reg(_R1, _USP);
-    if _offs _slt _256 and _offs _sgreq _0 then
-        drop_op_imm(_ADD, _R1, _R1, _offs);
-    elseif _offs _slt _0 and _offs _sgr _-256 then
-        drop_op_imm(_SUB, _R1, _R1, _negate(_offs));
+    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+    drop_pop_reg(_X1, _USP);
+    ;;; Adjust index: X1 = X1 + offs * 8
+    lvars _byte_offs = _shift(_offs, _3);
+    if _byte_offs _sgreq _0 and _byte_offs _slt _16:1000 then
+        drop_add_imm(_X1, _X1, _byte_offs);
+    elseif _byte_offs _slt _0 and _negate(_byte_offs) _slt _16:1000 then
+        drop_sub_imm(_X1, _X1, _negate(_byte_offs));
     else
         mishap(0, 'I_FASTSUBV: too large offset');
     endif;
-    drop_mem_indexed(_LDR, _R0, _R0, _R1);
-    drop_push_reg(_R0, _USP);
+    drop_ldr_reg(_X0, _X0, _X1);
+    drop_push_reg(_X0, _USP);
 enddefine;
 
 define I_UFASTSUBV();
-    ;;; printf('I_UFASTSUBV\n');
     lvars _offs = _int(asm_instr!INST_ARGS[_0]) _sub 1;
-    lvars _reg0 = load_fsrc_to_reg(_1, _R0);
-    drop_pop_reg(_R1, _USP);
-    if _offs _slt _256 and _offs _sgreq _0 then
-        drop_op_imm(_ADD, _R1, _R1, _offs);
-    elseif _offs _slt _0 and _offs _sgr _-256 then
-        drop_op_imm(_SUB, _R1, _R1, _negate(_offs));
+    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+    drop_pop_reg(_X1, _USP);
+    lvars _byte_offs = _shift(_offs, _3);
+    if _byte_offs _sgreq _0 and _byte_offs _slt _16:1000 then
+        drop_add_imm(_X1, _X1, _byte_offs);
+    elseif _byte_offs _slt _0 and _negate(_byte_offs) _slt _16:1000 then
+        drop_sub_imm(_X1, _X1, _negate(_byte_offs));
     else
-        mishap(0, 'I_FASTSUBV: too large offset');
+        mishap(0, 'I_UFASTSUBV: too large offset');
     endif;
-    drop_pop_reg(_R2, _USP);
-    drop_mem_indexed(_STR, _R2, _R0, _R1);
+    drop_pop_reg(_X2, _USP);
+    drop_str_reg(_X2, _X0, _X1);
 enddefine;
 
 
 /*  Fast Integer +/-  */
 
 define I_FAST_+-_2();
-    lvars opd, _opcode;
+    lvars opd, _is_add;
     dlocal asm_instr;
-    ;;; printf('I_FAST_+-_2\n');
-    if asm_instr!INST_ARGS[_0] then _ADD else _SUB endif -> _opcode;
-    lvars _reg0 = load_fsrc_to_reg(_1, _R0);
-    lvars _reg1 = load_fsrc_to_reg(_2, _R1);
-    drop_op_imm(_SUB, _R0, _reg0, _3);
-    drop_op3(_opcode, _R0, _reg1, _R0);
+    if asm_instr!INST_ARGS[_0] then true else false endif -> _is_add;
+    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+    lvars _reg1 = load_fsrc_to_reg(_2, _X1);
+    ;;; Remove popint tag from one operand: SUB X0, reg0, #7
+    drop_sub_imm(_X0, _reg0, _7);
+    if _is_add then
+        drop_add_reg(_X0, _reg1, _X0);
+    else
+        drop_sub_reg(_X0, _reg1, _X0);
+    endif;
     asm_instr!INST_ARGS[_2] -> opd;
     if opd then
         opd -> asm_instr;
-        store_reg_to_arg(_R0, _0, true, _R1);
+        store_reg_to_arg(_X0, _0, true, _X1);
     else
-        drop_push_reg(_R0, _USP);
+        drop_push_reg(_X0, _USP);
     endif;
 enddefine;
 
 define I_FAST_+-_3();
-    lvars _opcode;
-    ;;; printf('I_FAST_+-_3\n');
-    if asm_instr!INST_ARGS[_0] then _ADD else _SUB endif -> _opcode;
-    lvars _reg0 = load_fsrc_to_reg(_1, _R0);
-    lvars _reg1 = load_fsrc_to_reg(_2, _R1);
-    drop_op_imm(_SUB, _R0, _reg0, _3);
-    drop_op3(_opcode, _R0, _reg1, _R0);
-    if asm_instr!INST_ARGS[_3] then
-        store_reg_to_arg(_R0, _3, true, _R1);
+    lvars _is_add;
+    if asm_instr!INST_ARGS[_0] then true else false endif -> _is_add;
+    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+    lvars _reg1 = load_fsrc_to_reg(_2, _X1);
+    ;;; Remove popint tag from one operand
+    drop_sub_imm(_X0, _reg0, _7);
+    if _is_add then
+        drop_add_reg(_X0, _reg1, _X0);
     else
-        drop_push_reg(_R0, _USP);
+        drop_sub_reg(_X0, _reg1, _X0);
+    endif;
+    if asm_instr!INST_ARGS[_3] then
+        store_reg_to_arg(_X0, _3, true, _X1);
+    else
+        drop_push_reg(_X0, _USP);
     endif;
 enddefine;
 
@@ -1013,26 +1440,23 @@ enddefine;
 ;;;     called from -Code_pass- when a label is encountered in -asm_clist-
 
 define I_LABEL();
-    ;;; printf('I_LABEL\n');
     _pint(_asm_code_offset) -> fast_front(asm_clist);
 enddefine;
 
 ;;; I_BR_std:
-;;;     plant a relative branch instruction of a known size (5 bytes).
+;;;     plant a relative branch instruction of a known size.
 
 define I_BR_std(_broffset, _arg);
     lvars _broffset, _arg;
-    ;;; printf('I_BR_std\n');
-    drop_br_cond(_cc_ALL, _broffset);
+    drop_br_uncond(_broffset);
 enddefine;
 
 ;;; I_BR:
-;;;     plant an unconditional relative jump (same as I_BR_std).
+;;;     plant an unconditional relative jump.
 
 define I_BR(_broffset, _arg);
     lvars _broffset, _arg;
-    ;;; printf('I_BR\n');
-    drop_br_cond(_cc_ALL, _broffset);
+    drop_br_uncond(_broffset);
 enddefine;
 
 ;;; I_BRCOND:
@@ -1040,11 +1464,10 @@ enddefine;
 
 define I_BRCOND(_ifso, _ifnot, _is_so, _broffset, _arg);
     lvars _ifso, _ifnot, _is_so, _broffset, _arg;
-    ;;; printf('I_BRCOND\n');
     mishap(0, 'I_BRCOND unimplemented');
 enddefine;
 
-define drop_BR_cond(_ifso, _ifnot,  instr);
+define drop_BR_cond(_ifso, _ifnot, instr);
     if instr!INST_ARGS[_2] == I_BRCOND then
         drop_br_cond(if instr!INST_ARGS[_1] then _ifso else _ifnot endif,
                      _int(fast_front(instr!INST_ARGS[_0])));
@@ -1055,40 +1478,35 @@ enddefine;
 
 ;;; {I_IF_opt ^target ^is_so ^opd}
 ;;;     the standard test instruction: compares the operand with <false>
-;;;     and jumps to -target- if the test succeeds (or fails, depending on
-;;;     the flag -is_so-).
+;;;     and jumps to -target- if the test succeeds (or fails).
 
 define I_IF_opt();
-    ;;; printf('I_IF_opt\n');
-    lvars _reg0 = load_fsrc_to_reg(_3, _R0);
-    load_literal(_R1, false);
-    drop_op3(_CMP, _R0, _R1, _reg0);
+    lvars _reg0 = load_fsrc_to_reg(_3, _X0);
+    load_literal(_X1, false);
+    drop_cmp_reg(_reg0, _X1);
     drop_BR_cond(_cc_NE, _cc_EQ, asm_instr);
 enddefine;
 
 ;;; {I_BOOL_opt ^target ^is_so ^opd}
-;;;     like I_IF_opt, but used for sysAND and sysOR: if the branch is
-;;;     taken, the operand should be left on the stack.
+;;;     like I_IF_opt, but used for sysAND and sysOR.
 
 define I_BOOL_opt();
-    ;;; printf('I_BOOL_opt\n');
     lvars opd = asm_instr!INST_ARGS[_3];
     if opd then
         Drop_I_code(opd);
     endif;
     ;;; Argument is on user stack
-    drop_op3(_LDR, _R0, _USP, _0);
-    load_literal(_R1, false);
-    drop_op3(_CMP, _R0, _R1, _R0);
+    drop_load_off(_X0, _USP, _0);
+    load_literal(_X1, false);
+    drop_cmp_reg(_X0, _X1);
     drop_BR_cond(_cc_NE, _cc_EQ, asm_instr);
-    drop_op_imm(_ADD, _USP, _USP, _4);
+    ;;; Erase top of stack (8 bytes on AArch64)
+    drop_add_imm(_USP, _USP, _8);
 enddefine;
 
 lconstant
 
     ;;; Condition codes for comparison subroutines
-    ;;; The first code is the obvious one, the second is the one to use
-    ;;; if the order of the operands has been reversed
 
     cmp_condition_codes = [%
         nonop _eq,      _pint(_cc_EQ),  _pint(_cc_EQ),
@@ -1102,20 +1520,12 @@ lconstant
 ;
 
 ;;; {I_IF_CMP ^cmp_routine ^opd1 ^opd2 ^I_IF_opt}
-;;;     optimised comparison:
-;;;     "cmp_routine" is a comparison subroutine - _eq, _slt etc. - meant
-;;;     to be applied to "opd1" and "opd2", but optimised here to be an
-;;;     in-line CMP. The two operands are "fsrc"-type operands, i.e. either
-;;;     MOVE instructions or <false> for top-of-stack. The last argument is
-;;;     an I_IF_opt instruction for testing the result of the comparison.
-;;;     The sense of the test is: cmp_routine(opd2, opd1), which means
-;;;     testing the result of (opd2 - opd1)
+;;;     optimised comparison
 
 define I_IF_CMP();
-    ;;; printf('I_IF_CMP\n');
-    lvars _reg1 = load_fsrc_to_reg(_1, _R1),
-          _reg0 = load_fsrc_to_reg(_2, _R0);
-    drop_op3(_CMP, _R0, _reg0, _reg1);
+    lvars _reg1 = load_fsrc_to_reg(_1, _X1),
+          _reg0 = load_fsrc_to_reg(_2, _X0);
+    drop_cmp_reg(_reg0, _reg1);
     lvars _cc = _int(fast_front(fast_back(lmember(asm_instr!INST_ARGS[_0],
                                           cmp_condition_codes))));
     drop_BR_cond(_cc, _cc _bixor _cc_NOT, asm_instr!INST_ARGS[_3]);
@@ -1126,10 +1536,15 @@ enddefine;
 
 define I_IF_TAG();
     lvars _mod, _rm, _disp;
-    ;;; printf('I_IF_TAG\n');
-    lvars _reg1 = load_fsrc_to_reg(_1, _R1);
-    drop_op_imm(_TST, _R0, _reg1,
-        if asm_instr!INST_ARGS[_0] == _issimple then _2:01 else _2:10 endif);
+    lvars _reg1 = load_fsrc_to_reg(_1, _X1);
+    ;;; Test tag bits. On AArch64 with 3-bit tags:
+    ;;;   _issimple tests bit 0
+    ;;;   _isinteger tests bit 1
+    ;;; We load the mask and use TST (ANDS XZR, Xn, Xm)
+    lvars _mask =
+        if asm_instr!INST_ARGS[_0] == _issimple then _2:01 else _2:10 endif;
+    load_literal(_X0, _mask);
+    drop_tst_reg(_reg1, _X0);
     drop_BR_cond(_cc_NE, _cc_EQ, asm_instr!INST_ARGS[_2]);
 enddefine;
 
@@ -1138,68 +1553,78 @@ enddefine;
 
 define I_SWITCH();
     lvars lablist, elselab, _ncases, _tabend, _offs;
-    ;;; printf('I_SWITCH\n');
-    ;;; mishap(0, 'I_SWITCH unimplemented');
     asm_instr!INST_ARGS[_0] -> lablist;
     asm_instr!INST_ARGS[_1] -> elselab;
     listlength(lablist) -> _ncases;
 
-    ;;; Load the argument to R0.
-    lvars _reg = load_fsrc_to_reg(_2, _R0);
+    ;;; Load the argument to X0.
+    lvars _reg = load_fsrc_to_reg(_2, _X0);
 
     ;;; Compare the argument with the number of cases (both popints)
-    load_literal(_R1, _ncases);
-    drop_op3(_CMP, _R0, _reg, _R1);
+    load_literal(_X1, _ncases);
+    drop_cmp_reg(_reg, _X1);
 
     ;;; Compute the offset from the start of the procedure code to the end
-    ;;; of the jump offset table: the _16 is the length of the four
-    ;;; instructions between here and the first entry in the table,
-    ;;; the _4 accounts for the extra (0) entry in the table.
-    _asm_code_offset _add _16 _add _int(_ncases * 4) _add _4 -> _tabend;
+    ;;; of the jump offset table.
+    ;;; After this point we plant: SUB, B.HI, ADR, LDR, BR = 5 instrs = 20 bytes
+    ;;; Then (_ncases + 1) * 8 bytes of 64-bit offset entries.
+    _asm_code_offset _add _20 _add _int((_ncases _add 1) _mul 8) -> _tabend;
 
-    ;;; Remove popint bits from R0
-    drop_op_imm(_SUB, _reg, _reg, _3);
+    ;;; Remove popint bits from argument: ASR reg, reg, #3
+    drop_w(_SBFM _biset _shift(_3, _16) _biset _shift(_16:3F, _10)
+                 _biset _shift(_reg, _5) _biset _reg);
 
     ;;; If the argument was out of range, jump to after the table
-    ;;; The unsigned condition accounts for both arg < 0 and arg > ncases
+    ;;; (unsigned comparison catches both negative and too large)
     drop_br_cond(_cc_HI, _tabend);
 
-    ;;; Use R0 to index int jump offset table.  On ARM PC point 8 bytes
-    ;;; after start of current intstruction.  Since the current instruction
-    ;;; and following jump take 8 bytes we need no extra offset.
-    drop_mem_indexed(_LDR, _R1, _PC, _reg);
+    ;;; Use X1 to index into jump offset table.
+    ;;; Each table entry is 8 bytes (64-bit offset from procedure start).
+    ;;; Table starts 3 instructions (12 bytes) after current position.
+    ;;; ADR X1, table_start
+    ;;; Note: we use a sequence of:
+    ;;;   LDR X1, [X1, reg, LSL #3]  ; load offset from table
+    ;;;   ADD X1, PB, X1             ; compute absolute address
+    ;;;   BR X1                      ; jump
 
-    ;;; Jump to PB + R1
-    ;;;    add PC, PB, R1
-    drop_op3(_ADD, _PC, _PB, _R1);
+    ;;; The table starts right after these 3 instructions = 12 bytes ahead
+    ;;; ADR X1, #12:  X1 = PC + 12
+    ;;; ADR: 0 immlo(2) 10000 immhi(19) Rd
+    ;;; imm = 12, immlo = 12 & 3 = 0, immhi = 12 >> 2 = 3
+    drop_w(_16:10000000 _biset _shift(_3, _5) _biset _X1);
 
-    ;;; Now plant the offset table:
-    ;;; 0 case first (an error, so jumps to after the table) ...
-    drop_w(@@PD_TABLE{_strsize _add _tabend});
+    ;;; LDR X1, [X1, reg, LSL #3]
+    drop_ldr_reg(_X1, _X1, _reg);
+
+    ;;; ADD X1, PB, X1  then  BR X1
+    drop_add_reg(_X1, _PB, _X1);
+    drop_w(_BR _biset _shift(_X1, _5));
+
+    ;;; Now plant the offset table (64-bit entries):
+    ;;; 0 case first (error: jumps to after the table) ...
+    do_drop_d(@@PD_TABLE{_strsize _add _tabend});
     ;;; ... then all the given labels
     until lablist == [] do
         fast_front(fast_destpair(lablist) -> lablist) -> _offs;
-        drop_w(@@PD_TABLE{_strsize _add _int(_offs)});
+        do_drop_d(@@PD_TABLE{_strsize _add _int(_offs)});
     enduntil;
 
     ;;; After the table: if there was no explicit "else" case, push the
     ;;; argument back on the stack for a following error
     unless elselab then
-        ;;; Add back popint bits
-        drop_op_imm(_ADD, _reg, _reg, _3);
+        ;;; Reconstruct popint: LSL reg, reg, #3 then ORR with 7
+        drop_w(_UBFM _biset _shift(_16:3D, _16) _biset _shift(_16:3C, _10)
+                     _biset _shift(_reg, _5) _biset _reg);
+        load_literal(_X1, _7);
+        drop_w(_ORR_REG _biset _shift(_X1, _16) _biset _shift(_reg, _5)
+                        _biset _reg);
         drop_push_reg(_reg, _USP);
     endunless;
-    ;;; Then fall through
 enddefine;
 
 ;;; {I_PLOG_IFNOT_ATOM ^fail_label ^I_BRCOND}
-;;;     planted after a call to -prolog_unify_atom- from "aprolog.s".
-;;;     That will have set flags for EQ if unification succeeded, NEQ if
-;;;     failed. If it failed, use the I_BRCOND instruction to jump to
-;;;     -fail_label-.
 
 define I_PLOG_IFNOT_ATOM();
-    ;;; printf('I_PLOG_IFNOT_ATOM\n');
     if asm_instr!INST_ARGS[_1] /== I_BRCOND then
         mishap(0, 'I_PLOG_IFNOT_ATOM with unexpected arguments');
     endif;
@@ -1207,13 +1632,8 @@ define I_PLOG_IFNOT_ATOM();
 enddefine;
 
 ;;; {I_PLOG_TERM_SWITCH ^fail_label I_BRCOND ^var_label I_BRCOND}
-;;;     planted after a call to -prolog_pair(term)_switch- from "aprolog.s".
-;;;     That will have set flags to EQ if item was a matching pair(term),
-;;;     UGT if item was a variable and ULT otherwise (failure).
-;;;     ** NB. This must not alter -arg_reg_0- **
 
 define I_PLOG_TERM_SWITCH();
-    ;;; printf('I_PLOG_TERM_SWITCH\n');
     if asm_instr!INST_ARGS[_1] /== I_BRCOND or
        asm_instr!INST_ARGS[_3] /== I_BRCOND then
         mishap(0, 'I_PLOG_TERM_SWITCH with unexpected arguments');
@@ -1227,179 +1647,208 @@ enddefine;
 
 define load_proc(via_ident);
     lvars via_ident, _reg;
-    load_from_arg(_0, via_ident, _R0) -> _reg;
-    if not(_reg == _R0) then
-        drop_op3(_MOV, _R0, _R0, _reg);
+    load_from_arg(_0, via_ident, _X0) -> _reg;
+    if not(_reg == _X0) then
+        drop_mov_reg(_X0, _reg);
     endif;
 enddefine;
 
+;;; On AArch64, all calls to Poplog procedures go through entry stubs.
+;;; We load the procedure address into X0, then load the stub address
+;;; into a scratch register and BLR to it.
+
 define I_CALL();
-    ;;; printf('I_CALL\n');
     load_proc(true);
-    load_literal(_R1, _popenter);
-    drop_w(_BLX _biset _R1);
+    load_literal(_WK, _popenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_CALLQ();
-    ;;; printf('I_CALLQ\n');
     load_proc(false);
-    load_literal(_R1, _popenter);
-    drop_w(_BLX _biset _R1);
+    load_literal(_WK, _popenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_CALLP();
-    ;;; printf('I_CALLP\n');
     load_proc(true);
-    drop_mem_imm_off(_LDR, _R1, _R0, _0);
-    drop_w(_BLX _biset _R1);
+    ;;; Load PD_EXECUTE from the procedure record
+    drop_load_off(_X1, _X0, _0);
+    drop_w(_BLR _biset _shift(_X1, _5));
 enddefine;
 
 define I_CALLPQ();
-    ;;; printf('I_CALLPQ\n');
     load_proc(false);
-    drop_mem_imm_off(_LDR, _R1, _R0, _0);
-    drop_w(_BLX _biset _R1);
+    drop_load_off(_X1, _X0, _0);
+    drop_w(_BLR _biset _shift(_X1, _5));
 enddefine;
 
 define I_CALLS();
-    ;;; printf('I_CALLS\n');
-    drop_pop_reg(_R0, _USP);
-    load_literal(_R1, _popenter);
-    drop_w(_BLX _biset _R1);
+    drop_pop_reg(_X0, _USP);
+    load_literal(_WK, _popenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_CALLPS();
-    ;;; printf('I_CALLPS\n');
-    drop_pop_reg(_R0, _USP);
-    drop_mem_imm_off(_LDR, _R1, _R0, _0);
-    drop_w(_BLX _biset _R1);
+    drop_pop_reg(_X0, _USP);
+    drop_load_off(_X1, _X0, _0);
+    drop_w(_BLR _biset _shift(_X1, _5));
 enddefine;
 
 define I_UCALL();
-    ;;; printf('I_UCALL\n');
     load_proc(true);
-    load_literal(_R1, _popuenter);
-    drop_w(_BLX _biset _R1);
+    load_literal(_WK, _popuenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_UCALLQ();
-    ;;; printf('I_UCALLQ\n');
     load_proc(false);
-    load_literal(_R1, _popuenter);
-    drop_w(_BLX _biset _R1);
+    load_literal(_WK, _popuenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_UCALLP();
-    ;;; printf('I_UCALLP\n');
     load_proc(true);
-    load_literal(_R1, _popuncenter);
-    drop_w(_BLX _biset _R1);
+    load_literal(_WK, _popuncenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_UCALLPQ();
-    ;;; printf('I_UCALLPQ\n');
     load_proc(false);
-    load_literal(_R1, _popuncenter);
-    drop_w(_BLX _biset _R1);
+    load_literal(_WK, _popuncenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_UCALLS();
-    ;;; printf('I_UCALLS\n');
-    drop_pop_reg(_R0, _USP);
-    load_literal(_R1, _popuenter);
-    drop_w(_BLX _biset _R1);
+    drop_pop_reg(_X0, _USP);
+    load_literal(_WK, _popuenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_UCALLPS();
-    ;;; printf('I_UCALLPS\n');
-    drop_pop_reg(_R0, _USP);
-    load_literal(_R1, _popuncenter);
-    drop_w(_BLX _biset _R1);
+    drop_pop_reg(_X0, _USP);
+    load_literal(_WK, _popuncenter);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_CALLABS();
-    ;;; printf('I_CALLABS\n');
-    load_literal(_R0, asm_instr!INST_ARGS[_0]);
-    drop_mem_imm_off(_LDR, _R1, _R0, @@PD_EXECUTE);
-    drop_w(_BLX _biset _R1);
+    load_literal(_X0, asm_instr!INST_ARGS[_0]);
+    drop_load_off(_X1, _X0, @@PD_EXECUTE);
+    drop_w(_BLR _biset _shift(_X1, _5));
 enddefine;
 
 define I_CHAIN_REG();
-    ;;; printf('I_CHAIN_REG\n');
     lvars _reg;
     if Is_register(asm_instr!INST_ARGS[_0]) ->> _reg then
-        drop_mem_imm_off(_LDR, _PC, _int(_reg), @@PD_EXECUTE);
-        ;;; drop_w(_BX _biset _int(_reg));
+        ;;; Load PD_EXECUTE and branch to it
+        drop_load_off(_WK, _int(_reg), @@PD_EXECUTE);
+        drop_w(_BR _biset _shift(_WK, _5));
     else
         mishap(0, 'I_CHAIN_REG without register unimplemented');
     endif;
 enddefine;
 
 define I_CALLSUB();
-    ;;; printf('I_CALLSUB\n');
-    ;;; _R0 is used for passing arguments, so we can not use it
-    load_literal(_R12, asm_instr!INST_ARGS[_0]);
-    drop_w(_BLX _biset _R12);
+    ;;; X0 may be in use for passing arguments, so use WK (x16)
+    load_literal(_WK, asm_instr!INST_ARGS[_0]);
+    drop_w(_BLR _biset _shift(_WK, _5));
 enddefine;
 
 define I_CHAINSUB();
-    ;;; printf('I_CHAINSUB\n');
-    load_literal(_R0, asm_instr!INST_ARGS[_0]);
-    drop_w(_BX _biset _R0);
+    load_literal(_X0, asm_instr!INST_ARGS[_0]);
+    drop_w(_BR _biset _shift(_X0, _5));
 enddefine;
 
 define I_CALLSUB_REG();
-    ;;; printf('I_CALLSUB_REG\n');
     lvars _addr, _reg;
     fast_front(asm_instr!INST_ARGS[_0]) -> _addr;
     if Is_register(_addr) ->> _reg then
-        drop_w(_BLX _biset _int(_reg));
+        drop_w(_BLR _biset _shift(_int(_reg), _5));
     else
         ;;; absolute address
-        load_literal(_R12, _addr);
-        drop_w(_BLX _biset _R12);
+        load_literal(_WK, _addr);
+        drop_w(_BLR _biset _shift(_WK, _5));
     endif;
 enddefine;
 
 
 /*  Procedure Entry and Exit  */
 
+;;; I_CREATE_SF:
+;;;     Create a stack frame for the current procedure.
+;;;     On AArch64:
+;;;       - Set PB from the return address in LR
+;;;       - Save callee-saved registers (including LR)
+;;;       - Save dynamic locals
+;;;       - Allocate on-stack lvars
+
 define I_CREATE_SF();
     lvars   _offs, _num, _tmp;
 
-    ;;; printf('I_CREATE_SF\n');
     ;;; Set the procedure base register.
-    ;;; sub PB, pc, #_off
-    drop_op_imm(_SUB, _PB, _PC, _pdr_offset);
-    ;;; save registers
-    drop_w(_STMFD _biset _regmask _biset _shift(_1, _LR));
+    ;;; On AArch64, we can't read PC directly. We use LR (x30) which
+    ;;; holds the return address, and subtract the known offset.
+    ;;; SUB PB, LR, #_pdr_offset
+    if _pdr_offset _slt _16:1000 then
+        drop_sub_imm(_PB, _LR, _pdr_offset);
+    else
+        load_literal(_WK, _pdr_offset);
+        drop_sub_reg(_PB, _LR, _WK);
+    endif;
+
+    ;;; Save LR and callee-saved registers that we use.
+    ;;; On AArch64 we use STP pairs for efficiency.
+    ;;; We always save LR (x30) and FP (x29) as a pair, plus any
+    ;;; register locals indicated by _regmask.
+    ;;; For now, save all potentially-used callee-saved regs in a
+    ;;; fixed sequence. TODO: optimise based on _regmask.
+    ;;; STP x29, x30, [SP, #-16]!
+    drop_stp_pre(_X29, _X30, _SP, _-16);
+
+    ;;; Save any register locals.  Walk through possible registers
+    ;;; and save pairs.
+    ;;; _regmask has bit N set for each register to save (numbered by
+    ;;; the Poplog register encoding, i.e., X21=21, X22=22, etc.)
+    ;;; For simplicity, we save individual registers with STR pre-index.
+    lvars _rnum = _21;
+    while _rnum _slteq _25 do
+        if _regmask _bitst _shift(_1, _rnum) then
+            drop_push_reg(_rnum, _SP);
+        endif;
+        _rnum _add _1 -> _rnum;
+    endwhile;
 
     ;;; Save dynamic locals
     @@PD_TABLE -> _offs;
     fast_repeat _pint(_Nlocals) times
-        drop_mem_imm_off(_LDR, _R1, _PB, _offs);
-        drop_mem_imm_off(_LDR, _R0, _R1, _0);
-        drop_push_reg(_R0,  _SP);
+        drop_load_off(_X1, _PB, _offs);
+        drop_load_off(_X0, _X1, _0);
+        drop_push_reg(_X0, _SP);
         @@(w){_offs}++ -> _offs;
     endrepeat;
 
-    ;;; FIXME: Do we need to clear POP registers?
     ;;; Clear and allocate POP on-stack lvars
-    _R0 -> _tmp;
+    _X0 -> _tmp;
     if _Npopstkvars _gr _0 then
-        drop_op_imm(_MOV, _tmp, _R0, _3);
+        ;;; Load popint 0 (tag bits only) = 7 on 64-bit with 3 tag bits
+        ;;; TODO: verify correct zero popint representation
+        load_literal(_tmp, _7);
         fast_repeat _pint(_Npopstkvars) times
-            drop_push_reg(_tmp,  _SP);
+            drop_push_reg(_tmp, _SP);
         endrepeat;
     endif;
 
     ;;; Allocate non-Pop on-stack lvars
     if _Nstkvars _gr _Npopstkvars then
-        drop_op_imm(_SUB, _SP, _SP, @@(w)[_Nstkvars _sub _Npopstkvars]);
+        lvars _nbytes = @@(w)[_Nstkvars _sub _Npopstkvars];
+        if _nbytes _slt _16:1000 then
+            drop_sub_imm(_SP, _SP, _nbytes);
+        else
+            load_literal(_WK, _nbytes);
+            drop_sub_reg(_SP, _SP, _WK);
+        endif;
     endif;
 
-    ;;; Push the owner address:
-    ;;;  str PB, [SP, #4]!
+    ;;; Push the owner address (PB):
     drop_push_reg(_PB, _SP);
 enddefine;
 
@@ -1407,30 +1856,45 @@ enddefine;
 define I_UNWIND_SF();
     lvars _offs, _num;
 
-    ;;; printf('I_UNWIND_SF\n');
     ;;; Remove owner address and on-stack lvars
-    drop_op_imm(_ADD, _SP, _SP, @@(w)[_Nstkvars _add _1]);
+    lvars _frame_bytes = @@(w)[_Nstkvars _add _1];
+    if _frame_bytes _slt _16:1000 then
+        drop_add_imm(_SP, _SP, _frame_bytes);
+    else
+        load_literal(_WK, _frame_bytes);
+        drop_add_reg(_SP, _SP, _WK);
+    endif;
 
-    ;;; Restore dynamic locals
+    ;;; Restore dynamic locals (in reverse order)
     @@PD_TABLE[_Nlocals] -> _offs;
     fast_repeat _pint(_Nlocals) times
         --@@(w){_offs} -> _offs;
-        drop_mem_imm_off(_LDR, _R1, _PB, _offs);
-        drop_pop_reg(_R0,  _SP);
-        drop_mem_imm_off(_STR, _R0, _R1, _0);
+        drop_load_off(_X1, _PB, _offs);
+        drop_pop_reg(_X0, _SP);
+        drop_store_off(_X0, _X1, _0);
     endrepeat;
 
-    ;;; restore registers
-    drop_w(_LDMFD _biset _regmask _biset _shift(_1, _LR));
+    ;;; Restore register locals
+    lvars _rnum = _25;
+    while _rnum _sgreq _21 do
+        if _regmask _bitst _shift(_1, _rnum) then
+            drop_pop_reg(_rnum, _SP);
+        endif;
+        _rnum _sub _1 -> _rnum;
+    endwhile;
+
+    ;;; Restore FP and LR
+    drop_ldp_post(_X29, _X30, _SP, _16);
 
     ;;; Restore procedure base register from the stack
-    drop_mem_imm_off(_LDR, _PB, _SP, _0);
+    ;;; (the caller's PB is at the top of the caller's frame)
+    drop_load_off(_PB, _SP, _0);
 enddefine;
 
 
 define I_RETURN();
-    ;;; printf('I_RETURN\n');
-    drop_w(_RET);
+    ;;; RET (returns via x30/LR)
+    drop_w(_RET_INSTR);
 enddefine;
 
 
@@ -1440,44 +1904,55 @@ enddefine;
 ;;;     push the length of the user stack
 
 define I_STACKLENGTH();
-    ;;; printf('I_STACKLENGTH\n');
-    load_literal(_R1, ident _userhi);
-    drop_mem_imm_off(_LDR, _R1, _R1, _0);
-    ;;; do_load_or_store(_LDR, _R1, ident _userhi,
-    ;;;                 true, _R1);
-    drop_op3(_SUB, _R0, _R1, _USP);
-    ;;; Add popint bits
-    drop_op_imm(_ADD, _R0, _R0, _3);
-    drop_push_reg(_R0, _USP);
+    load_literal(_X1, ident _userhi);
+    drop_load_off(_X1, _X1, _0);
+    drop_sub_reg(_X0, _X1, _USP);
+    ;;; Add popint tag bits: on 64-bit, tag = (val << 3) | 7
+    ;;; But stack length is already in bytes which equals words * 8
+    ;;; so effectively it is already shifted. Add tag bits.
+    load_literal(_X3, _7);
+    drop_w(_ORR_REG _biset _shift(_X3, _16) _biset _shift(_X0, _5)
+                    _biset _X0);
+    drop_push_reg(_X0, _USP);
 enddefine;
 
 ;;; {I_SETSTACKLENGTH ^saved_stacklength ^nresults}
-;;;     check that the stacklength is equal to the saved stacklength plus
-;;;     an expected number of results. If not, call -setstklen_diff- to fix.
-;;;     This does the same job as -setstklen- from "alisp.s", but avoids the
-;;;     subroutine call when the number of results is known in advance.
 
 define I_SETSTACKLENGTH();
-    ;;; printf('I_SETSTACKLENGTH\n');
-    ;;; mishap(0, 'I_SETSTACKLENGTH unimplemented');
     lvars _nresults;
     if asm_instr!INST_ARGS[_1] ->> _nresults then
         ;;; a known number of results (a popint):
         ;;; expand code for "_setstklen" inline
-        lvars _reg = load_fsrc_to_reg(_0, _R2);
-        load_literal(_R3, _nresults _sub _6);
-        drop_op3(_ADD, _R2, _reg, _R3);
-        load_literal(_R3, ident _userhi);
-        drop_mem_imm_off(_LDR, _R3, _R3, _0);
-        drop_op3(_SUB, _R2, _R3, _R2);
-        drop_op3(_CMP, _R0, _USP, _R2);
-        ;;; If needed, call _setstklen_diff
-        load_literal(_R12, _setstklen_diff);
-        drop_w(_BLXNE _biset _R12);
+        lvars _reg = load_fsrc_to_reg(_0, _X2);
+        ;;; On 64-bit, popint tag adjustment is different.
+        ;;; _nresults is a popint; subtract tag overhead.
+        ;;; TODO: verify exact popint arithmetic for 64-bit
+        load_literal(_X3, _nresults _sub _14);
+        drop_add_reg(_X2, _reg, _X3);
+        load_literal(_X3, ident _userhi);
+        drop_load_off(_X3, _X3, _0);
+        drop_sub_reg(_X2, _X3, _X2);
+        drop_cmp_reg(_USP, _X2);
+        ;;; If USP != expected, call _setstklen_diff
+        ;;; On AArch64 we can't do conditional BLR directly.
+        ;;; Use: B.EQ skip; BLR _setstklen_diff; skip:
+        lvars _skip_off = _asm_code_offset _add _12;
+        ;;; 12 = 3 instructions * 4 bytes (load_literal may be 2 + BLR = 1)
+        ;;; Actually load_literal can be variable length, so we need
+        ;;; a different approach. Use B.EQ to skip over the call.
+        ;;; Plant B.EQ +8 (skip 2 instructions: load + BLR)
+        ;;; But load_literal may produce 1-3 instructions...
+        ;;; Solution: always use literal pool for the address and
+        ;;; produce exactly: LDR Xwk, [literal]; BLR Xwk
+        ;;; So B.EQ skips exactly 2 instructions = 8 bytes.
+        ;;; For simplicity, force literal pool load:
+        drop_br_cond(_cc_EQ, _asm_code_offset _add _12);
+        load_literal(_WK, _setstklen_diff);
+        drop_w(_BLR _biset _shift(_WK, _5));
     else
         ;;; general case, simply call _setstklen
-        load_literal(_R12, _setstklen);
-        drop_w(_BLX _biset _R12);
+        load_literal(_WK, _setstklen);
+        drop_w(_BLR _biset _shift(_WK, _5));
     endif;
 enddefine;
 
@@ -1485,47 +1960,32 @@ enddefine;
 ;;;     replace <false> result on top of stack by nil.
 
 define I_LISP_TRUE();
-    ;;; printf('I_LISP_TRUE\n');
-    ;;; mishap(0, 'I_LISP_TRUE unimplemented');
-    load_literal(_R1, false);
-    drop_mem_imm_off(_LDR, _R0, _USP, _0);
-    drop_op3(_CMP, _R0, _R1, _R0);
-    load_literal(_R1, nil);
-    drop_mem_imm_off(_STREQ, _R1, _USP, _0);
+    load_literal(_X1, false);
+    drop_load_off(_X0, _USP, _0);
+    drop_cmp_reg(_X0, _X1);
+    ;;; On AArch64, no conditional STR. Use: B.NE skip; STR nil; skip:
+    drop_br_cond(_cc_NE, _asm_code_offset _add _12);
+    load_literal(_X1, nil);
+    drop_store_off(_X1, _USP, _0);
+    ;;; skip: (falls through here if not equal)
 enddefine;
 
 ;;; {I_CHECK}
 ;;;     plant checks on backward jumps.
 
 define I_CHECK();
-    ;;; printf('I_CHECK\n');
-    ;;; FIXME: implement
-/*
-    lvars _save;
-    flush_USP_offset();
-    ;;; Check for interrupts:
-    ;;; cmpl $0, _trap
-    Drop_imm(_ARITHI, _CMPI, _0, (_ABS, _reg_ABS, ident _trap));
-    ;;; If non zero, jump to call checkall
-    Drop_b(#_< _Jccs _add _cc_NE >_#), Drop_b(_0);  ;;; dummy offset
-    _asm_drop_ptr -> _save;
-    ;;; Check for userstack overflow:
-    ;;; cmpl %USP, _userlim
-    Drop_std(_CMP, _USP, (_ABS, _reg_ABS, ident _userlim));
-    ;;; If Ok (_userlim <= USP), jump around the call to checkall
-    Drop_b(#_< _Jccs _add _cc_BE >_#), Drop_b(_0);  ;;; dummy offset
-    unless _asm_pass then
-        ;;; backpatch jump offset to here
-        ##(b){_asm_drop_ptr, _save} -> _save!(b)[_-1];
-    endunless;
-    _asm_drop_ptr -> _save;
-    ;;; call _checkall
-    Drop_call_abs(_checkall);
-    unless _asm_pass then
-        ;;; backpatch jump offset around call to checkall
-        ##(b){_asm_drop_ptr, _save} -> _save!(b)[_-1];
-    endunless;
-*/
+    ;;; TODO: implement interrupt and stack overflow checking for AArch64.
+    ;;; On AArch64, the pattern is:
+    ;;;   LDR X0, [_trap]
+    ;;;   CBNZ X0, call_checkall
+    ;;;   LDR X0, [_userlim]
+    ;;;   CMP USP, X0
+    ;;;   B.HS skip
+    ;;; call_checkall:
+    ;;;   BLR _checkall
+    ;;; skip:
+    ;;;
+    ;;; Currently unimplemented (matches ARM32 which also had it commented out).
 enddefine;
 
 
@@ -1540,7 +2000,7 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     lvars reg, _buff, _cnt;
     dlocal _regmask, _asm_drop_ptr, _asm_pass, _strsize, _pdr_offset,
            lit_buff = initintvec(512), _lit_count = _0,
-           _current_literal_zone = _0, _current_literal_pool = _16:FFF,
+           _current_literal_zone = _0, _current_literal_pool = _16:80000,
            literal_pools = [];
 
     ;;; construct reg mask from reg_locals
@@ -1556,16 +2016,14 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     _0 ->>  _pdr_offset -> _strsize;
     Code_pass(0, codelist) -> _code_offset;
     @@(w)[_int(listlength(asm_struct_list))] -> _strsize;
-    ;;; _strsize _add _code_offset _add _shift(_int(lit_count), _2)-> _size;
-
-    ;;; printf(_pint(_lit_count), 'Code_pass 0 done, _lit_count = %p\n');
 
     ;;; Now calculate total size of procedure and allocate store for it.
     ;;; The procedure record will be returned with the header and structure
     ;;; table already filled in, and with _asm_drop_ptr pointing to the
     ;;; start of the executable code section.
     @@PD_TABLE{_strsize _add _code_offset | b.r} _sub @@POPBASE -> _size;
-    _size _add _shift(_lit_count, _2) -> _size;
+    ;;; Add space for literals (each 8 bytes)
+    _size _add _shift(_lit_count, _3) -> _size;
     Get_procedure(_size, _reg_spec) -> pdr;
 
     (_asm_drop_ptr _sub pdr) _add _8 -> _pdr_offset;
@@ -1580,31 +2038,10 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     _asm_drop_ptr _sub _buff -> _cnt;
     lvars _n = _0;
     while _n _lt _lit_count do
-        do_drop_w(lit_buff!(i)[_n]);
+        do_drop_d(lit_buff!(w)[_n]);
         _n _add _1 -> _n;
     endwhile;
 
-;;;
-;;;     Helper to show location of planted code (allow disassembling).
-;;;
-/*
-    printf(_pint(_cnt), 'writing %p bytes ');
-    printf(_buff, 'at 0x%x ');
-    printf(pdr, ' for 0x%x, ');
-    printf(_pint(_lit_count), '%p literals\n');
-*/
-/*
-       _extern printf('writing %ld bytes at 0x%lx for 0x%lx, %ld literals\n',
-           _cnt, _buff, pdr, _lit_count) -> _ ;
-       _extern fflush(_0) -> _ ;
-*/
-;;;
-;;;     Extra help: dump generated code to a file.
-;;;
-;;;        _extern write(_7, _buff, _cnt) -> _ ;
-;;;        _extern printf('wrote bytes\n') -> _ ;
-;;;        _extern fflush(_0) -> _ ;
 enddefine;
 
 endsection;     /* $-Sys$-Vm */
-

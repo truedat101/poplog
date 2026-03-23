@@ -1,7 +1,7 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Lisp support assembly routines for ARM
+   Purpose: Lisp support assembly routines for AArch64
 */
 
 #_<
@@ -12,47 +12,55 @@ lconstant macro (
 
         ;;; User stack pointer
 
-        USP     = "r10",
-        LR      = "lr",
+        USP     = "x19",
 );
 
 >_#
 
-    .arch armv8
+    .arch armv8-a
     .file "alisp.s"
     .text
 
 ;;; Wrapping in POP object
    .text
-   .word   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+   .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
 L0._userhi:
-    .word I_LAB(_userhi)
+    .xword I_LAB(_userhi)
 nil.lab:
-    .word C_LAB(nil)
+    .xword C_LAB(nil)
 
 DEF_C_LAB (_setstklen)
-    ldr   r3, [USP, #4]
-    ldr   r2, [USP], #8
-    add   r2, r2, r3
-    sub   r2, r2, #6
-    ldr   r3, L0._userhi
-    ldr   r3, [r3]
-    sub   r2, r3, r2
-    cmp   USP, r2
-    bxeq  LR
-    ;;; fall trough
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #16
+    add   x2, x2, x3
+    sub   x2, x2, #6
+    adrp  x3, L0._userhi
+    add   x3, x3, :lo12:L0._userhi
+    ldr   x3, [x3]
+    ldr   x3, [x3]
+    sub   x2, x3, x2
+    cmp   USP, x2
+    b.ne  1f
+    ret
+1:
+    ;;; fall through
 DEF_C_LAB (_setstklen_diff)
     ;;; if too short set and return
-    movcc USP, r2
-    bxcc  LR
+    cmp   USP, x2
+    b.cs  2f
+    mov   USP, x2
+    ret
+2:
+    adrp  x3, nil.lab
+    add   x3, x3, :lo12:nil.lab
+    ldr   x3, [x3]
 str.loop:
-    ldr   r3, nil.lab
-    str   r3, [USP, #-4]!
-    cmp   USP, r2
-    bne   str.loop
-    bx    LR
+    str   x3, [USP, #-8]!
+    cmp   USP, x2
+    b.ne  str.loop
+    ret
 
 ;;; End wrapper: set size
     .text
