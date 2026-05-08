@@ -70,12 +70,6 @@ L0.done:
     b    L0.done
 
 DEF_C_LAB (_call_sys)
-    ;;; Save sp to saved_sp
-    adrp x9, SAVED_SP
-    add  x9, x9, :lo12:SAVED_SP
-    mov  x10, sp
-    str  x10, [x9]
-
     ;;; Save callee-saved registers and lr.
     ;;; We save x21-x24 (scratch/temp) plus x29 (FP), x30 (LR).
     ;;; 6 regs = 48 bytes (3 stp pairs), 16-byte aligned.
@@ -83,6 +77,17 @@ DEF_C_LAB (_call_sys)
     stp  x21, x22, [sp, #16]
     stp  x23, x24, [sp, #32]
     mov  x29, sp
+
+    ;;; x29 (FP) now points at our saved frame. We use x29 to recover sp on
+    ;;; exit, since Pop-11 procedures called via blr x12 below clobber
+    ;;; x21-x25 (which Pop-11 treats as register locals, not callee-saved).
+    ;;; x29 is the AAPCS frame pointer and is preserved across calls.
+    ;;;
+    ;;; Save entry sp (= x29 + 48) to saved_sp so __pop_errsig can recover.
+    add  x10, x29, #48
+    adrp x9, SAVED_SP
+    add  x9, x9, :lo12:SAVED_SP
+    str  x10, [x9]
 
     ;;; Get the system call address and the argument count from user stack
     ;;; Poplog words are 8 bytes on AArch64
@@ -149,15 +154,15 @@ L1.2:
     ;;; Push return value onto user stack
     str  x0, [USP, #-8]!
 
-    ;;; Clear saved_sp and restore stack
+    ;;; Clear saved_sp (mirror of original ARM32 contract: cleared between calls)
     adrp x9, SAVED_SP
     add  x9, x9, :lo12:SAVED_SP
-    ldr  x10, [x9]
     str  xzr, [x9]
 
-    ;;; Restore sp to point at saved registers frame
-    ;;; saved_sp pointed at sp before the 48-byte frame was pushed
-    sub  sp, x10, #48
+    ;;; Restore sp using x29 (frame pointer), which was set to sp at entry
+    ;;; and is preserved across the C call by AAPCS. Robust against both
+    ;;; SAVED_SP clobber (nested _call_sys) and Pop-11 callees clobbering x21.
+    add  sp, x29, #0
 
     ;;; Restore callee-saved registers
     ldp  x23, x24, [sp, #32]
@@ -170,16 +175,17 @@ L1.2:
 ;;; SIGN_EXTEND_EXTERN paths so that 32-bit-returning syscalls produce a
 ;;; correctly-signed 64-bit Pop integer.
 DEF_C_LAB (_call_sys_se)
-    ;;; Save sp to saved_sp
-    adrp x9, SAVED_SP
-    add  x9, x9, :lo12:SAVED_SP
-    mov  x10, sp
-    str  x10, [x9]
-
     stp  x29, x30, [sp, #-48]!
     stp  x21, x22, [sp, #16]
     stp  x23, x24, [sp, #32]
     mov  x29, sp
+
+    ;;; x29 (FP) recovers sp on exit; entry sp = x29 + 48.
+    ;;; Save entry sp to saved_sp for __pop_errsig.
+    add  x10, x29, #48
+    adrp x9, SAVED_SP
+    add  x9, x9, :lo12:SAVED_SP
+    str  x10, [x9]
 
     ldr  x12, [USP], #8        ;;; syscall address
     ldr  x9,  [USP], #8        ;;; argument count
@@ -241,10 +247,10 @@ L1se.2:
 
     adrp x9, SAVED_SP
     add  x9, x9, :lo12:SAVED_SP
-    ldr  x10, [x9]
     str  xzr, [x9]
 
-    sub  sp, x10, #48
+    ;;; Recover sp via x29 (frame pointer) — preserved across the C call.
+    add  sp, x29, #0
 
     ldp  x23, x24, [sp, #32]
     ldp  x21, x22, [sp, #16]
