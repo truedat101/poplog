@@ -297,6 +297,21 @@ lconstant
 
 identof("regnumber") -> identof("autoidreg");
 
+;;; as_wreg:
+;;;     Given an X-register name (e.g. "x21"), return the W-register name
+;;;     ("w21").  Required by ldrb/ldrh/strb/strh/sxtb/sxth/uxtb/uxth which
+;;;     accept only the 32-bit W form.  Pass through anything else (sp etc.).
+
+define lconstant as_wreg(reg) -> wreg;
+    lvars reg, wreg, n;
+    regnumber(reg) -> n;
+    if isinteger(n) and n fi_>= 0 and n fi_<= 30 then
+        consword('w' >< n) -> wreg;
+    else
+        reg -> wreg;
+    endif;
+enddefine;
+
 
 ;;; === M-CODE OPERANDS ===============================================
 
@@ -543,17 +558,23 @@ define lconstant load_to_reg(opd, tmp);
             mishap(opd, 1, 'Unhandled operand type');
         endif -> opcode;
     endif;
-    asm_emit(opcode, tmp, opd1, 3);
+    ;;; ldrb/ldrh require the destination register in W (32-bit) form.
+    if opcode == "ldrb" or opcode == "ldrh" then
+        asm_emit(opcode, as_wreg(tmp), opd1, 3);
+    else
+        asm_emit(opcode, tmp, opd1, 3);
+    endif;
     ;;; Sign extension for sub-word types on AArch64
     ;;; Use sxtb / sxth instructions instead of shift pairs
     if opcode /== "ldr" then
         f_subv(3, opd) -> type;
         if (type && tv_SIGNED) /== 0 then
             type && t_BASE_TYPE -> type;
+            ;;; sxtb/sxth: destination Xd, source Wn (sign-extend low byte/half)
             if type == t_SHORT then
-                asm_emit("sxth", tmp, tmp, 3);
+                asm_emit("sxth", tmp, as_wreg(tmp), 3);
             elseif type == t_BYTE then
-                asm_emit("sxtb", tmp, tmp, 3);
+                asm_emit("sxtb", tmp, as_wreg(tmp), 3);
             endif;
         endif;
     endif;
@@ -577,7 +598,12 @@ define lconstant gen_reg_store(src, dst, tmp);
             mishap(dst, 1, 'Unhandled operand type');
         endif -> opcode;
     endif;
-    asm_emit(opcode, src, dst1, 3);
+    ;;; strb/strh require the source register in W (32-bit) form.
+    if opcode == "strb" or opcode == "strh" then
+        asm_emit(opcode, as_wreg(src), dst1, 3);
+    else
+        asm_emit(opcode, src, dst1, 3);
+    endif;
 enddefine;
 
 ;;; push_operand / pop_operand:
@@ -698,7 +724,7 @@ define M_UPDs();
     lvars (, src, dst) = explode(m_instr);
     load_to_reg(src, R1) -> src;
     lvars dst1 = get_addressable_op(dst, R5);
-    asm_emit("strh", src, dst1, 3);
+    asm_emit("strh", as_wreg(src), dst1, 3);
 enddefine;
 
 ;;; gen_bfield:
@@ -1009,7 +1035,7 @@ define M_ASH();
         lvars neg_lab = genlab();
         lvars done_lab = genlab();
         asm_emit("cmp", src1, '#0', 3);
-        gen_branch("b.lt", neg_lab);
+        gen_branch('b.lt', neg_lab);
         ;;; Positive or zero: left shift
         asm_emit("lsl", dreg, src2, src1, 4);
         gen_branch("b", done_lab);
@@ -1145,7 +1171,7 @@ define lconstant gen_switch(src, labs, else_case, sysint);
     lvars opd2;
     get_operand2(if sysint then ncases else popint(ncases) - 3 endif) -> opd2;
     asm_emit("cmp", sreg, opd2, 3);
-    gen_branch("b.hi", else_lab);
+    gen_branch('b.hi', else_lab);
     ;;; Compute table entry address and jump
     ;;; On AArch64: table entries are 8 bytes (.xword) each
     if sysint then
@@ -1337,7 +1363,7 @@ define lconstant emit_stp_push(reg_list);
     asm_emit("sub", "sp", "sp", '#' >< total_space, 4);
     ;;; Then store registers. stp uses [sp, #offset] form.
     lvars offset = 0;
-    i = 1;
+    1 -> i;
     while i + 1 <= len do
         asm_emit("stp", f_subv(i, regvec), f_subv(i + 1, regvec),
                  '[sp, #' >< offset >< ']', 4);
@@ -1358,7 +1384,7 @@ define lconstant emit_ldp_pop(reg_list);
     lvars total_space = ((len + 1) div 2) * 16;
     ;;; Load registers. ldp uses [sp, #offset] form.
     lvars offset = 0;
-    i = 1;
+    1 -> i;
     while i + 1 <= len do
         asm_emit("ldp", f_subv(i, regvec), f_subv(i + 1, regvec),
                  '[sp, #' >< offset >< ']', 4);
@@ -1399,8 +1425,22 @@ define M_CREATE_SF();
 
     listlength(reg_locals) -> Nregs;
 
+    ;;; PD_REGMASK is a 16-bit field. AArch64 register numbers (e.g. x21
+    ;;; would set bit 21 = 0x200000) overflow the short. The runtime code
+    ;;; in pop/src/arm64/aprocess.s expects this mapping:
+    ;;;   x21 -> bit 4, x22 -> bit 6, x23 -> bit 7, x24 -> bit 8, x25 -> bit 9
     0 -> regmask;
-    fast_for n in reg_locals do regmask || (1 << n) -> regmask endfast_for;
+    fast_for n in reg_locals do
+        lvars bitpos;
+        if n == 21 then 4
+        elseif n == 22 then 6
+        elseif n == 23 then 7
+        elseif n == 24 then 8
+        elseif n == 25 then 9
+        else mishap(n, 1, 'M_CREATE_SF: register not in PD_REGMASK map')
+        endif -> bitpos;
+        regmask || (1 << bitpos) -> regmask
+    endfast_for;
 
     regmask -> idval(reg_spec_id);
 
@@ -1817,7 +1857,7 @@ enddefine;
 
 define lconstant outinst(instr);
     lvars instr;
-    lconstant COMMENT = `@`;
+    ;;; AArch64 GAS uses // for line comments (not @ which is ARM32).
     lvars opcode = f_subv(1, instr);
     if opcode == "label" then
         outlab(f_subv(2, instr));
@@ -1828,7 +1868,7 @@ define lconstant outinst(instr);
     else
         lvars i, n = datalength(instr);
         if opcode == "#" then
-            asmf_printf(COMMENT, '\t%c');
+            asmf_printf(false, '\t//');
             for i from 2 to n do
                 asmf_printf(f_subv(i, instr), '\s%p');
             endfor;

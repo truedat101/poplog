@@ -297,7 +297,7 @@ struct STATB
     int     ST_PAD1;
 #_ENDIF
     ino_t   ST_INO;
-#_IF DEF ARM_LINUX or (DEF X86_LINUX and WORD_BITS = 32)
+#_IF DEF ARM_LINUX or DEF ARM64_LINUX or (DEF X86_LINUX and WORD_BITS = 32)
     mode_t  ST_MODE;
     nlink_t ST_NLINK;
 #_ELSEIF DEF X86_LINUX
@@ -314,6 +314,8 @@ struct STATB
     dev_t   ST_RDEV;
 #_IF DEF ARM_LINUX or (DEF X86_LINUX and WORD_BITS = 32)
     int     ST_PAD3;
+#_ELSEIF DEF ARM64_LINUX
+    long    ST_PAD3;
 #_ENDIF
     off_t   ST_SIZE;
     long    ST_BLKSIZE;
