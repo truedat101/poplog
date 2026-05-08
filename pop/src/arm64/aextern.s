@@ -24,9 +24,13 @@ lconstant macro (
     _EFC_ARG_DEST   = @@EFC_ARG_DEST,
 );
 
-if _pint(_K_EXTERN_TYPE) /== (12*8 + 2) then
-    mishap(_pint(_K_EXTERN_TYPE), (12*8 + 2), 2,
-           '_K_EXTERN_TYPE must agree with ext_arm64.c');
+;;; Sanity check: keep the asm-side offset of K_EXTERN_TYPE in sync with the
+;;; offset that the C side uses (see pop/extern/lib/ext_arm.c, AArch64 branch).
+;;; This is the K-record field offset, which depends on word size and prior
+;;; fields.  On arm64 it is 11 word slots in + 2 byte tag = 90.
+if _pint(_K_EXTERN_TYPE) /== (11*8 + 2) then
+    mishap(_pint(_K_EXTERN_TYPE), (11*8 + 2), 2,
+           '_K_EXTERN_TYPE must agree with ext_arm.c (AArch64 branch)');
 endif;
 
 >_#

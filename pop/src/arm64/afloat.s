@@ -32,10 +32,11 @@ lconstant macro (
         USP     = "x19",
 
         ;;; Pop ddecimal structure fields:
-        ;;; _DD_1 = MS part, _DD_2 = LS part
+        ;;; On AArch64 64-bit, DDECIMAL has only DD_1 (8 bytes) holding the
+        ;;; full IEEE 754 double precision value.  DD_2 only exists when
+        ;;; WORD_BITS /= DOUBLE_BITS (i.e. on 32-bit hosts).
 
         _DD_1   = @@DD_1,
-        _DD_2   = @@DD_2,
 
 );
 
@@ -104,16 +105,11 @@ DEF_C_LAB (_pf_dfloat_dec)
 
 ;;; Pop ddecimal to double float, pointer to result is on top
 ;;; of user stack.
-;;; On AArch64 64-bit: DD_1 holds MS 32 bits, DD_2 holds LS 32 bits
-;;; of the IEEE 754 double. We reconstruct the 64-bit double from them.
+;;; On AArch64 64-bit: DD_1 holds the full 64-bit IEEE 754 double.
 DEF_C_LAB (_pf_dfloat_ddec)
     ldr   x3, [USP, #8]            /* ddecimal pointer */
     ldr   x2, [USP], #16           /* result pointer, pop 2 words */
-    ldr   w9, [x3, #_DD_1]         /* MS 32 bits */
-    ldr   w10, [x3, #_DD_2]        /* LS 32 bits */
-    /* Combine: x9 = (MS << 32) | LS */
-    orr   x9, x10, x9, lsl #32
-    fmov  d7, x9
+    ldr   d7, [x3, #_DD_1]
     str   d7, [x2]
     ret
 
@@ -144,9 +140,14 @@ DEF_C_LAB (_pf_cvt_to_dec)
     fmov  x9, d7                   /* get 64-bit IEEE representation */
     mov   w10, w9                  /* low 32 bits of double */
     lsr   x11, x9, #32            /* high 32 bits of double */
-    cmp   w10, #0x40000000
+    /* cmp w10, #0x40000000 -- immediate too large; load to scratch first */
+    mov   w12, #0x40000000
+    cmp   w10, w12
     b.eq  1f
-    orr   w10, w10, #0x38000000
+    /* orr  w10, w10, #0x38000000 is encodable as a logical bitmask
+       only on some assemblers; use mov+orr form to be safe */
+    mov   w12, #0x38000000
+    orr   w10, w10, w12
 1:
     orr   x9, x10, x11, lsl #32   /* reconstruct 64-bit double */
     fmov  d7, x9
@@ -179,10 +180,7 @@ DEF_C_LAB (_pf_cvt_to_ddec)
     ldr   x3, [USP, #8]            /* source double pointer */
     ldr   x2, [USP], #16           /* ddecimal pointer, pop 2 words */
     ldr   d7, [x3]
-    fmov  x9, d7                   /* get 64-bit representation */
-    lsr   x10, x9, #32            /* high 32 bits = MS */
-    str   w10, [x2, #_DD_1]       /* store MS part */
-    str   w9, [x2, #_DD_2]        /* store LS part (low 32 bits) */
+    str   d7, [x2, #_DD_1]
     ret
 
 DEF_C_LAB (_pf_round_d_to_s)
@@ -476,6 +474,7 @@ DEF_C_LAB (_pfdiv)
     str   d7, [x3]
     ret
 
+    .align  3
 L.true:
     .xword C_LAB(true)
 L.false:

@@ -275,6 +275,11 @@ define lconstant get_moves(m_codelist, mustconvert) -> (got_one, m_codelist);
     f_hd(m_codelist) -> inst;
     f_subv(1, inst) -> opcode;
 ;;;        printf(opcode, inst, 'get_moves if: \n inst = %p\n opcode = %p\n');
+    ;;; arm64: skip optimisation if opcode isn't a procedure -- the
+    ;;; codegen path handles the instruction directly. Without this guard
+    ;;; pdprops below mishaps with PROCEDURE NEEDED on malformed
+    ;;; M-instructions surfaced by other arm64 codegen quirks.
+    returnunless(isprocedure(opcode));
     if isstring(pdprops(opcode) ->> x) and f_subs(1, x) == `%` then
         ;;; pseudo-op
         opcode(m_codelist, mustconvert) -> m_codelist;

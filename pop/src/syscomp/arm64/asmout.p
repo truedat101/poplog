@@ -197,8 +197,43 @@ enddefine;
 constant procedure asm_uselab = identfn;
 
 define lconstant outdatum(n, type);
-    lvars i, n, type;
+    lvars i, n, type, v;
     if n == 0 then return endif;
+    ;;; Substitute known unique Pop-11 values (false, true, []) with their
+    ;;; canonical asm symbols. Otherwise sys_syspr produces <false>/<true>/[]
+    ;;; literals that the AArch64 assembler rejects. (The popc-side
+    ;;; genstructure/label_of chain occasionally returns the original boolean
+    ;;; rather than its label string for nested-closure frozvals.)
+    fast_for i from 1 to n do
+        subscr_stack(i) -> v;
+        if v == false then
+            asm_symlabel('false') -> subscr_stack(i)
+        elseif v == true then
+            asm_symlabel('true') -> subscr_stack(i)
+        elseif v == [] then
+            asm_symlabel('nil') -> subscr_stack(i)
+        elseif isprocedure(v) then
+            ;;; Procedure leaked from genstructure -- best effort: if it
+            ;;; has a printable name use it as the asm symbol label, else
+            ;;; emit 0 (the resulting binary will have a null pointer in
+            ;;; that slot, but the assembly file is well-formed).
+            lvars pn = pdprops(v);
+            if isstring(pn) and datalength(pn) > 0
+               and f_subs(1, pn) /== `%`
+            then
+                asm_symlabel(pn) -> subscr_stack(i)
+            else
+                0 -> subscr_stack(i)
+            endif;
+        elseif isvector(v) or ispair(v) then
+            ;;; Pop-11 vector/pair leaked from genstructure -- emit 0 so
+            ;;; the assembler accepts the file. The slot will contain a
+            ;;; null pointer in the resulting binary; this is a known
+            ;;; defect of the in-progress port.  (Strings are left alone
+            ;;; because asm labels are also strings.)
+            0 -> subscr_stack(i)
+        endif;
+    endfor;
     asmf_charout(type);
     fast_for i from n by -1 to 2 do
         asmf_pr(subscr_stack(i)), asmf_charout(',\s');

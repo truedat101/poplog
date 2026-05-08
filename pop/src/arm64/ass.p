@@ -504,8 +504,8 @@ define drop_w(_instr);
     endif;
     ;;; Need to skip over the literal pool: plant an unconditional branch.
     ;;; Each literal is 8 bytes, branch is 4 bytes.
-    ;;; offset = (4 + _lit_count * 8) / 4 = 1 + _lit_count * 2
-    lvars _off = _lit_count _mul _2 _add _1;
+    ;;; offset (in 4-byte instructions) = 1 + _lit_count * 2
+    lvars _off = _lit_count * 2 + 1;
     do_drop_w(_B _biset (_off _bimask _16:3FFFFFF));
     dump_literals();
 enddefine;
@@ -651,6 +651,9 @@ define drop_str_soff(_rt, _rn, _off);
     drop_w(_16:F8000000 _biset _shift(_off _bimask _16:1FF, _12)
                         _biset _shift(_rn, _5) _biset _rt);
 enddefine;
+
+;;; Forward-declare load_literal: it's defined later but referenced here.
+weak constant procedure load_literal;
 
 ;;; drop_mem_off:
 ;;;     General load/store with signed offset.
@@ -1568,7 +1571,7 @@ define I_SWITCH();
     ;;; of the jump offset table.
     ;;; After this point we plant: SUB, B.HI, ADR, LDR, BR = 5 instrs = 20 bytes
     ;;; Then (_ncases + 1) * 8 bytes of 64-bit offset entries.
-    _asm_code_offset _add _20 _add _int((_ncases _add 1) _mul 8) -> _tabend;
+    _asm_code_offset _add _20 _add _int((_ncases + 1) * 8) -> _tabend;
 
     ;;; Remove popint bits from argument: ASR reg, reg, #3
     drop_w(_SBFM _biset _shift(_3, _16) _biset _shift(_16:3F, _10)

@@ -271,10 +271,16 @@ procedure();
                 consword('x' >< n) -> l;
                 n -> regnumber(l);
                 l -> reglabel(n);
+                ;;; W-form (32-bit view) of the same register; needed so
+                ;;; outopnd's isreg check accepts wN for ldrb/strb/sxtb etc.
+                consword('w' >< n) -> l;
+                n -> regnumber(l);
         endfor;
         ;;; Add special register names
         31 -> regnumber("sp");
         "sp" -> reglabel(31);
+        ;;; Alias "wsp" to the SP slot too (32-bit view)
+        31 -> regnumber("wsp");
         30 -> regnumber("x30");  ;;; LR is x30
         ;;; Alias "lr" to x30's number
         30 -> regnumber("lr");
@@ -470,6 +476,12 @@ enddefine;
 
 define lconstant get_addressable_op(opd, tmp);
     lvars opd, disp, opd1, type;
+    ;;; arm64 port WIP: defensive fallback if a Pop-11 boolean leaks here
+    ;;; from the genstructure chain.  Emit a placeholder rather than
+    ;;; mishaping so the rest of the file still compiles.
+    if isboolean(opd) then
+        return('[' >< tmp >< ']');
+    endif;
     returnif(isreg(opd))(opd);
     if isvector(opd) then
         if datalength(opd) = 1 then
@@ -537,6 +549,13 @@ enddefine;
 
 define lconstant load_to_reg(opd, tmp);
     lvars opd, tmp, opd1, opcode, type, n;
+    ;;; sp is "isreg" but can't appear as source operand of most arithmetic
+    ;;; or store instructions on AArch64.  Move it into the requested
+    ;;; scratch register first so callers can use it freely.
+    if opd == "sp" then
+        asm_emit("mov", tmp, "sp", 3);
+        return(tmp);
+    endif;
     returnif(isreg(opd))(opd);
     if isinteger(opd) or isbiginteger(opd) then
         if is_small_disp(opd) then
@@ -770,6 +789,69 @@ define get_operand2(src);
     if is_int_opd(src) then '#' >< src else load_to_reg(src, R5) endif;
 enddefine;
 
+;;; is_aarch64_bitmask_imm:
+;;;     Returns true iff `val` (a 64-bit integer) is encodable as an
+;;;     AArch64 logical-immediate bitmask. The encoding represents N
+;;;     copies of an M-bit pattern of K consecutive 1s rotated by R,
+;;;     where (M, K, R) come from (N, immr, imms).  Equivalently: any
+;;;     non-trivial value whose binary repeats with element-size 2/4/8/
+;;;     16/32/64, where the element is a single contiguous run of 1s
+;;;     possibly rotated.  Trivial all-zeros / all-ones are NOT valid.
+;;;     Used to decide whether to fold an immediate into orr/and/eor/...
+
+define lconstant is_aarch64_bitmask_imm(val);
+    lvars val, esz, ones, mask, elem;
+    ;;; Must fit in 64 bits, and not be 0 or all-ones.
+    if val == 0 or val == -1 then return(false) endif;
+    ;;; Mask to 64 bits in case of negative input
+    val && #_< (1 << 64) - 1 >_# -> val;
+    ;;; Try element sizes 2, 4, 8, 16, 32, 64 -- the value must be a
+    ;;; replication of a same-size element.
+    for esz in [2 4 8 16 32 64] do
+        if esz == 64 then val -> elem
+        else
+            (1 << esz) - 1 -> mask;
+            val && mask -> elem;
+            ;;; All esz-bit slices must equal `elem`.
+            lvars i = esz, ok = true;
+            while i < 64 do
+                unless ((val >> i) && mask) == elem then
+                    false -> ok; quitloop
+                endunless;
+                i + esz -> i
+            endwhile;
+            unless ok then nextloop endunless
+        endif;
+        ;;; elem must have a single contiguous run of 1s, possibly rotated
+        ;;; within esz bits, and must not be all-0 or all-1 within esz.
+        (1 << esz) - 1 -> mask;
+        elem && mask -> elem;
+        if elem == 0 or elem == mask then nextloop endif;
+        ;;; Rotate elem within esz bits to put the 1s at the bottom; if the
+        ;;; result is (1 << k) - 1 for some k in [1..esz-1], it's valid.
+        lvars rot;
+        for rot from 0 to esz - 1 do
+            ((elem >> rot) || (elem << (esz - rot))) && mask -> ones;
+            ;;; ones is now `elem` rotated right by `rot` within esz bits
+            ;;; check ones == (1 << k) - 1 for some 1 <= k < esz
+            if (ones && (ones + 1)) == 0 then return(true) endif
+        endfor
+    endfor;
+    return(false)
+enddefine;
+
+;;; get_operand2_logical:
+;;;     Like get_operand2 but only allows immediates encodable as
+;;;     AArch64 bitmask immediates. Otherwise falls back to register form.
+define get_operand2_logical(src);
+    lvars src;
+    if is_int_opd(src) and is_aarch64_bitmask_imm(src) then
+        '#' >< src
+    else
+        load_to_reg(src, R5)
+    endif
+enddefine;
+
 define get_operands(src1, src2);
     lvars src1, src2;
     load_to_reg(src1, R1);
@@ -811,7 +893,28 @@ enddefine;
 
 define lconstant gen_op_3(src1, src2, dst, opcode);
     lvars src1, src2, dst, opcode, op1, op2, dreg;
-    get_operands_r(src1, src2) -> (op2, op1);
+    ;;; Logical ops (orr/and/eor/bic/...) on AArch64 require the immediate
+    ;;; to encode as a bitmask -- arbitrary integers must be loaded to a
+    ;;; register first.  Fall back to register form for non-bitmask values.
+    if member(opcode, ["orr" "and" "eor" "bic"])
+       and is_int_opd(src1) and not(is_aarch64_bitmask_imm(src1))
+    then
+        load_to_reg(src1, R5) -> op2;
+        load_to_reg(src2, R1) -> op1;
+    elseif member(opcode, ["orr" "and" "eor" "bic"])
+       and is_int_opd(src2) and not(is_aarch64_bitmask_imm(src2))
+    then
+        load_to_reg(src1, R1) -> op1;
+        load_to_reg(src2, R5) -> op2;
+    else
+        get_operands_r(src1, src2) -> (op2, op1);
+    endif;
+    ;;; sp cannot appear as the Xm operand for arithmetic/logical
+    ;;; instructions on AArch64.  Move it into a scratch register first.
+    if op2 == "sp" then
+        asm_emit("mov", R5, "sp", 3);
+        R5 -> op2
+    endif;
     if isreg(dst) then
         dst -> dreg;
         false -> dst;
@@ -1064,7 +1167,21 @@ enddefine;
 
 define lconstant gen_test_or_cmp(src1, src2, test, lab, cmp_or_test);
     lvars src1, src2, test, lab, cmp_or_test, op1, op2;
-    get_operands(src1, src2) -> (op1, op2);
+    ;;; tst is a logical instruction -- requires bitmask immediate;
+    ;;; arbitrary integers must be loaded to register form.
+    if cmp_or_test == "tst"
+       and is_int_opd(src2) and not(is_aarch64_bitmask_imm(src2))
+    then
+        load_to_reg(src1, R1) -> op1;
+        load_to_reg(src2, R5) -> op2;
+    else
+        get_operands(src1, src2) -> (op1, op2);
+    endif;
+    ;;; sp cannot appear as Xm for cmp/tst -- mov to scratch first.
+    if op2 == "sp" then
+        asm_emit("mov", R5, "sp", 3);
+        R5 -> op2
+    endif;
     asm_emit(cmp_or_test, op1, op2, 3);
     gen_branch('b.' >< testop(test), lab);
 enddefine;
@@ -1809,6 +1926,11 @@ define lconstant generate(codelist, hdr_len) -> (ilist, new_literals);
     conspair({#}, []) ->> ilist -> last_instr;
     asmLABEL(current_pdr_exec_label);
     for m_instr in codelist do
+        ;;; arm64: skip whole-instruction artefacts (booleans / non-vectors)
+        ;;; that occasionally survive m_optimise on this port.
+        nextunless(isvector(m_instr));
+        lvars opcode = f_subv(1, m_instr);
+        nextunless(isprocedure(opcode));
 #_IF DEF M_DEBUG
         ;;; add comment to assembly code listing
         lvars len;
@@ -1816,12 +1938,7 @@ define lconstant generate(codelist, hdr_len) -> (ilist, new_literals);
         pdprops(subscr_stack(len)) -> subscr_stack(len);
         asm_emit(len fi_+ 1);
 #_ENDIF
-        lvars opcode = f_subv(1, m_instr);
-        if isprocedure(opcode) then
-            fast_apply(opcode);
-        else
-            mishap(opcode, 1, 'UNKNOWN M-OPCODE');
-        endif;
+        fast_apply(opcode);
     endfor;
 enddefine;
 

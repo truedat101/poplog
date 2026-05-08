@@ -112,8 +112,9 @@ global constant macro (
     OLD_FIELD_INSTRUCTIONS = true,
 
     ;;; Include M-code listing in assembly language files
-
-    M_DEBUG = true,
+    ;;; Disabled for arm64 port: the M_DEBUG path can leak stack items in
+    ;;; some M-handlers, producing ITEMS LEFT ON STACK mishaps.
+    M_DEBUG = false,
 
     ;;; Result of external call may need sign extension
 

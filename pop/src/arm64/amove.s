@@ -154,7 +154,9 @@ DEF_C_LAB (_move_userstack)
 DEF_C_LAB (_move_callstack)
     ldr x0, [USP], #8          ;;; current_top
     ldr x1, [USP], #8          ;;; delta
-    sub x2, x0, sp             ;;; byte count = current_top - sp
+    ;;; sp can't be Xm; copy to scratch first
+    mov x2, sp
+    sub x2, x0, x2             ;;; byte count = current_top - sp
     ;;; Note: due to signed overflow direction may be opposite
     ;;; to indicated by labels.  But since address 0 is illegal
     ;;; in case of overflow source area does not intersect
@@ -280,7 +282,9 @@ DEF_C_LAB (_ubfield)
     ;;; Mask and position the new value
     and     x3, x3, x5             ;;; mask value to field width
     add     x0, x1, x0             ;;; bit_in_word + width
-    orr     x9, x9, x3, lsl x1    ;;; insert value bits
+    ;;; orr does not accept shift-by-register; do the shift separately
+    lsl     x12, x3, x1
+    orr     x9, x9, x12            ;;; insert value bits
     str     x9, [x2]               ;;; store back
     ;;; Check if field spans two 64-bit words
     cmp     x0, #64

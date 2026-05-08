@@ -165,6 +165,92 @@ L1.2:
     ldp  x29, x30, [sp], #48
     ret
 
+;;; _call_sys_se: same as _call_sys but sign-extends the low 32 bits of
+;;; the return value before pushing it on the user stack.  Used by
+;;; SIGN_EXTEND_EXTERN paths so that 32-bit-returning syscalls produce a
+;;; correctly-signed 64-bit Pop integer.
+DEF_C_LAB (_call_sys_se)
+    ;;; Save sp to saved_sp
+    adrp x9, SAVED_SP
+    add  x9, x9, :lo12:SAVED_SP
+    mov  x10, sp
+    str  x10, [x9]
+
+    stp  x29, x30, [sp, #-48]!
+    stp  x21, x22, [sp, #16]
+    stp  x23, x24, [sp, #32]
+    mov  x29, sp
+
+    ldr  x12, [USP], #8        ;;; syscall address
+    ldr  x9,  [USP], #8        ;;; argument count
+
+    subs x7, x9, #8
+    b.le L1se.2
+
+    add  x10, x7, #1
+    bic  x10, x10, #1
+    sub  sp, sp, x10, lsl #3
+
+    mov  x11, sp
+L1se.1:
+    ldr  x10, [USP], #8
+    str  x10, [x11], #8
+    subs x7, x7, #1
+    b.gt L1se.1
+    mov  x9, #8
+L1se.2:
+    cmp  x9, #8
+    b.lt 1f
+    ldr  x7, [USP], #8
+1:
+    cmp  x9, #7
+    b.lt 2f
+    ldr  x6, [USP], #8
+2:
+    cmp  x9, #6
+    b.lt 3f
+    ldr  x5, [USP], #8
+3:
+    cmp  x9, #5
+    b.lt 4f
+    ldr  x4, [USP], #8
+4:
+    cmp  x9, #4
+    b.lt 5f
+    ldr  x3, [USP], #8
+5:
+    cmp  x9, #3
+    b.lt 6f
+    ldr  x2, [USP], #8
+6:
+    cmp  x9, #2
+    b.lt 7f
+    ldr  x1, [USP], #8
+7:
+    cmp  x9, #1
+    b.lt 8f
+    ldr  x0, [USP], #8
+8:
+
+    blr  x12
+
+    ;;; Sign-extend the low 32 bits of the return value
+    sxtw x0, w0
+
+    str  x0, [USP, #-8]!
+
+    adrp x9, SAVED_SP
+    add  x9, x9, :lo12:SAVED_SP
+    ldr  x10, [x9]
+    str  xzr, [x9]
+
+    sub  sp, x10, #48
+
+    ldp  x23, x24, [sp, #32]
+    ldp  x21, x22, [sp, #16]
+    ldp  x29, x30, [sp], #48
+    ret
+
 ;;; End wrapper: set size
         .text
 Ltext_end:
