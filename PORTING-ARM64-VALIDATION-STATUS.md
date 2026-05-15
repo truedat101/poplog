@@ -10,6 +10,27 @@ classes of bug.  About 6 root-cause fixes already applied (uncommitted) push
 the build through the cross-popc stage; the remaining gaps below need
 engineering before a runnable `new_corepop` is reachable.
 
+> **Update (2026-05-15) — QEMU validation attempt: fruitless, root cause known.**
+>
+> After the later commits (`8d60ae3 → accea93`) `make stamp_srclib` now runs to
+> completion, but only because `do_asm.p` was patched to **warn-and-drain**
+> instead of mishap on leftover stack items. ~290 of ~330 core library files
+> still leak `<false>` / `<procedure %OP_CALL>` onto the Pop-11 stack, so the
+> emitted machine code is wrong for ~90% of the library. The aarch64
+> `target/pop/basepop11` linked on 2026-05-08 was built from this broken
+> codegen (and predates the 2026-05-14 srclib).
+>
+> A QEMU smoke-test of that binary made no progress — expected: the codegen
+> gate was never met, and separately the `gcc-aarch64-linux-gnu` cross sysroot
+> is missing `libncurses.so.6`/`libtinfo.so.6` that `basepop11` `NEEDED`s, so
+> it could not even load. Both blockers and the full runnable procedure are now
+> documented as **Stage 7 (QEMU Host Validation)** + the **Phase 5 / 5.5 / 6 /
+> 7** checklist in `PORTING-ARM64-LINUX-RPI5.md`. Do not re-attempt QEMU until
+> Phase 5 (clean srclib, zero `items-left` warnings, drain reverted) is green.
+>
+> `accea93` adds ARM64-DIAG instrumentation to localize the leaking M-handler
+> but **no build has been run with it yet** — that is the next action.
+
 ---
 
 ## What was discovered before any code changes

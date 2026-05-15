@@ -390,17 +390,97 @@ cp corepop target/pop/corepop
 make
 ```
 
-### Stage 7: Testing and Debugging
+### Stage 7: QEMU Host Validation (gate before touching hardware)
 
-From PORTING.txt:
+QEMU user-mode emulation (`qemu-aarch64-static`) runs the aarch64 `basepop11`
+on the x86_64 host, giving a fast edit/test loop without an RPi5. **It only
+produces meaningful results once the precondition gate below is green.**
+
+#### 7.0 Precondition gate — read this first
+
+> **Do not run QEMU validation until `make stamp_srclib` completes with ZERO
+> `WARNING items-left after file` lines.**
+>
+> The warn-and-drain band-aid in `pop/src/syscomp/do_asm.p` lets `stamp_srclib`
+> "succeed" while ~290 of ~330 core library files still leave `<false>` /
+> `<procedure %OP_CALL>` on the Pop-11 stack. Those files are compiled to
+> **semantically wrong machine code**. A `basepop11` linked in that state will
+> crash or hang under QEMU no matter how many runtime `.s` fixes are applied.
+>
+> This is exactly why the first QEMU validation attempt made no progress: the
+> binary was built from broken codegen. Fix Stage 2/5 codegen first; QEMU is
+> wasted effort before then.
+
+Gate checklist (all must be true before proceeding to 7.1):
+
+- [ ] `make stamp_popc` clean
+- [ ] `make stamp_srclib` clean **and** `grep -c 'items-left after file' /tmp/build-srclib*.log` is `0`
+- [ ] `do_asm.p` warn-and-drain reverted to a hard mishap (so a green build is a *correct* build, not a drained one)
+- [ ] `make stamp_new_corepop` regenerated *after* a clean srclib (delete the stale `stamp_new_corepop` first so it actually rebuilds)
+- [ ] `file target/pop/basepop11` reports `ELF 64-bit ARM aarch64`
+
+#### 7.1 One-time host setup
+
+`target/pop/basepop11` is dynamically linked and `NEEDED`s
+`libncurses.so.6 libtinfo.so.6 libm.so.6 libc.so.6 ld-linux-aarch64.so.1`.
+The `gcc-aarch64-linux-gnu` cross sysroot (`/usr/aarch64-linux-gnu/lib`) ships
+`ld-linux` + `libc` + `libm` but **not** `libncurses`/`libtinfo` — so
+`QEMU_LD_PREFIX` pointed at the bare cross sysroot will fail to load the binary.
+Provide a complete aarch64 sysroot:
+
+- [ ] `qemu-aarch64-static` installed (`which qemu-aarch64-static`)
+- [ ] aarch64 multiarch libs available, e.g.
+      `sudo dpkg --add-architecture arm64 && sudo apt install libncurses6:arm64 libtinfo6:arm64`
+      (or copy `/lib/aarch64-linux-gnu` + `/usr/lib/aarch64-linux-gnu` from an RPi/aarch64 rootfs)
+- [ ] A sysroot dir that contains **all** five NEEDED libs; export it:
+      `export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu` (or your assembled rootfs)
+- [ ] `aarch64-linux-gnu-readelf -d target/pop/basepop11 | grep NEEDED` — confirm every NEEDED lib resolves under `$QEMU_LD_PREFIX`
+
+#### 7.2 Smoke test procedure
+
+The `./poplog` wrapper sets the `pop*` env vars then `exec "$@"`, so prefix the
+binary with the emulator:
+
 ```bash
-# Start GDB via poplog wrapper (sets up environment variables)
-./poplog gdb pop/pop/basepop11
+# Pop-11 banner + immediate exit (most basic "does it start at all")
+echo 'sysexit();' | QEMU_LD_PREFIX=$QEMU_LD_PREFIX \
+  ./poplog qemu-aarch64-static target/pop/basepop11 %nort
 
-# In GDB:
-(gdb) break setpop
-(gdb) run
+# Interactive REPL
+QEMU_LD_PREFIX=$QEMU_LD_PREFIX \
+  ./poplog qemu-aarch64-static target/pop/basepop11 %nort %noinit
 ```
+
+Run in order; stop at the first failure and debug it (7.3) before moving on:
+
+- [ ] `basepop11` reaches `setpop` without an early SIGSEGV/SIGILL/SIGBUS
+- [ ] Pop-11 banner prints
+- [ ] `2 + 2 =>` returns `** 4` (integer arithmetic — exercises `aarith.s`, M-code path)
+- [ ] `1.5 * 2 =>` returns `** 3.0` (float — exercises `afloat.s`)
+- [ ] `[a b c] ==> ` prints the list (heap alloc + GC structures)
+- [ ] A `define`d procedure runs (runtime code generator `ass.p`, closures)
+- [ ] A deliberate GC (`sysgarbage();`) survives (relocatable code in `ass.p`)
+- [ ] `sysexit();` exits cleanly (no abort, exit code 0)
+
+#### 7.3 Debugging under QEMU + GDB
+
+`qemu-aarch64-static` exposes a gdbstub with `-g <port>`:
+
+```bash
+# Terminal 1: start under emulator, paused, gdbstub on :1234
+QEMU_LD_PREFIX=$QEMU_LD_PREFIX \
+  ./poplog qemu-aarch64-static -g 1234 target/pop/basepop11 %nort
+
+# Terminal 2: attach the aarch64 GDB
+gdb-multiarch target/pop/basepop11
+(gdb) set architecture aarch64
+(gdb) target remote :1234
+(gdb) break setpop
+(gdb) continue
+```
+
+For stubbed runtime routines (Stage 3 uses `b .` infinite loops), a hang is the
+signal — break in, inspect `x0-x30`/`sp`, identify the unimplemented routine.
 
 **Common issues to watch for:**
 - Segfaults from incorrect stack alignment (must be 16-byte on AArch64)
@@ -409,6 +489,22 @@ From PORTING.txt:
 - Branch range exceeded (use indirect branches for >128MB)
 - Cache coherency (must flush icache after writing code to memory)
 - Signal handler context structure differences
+- **QEMU-specific:** user-mode QEMU emulates signals/`mmap`/coroutine stack
+  switching imperfectly. Failures isolated to `aprocess.s`, `asignals.s`, or
+  FFI may be QEMU artifacts — re-confirm them on real RPi5 hardware (Stage 8)
+  before treating them as port bugs.
+
+### Stage 8: Native RPi5 Validation
+
+Only after Stage 7 passes under QEMU. Transfer the tree (Stage 6), rebuild
+natively on the Pi, then re-run the 7.2 smoke test and the Phase 6 feature
+matrix on real hardware:
+
+- [ ] Native `make` completes on RPi5 (Debian/Raspbian 64-bit)
+- [ ] 7.2 smoke test passes natively (no QEMU)
+- [ ] Re-confirm any QEMU-suspect failures (signals / `aprocess.s` / FFI)
+- [ ] Full Phase 6 feature matrix passes on hardware
+- [ ] Capture a known-good `corepop` for the arm64 corepops archive
 
 ---
 
@@ -466,13 +562,20 @@ clobber them.
 - [ ] Rewrite `closure_cons.p` for AArch64
 - [ ] Rewrite `pdr_compose.p` for AArch64
 
-### Phase 5: Bootstrap
-- [ ] Cross-compile full system from host
-- [ ] Transfer to RPi5 and link natively
-- [ ] Obtain working `corepop` binary on RPi5
-- [ ] Native rebuild on RPi5
+### Phase 5: Host Bootstrap (x86_64, no RPi5 needed)
+- [ ] `make stamp_srclib` clean **with zero `items-left after file` warnings** (drained ≠ done)
+- [ ] `do_asm.p` warn-and-drain reverted to a hard mishap
+- [ ] Stale downstream stamps deleted, `make stamp_new_corepop` regenerated
+- [ ] aarch64 `target/pop/basepop11` linked from a *clean* srclib
 
-### Phase 6: Validation
+### Phase 5.5: QEMU Host Validation Gate (Stage 7)
+> Blocked until every Phase 5 box is checked — see Stage 7.0. The first QEMU
+> attempt was fruitless because this gate was not met.
+- [ ] 7.1 host setup: complete aarch64 sysroot, all 5 NEEDED libs resolve
+- [ ] 7.2 smoke test passes end-to-end under `qemu-aarch64-static`
+- [ ] Phase 6 feature matrix passes **under QEMU**
+
+### Phase 6: Validation (run under QEMU first, then on RPi5 hardware — Stage 8)
 - [ ] Pop-11 REPL starts and basic expressions work
 - [ ] Prolog subsystem loads
 - [ ] Common Lisp subsystem loads
@@ -482,6 +585,12 @@ clobber them.
 - [ ] Process/coroutine switching works
 - [ ] Signal handling works
 - [ ] Garbage collection works (critical for `ass.p` relocatable code)
+
+### Phase 7: Native RPi5 (Stage 8)
+- [ ] Transfer to RPi5 and link/build natively
+- [ ] Obtain working `corepop` binary on RPi5
+- [ ] 7.2 smoke test + Phase 6 matrix pass on hardware (no QEMU)
+- [ ] Re-confirm any QEMU-suspect failures (signals / `aprocess.s` / FFI)
 
 ---
 
