@@ -582,11 +582,17 @@ define m_optimise(m_codelist, pdr_exit_lab, pdr_Nlocals, pdr_flags)
                                                         -> org_m_codelist;
     dlocal m_codelist, org_m_codelist, pdr_exit_lab, pdr_Nlocals, pdr_flags;
     lvars i;
+    lvars _sl0 = stacklength();
     m_codelist -> org_m_codelist;
     until m_codelist == [] do
 ;;;                printf(hd(m_codelist), 'm_optimise: %p\n');
         if f_subv(1, f_hd(m_codelist)) /== M_LABEL then
+            lvars _sl_pre = stacklength();
             do_premove(m_codelist, true, false) -> m_codelist;
+            if stacklength() /== _sl_pre then
+                printf(stacklength() fi_- _sl_pre, f_hd(m_codelist),
+                       ';;; ARM64-DIAG do_premove leaked %p items, head=%p\n');
+            endif;
             if finalimprove(f_hd(m_codelist)) ->> i then
                 i -> f_hd(m_codelist)
             else
@@ -595,7 +601,11 @@ define m_optimise(m_codelist, pdr_exit_lab, pdr_Nlocals, pdr_flags)
             endif
         endif;
         f_tl(m_codelist) -> m_codelist
-    enduntil
+    enduntil;
+    if stacklength() /== _sl0 then
+        printf(stacklength() fi_- _sl0,
+               ';;; ARM64-DIAG m_optimise leaked %p items\n');
+    endif;
 enddefine;
 
 

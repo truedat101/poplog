@@ -2028,8 +2028,15 @@ define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
     lvars codelist, hdr_len, pdr_len, new_lits,
           cur_pdr_label = current_pdr_label;
 
-    ;;; Translate M-code to assembler
+    ;;; arm64 diagnostic: track stack length around generate to find which
+    ;;; procedure leaves items behind.
+    lvars _sl0 = stacklength();
     generate(codelist, hdr_len) -> (codelist, new_lits) ;
+    lvars _sl1 = stacklength();
+    if _sl1 /== _sl0 then
+        printf(_sl1 fi_- _sl0, current_pdr_label,
+               ';;; ARM64-DIAG generate leaked %p items, pdr_label=%p\n');
+    endif;
 
     ;;; Create a label for the procedure length
     genlab() -> pdr_len;
