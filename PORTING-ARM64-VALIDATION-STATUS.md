@@ -31,6 +31,101 @@ engineering before a runnable `new_corepop` is reachable.
 > `accea93` adds ARM64-DIAG instrumentation to localize the leaking M-handler
 > but **no build has been run with it yet** — that is the next action.
 
+> **Update (2026-06-01) — ROOT CAUSE IDENTIFIED. The stack leak and the
+> unrunnable binary are the same bug.**
+>
+> Ran the instrumented build for the first time (rebuilt `popc.psv` so the
+> `accea93` genproc/do_asm/m_optimise ARM64-DIAG probes are actually in the
+> image, then `POP__as=… make stamp_srclib`). Findings:
+>
+> 1. **It is NOT in the M-instruction handlers.** The genproc `generate
+>    leaked` and m_optimise `do_premove leaked` probes never fired. `generate`
+>    and `m_optimise` are stack-balanced. So the earlier theory (broken
+>    M-handler in arm64/genproc.p) was wrong.
+>
+> 2. **It is the structure/literal emission chain.** The leaked items are
+>    `<false>` and the closure `<procedure %OP_CALL>` (`OP_CALL =
+>    do_call(%false,false%)`, m_optimise.p:977). These are *structure
+>    components* — a closure literal and its `false` frozvals — that the
+>    `genstructure` / `label_of` / `asm_outword` chain is supposed to convert
+>    to **asm symbol labels** but instead emits raw. `genstruct.p` is shared
+>    and works on x86_64, so the divergence is arm64-side.
+>
+> 3. **Three band-aids mask it, and they are what break the binary:**
+>    - `arm64/asmout.p` `outdatum` (commit 3e3dd24): substitutes a leaked
+>      `false`/`true`/`[]` with a label, and a leaked **procedure/vector with
+>      `0`** — i.e. writes a **null pointer** into the binary. `outdatum`
+>      itself is stack-balanced (peek+update, then `asmf_pr()`+`erasenum(n-1)`
+>      = n consumed), so it masks but does not itself leak.
+>    - `genstruct.p` `gen_prop_entries` (3e3dd24): "tolerate a false-leak in
+>      the table arg" — `() -> _tab; if isvector(_tab) … else 0`.
+>    - `arm64/genproc.p` `get_addressable_op` (~line 479): "defensive fallback
+>      if a Pop-11 boolean leaks here from the genstructure chain."
+>    Each converts a leaked value into a null pointer / placeholder. That is
+>    exactly why a "successfully built" `basepop11` cannot run: it is full of
+>    null pointers where procedure/structure references belong.
+>
+> 4. **Per-file attribution** (loop-top `consvector` drains to 0 each
+>    iteration, so file N+1's loop-top count == items file N leaked): all 285
+>    files leak ≥1; leak scales with file size. Top leakers: `lispcore.p`
+>    (136), `arm64/asignals.s` (107), `pop11_syntax.p` (99), `vm_plant.p`
+>    (73), `intvec.p` (64), `item.p` (56), `getstore.p` (52). A bare
+>    `constant` decl does not leak; the leak appears with procedure/closure
+>    literals (the baseline `<false>` is one per file).
+>
+> **The fix is upstream, not another band-aid.** The three workarounds above
+> must be *removed*, and the real defect found: why does the arm64 path feed
+> raw values (booleans, closures, vectors) into `asm_outword` instead of
+> labels? Recommended next action — convert the masking into a locator:
+> temporarily make `arm64/asmout.p` `outdatum` (and/or `asm_outword`) call
+> `mishap(v, 1, 'RAW VALUE TO outdatum')` instead of substituting, the moment
+> it sees a non-label (boolean/procedure/vector). The mishap backtrace names
+> the exact `genstruct.p` caller that passed a raw value — that call site (or
+> the arm64 `label_of`/`perm_const_lab` path it relies on) is the fix. This is
+> the "instrument asmf_pr to mishap with the call stack" recommendation from
+> the original triage, now narrowed to `outdatum` with a confirmed signature.
+>
+> Reproducer for a single leaked `<false>` (fast iteration, no full build):
+> `cd pop/src && POP__as=/usr/bin/aarch64-linux-gnu-as ../../poplog
+> ../../target/pop/popc -c -nosys -od /tmp allbutfirst.p allbutlast.p`
+> → `allbutlast.p` loop-top shows `{<false>}` (the item allbutfirst left).
+
+> **Update (2026-06-02) — backtrace captured, root cause documented.** Ran the
+> locator (temporary `mishap` in `outdatum` instead of the substitution
+> band-aid). The raw value enters via **`generate_closure`** (m_trans.p:2226) →
+> `genstructure` (genstruct.p:330) → `label_of(false, false)` returns `false`
+> (ident_labs.p:536) because `struct_label_prop(false)` was never seeded with
+> the `"false"` label. The seed mechanism — `poplink_unique_struct` (lib.p:170)
+> consumed by `setup_selected_consts()` (ident_labs.p:759) — is shared with the
+> working x86_64 build, so the divergence is *why the seed is ineffective on the
+> arm64 cross-compile*. Full chain, evidence, the three band-aids to remove, and
+> the fix plan are written up in **`PORTING-ARM64-BUG-false-label-leak.md`**.
+> Locator reverted; `stamp_popc` rebuilt clean. Next: the decisive probe
+> (print `struct_label_prop`/`poplink_unique_struct`/`word_identifier('false',
+> pop_section)` on both arches) named at the end of that doc.
+
+> **Update (2026-06-02, later) — probe run; the `genstructure(false)` root cause
+> is REFUTED.** Ran the decisive probe on both arm64 and x86_64 (rebuilt popc
+> for each, compiled the same files). Findings:
+> - `genstructure(false)` returns the correct label `c_false` **2928/2928** in a
+>   full arm64 build (`item==lab=<false>` every time). It is **not** the leak.
+> - `word_identifier('false', pop_section)` returns `false` and the seed shows
+>   `slp=false` *identically on both arches* — a **red herring**, not the
+>   divergence. By `genstructure` time `struct_label_prop(false)=c_false` on both.
+> - `asmf_pr` is shared (`lib.p:51` → `<false>`), so x86_64 never feeds a raw
+>   `false` to the asm layer; arm64 sometimes does. The divergence is therefore
+>   **arm64-specific**, on the quoted-literal emission path the locator backtrace
+>   showed: `pas_PUSHQ`/`getstr`/`push_str` (arm64 `genproc.p`) and the
+>   `mc_code_generator` `asm_outword` loop — **not** the shared structure chain.
+> - The `items-left` leak (≈291 files) persists and is unexplained by
+>   `genstructure(false)`; it is the real Phase 5 blocker.
+>
+> `PORTING-ARM64-BUG-false-label-leak.md` has been corrected (Correction box +
+> refined locus + revised fix plan). All probes reverted; arm64 `stamp_popc`
+> rebuilt clean; tree buildable. Next: diff x86_64-vs-arm64 emitted `.s` for one
+> closure-bearing file, and add a `stacklength()` delta probe around the arm64
+> `pas_PUSHQ`/`getstr` handlers to localize the imbalance.
+
 ---
 
 ## What was discovered before any code changes
