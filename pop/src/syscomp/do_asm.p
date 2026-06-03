@@ -25,48 +25,15 @@ define popc_compile_files(fname_list, pr_fname, include_list, other);
     lvars f, i, fname_list, include_list, other, procedure pr_fname;
     dlocal pop_default_type = '.p', proglist_state;
     for f in fname_list do
-        lvars _sl_loop = stacklength();
-        if _sl_loop /== 0 then
-            lvars _dv1 = consvector(_sl_loop);
-            printf(_sl_loop, _dv1, f,
-                   ';;; ARM64-DIAG loop-top f=%p stack(%p) contents=%p\n');
-        endif;
         pr_fname(f);
-        lvars _sl0 = stacklength();
-        if _sl0 /== 0 then
-            lvars _diag_v = consvector(_sl0);
-            printf(_sl0, _diag_v, f,
-                   ';;; ARM64-DIAG post-prfname f=%p stack(%p) contents=%p\n');
-        endif;
         proglist_new_state(f) -> proglist_state;
-        lvars _sl1 = stacklength();
-        if _sl1 /== 0 then
-            printf(_sl1, ';;; ARM64-DIAG after proglist_new_state: %p\n');
-        endif;
         other <> proglist -> proglist;
-        lvars _sl2 = stacklength();
-        if _sl2 /== 0 then
-            printf(_sl2, ';;; ARM64-DIAG after concat: %p\n');
-        endif;
         for i in rev(include_list) do
             "#_INCLUDE" :: (i :: proglist) -> proglist
         endfor;
-        lvars _sl3 = stacklength();
-        if _sl3 /== 0 then
-            printf(_sl3, ';;; ARM64-DIAG before comp_stream: %p\n');
-        endif;
         pop11_comp_stream();
         if stacklength() /== 0 then
-            ;;; arm64 port WIP: warn and drain instead of fatal mishap so the
-            ;;; rest of the source library still compiles. Items left on
-            ;;; stack are usually a sign of an M-handler that didn't balance.
-            lvars _i, _n = stacklength(), _items;
-            printf(_n, ';;; WARNING items-left after file: %p [');
-            consvector(_n) -> _items;
-            fast_for _i from 1 to _n do
-                printf(subscrv(_i, _items), ' %p');
-            endfor;
-            pr(' ]\n');
+            mishap(stacklength(), 'ITEMS LEFT ON STACK AFTER COMPILING FILE')
         endif
     endfor;
 

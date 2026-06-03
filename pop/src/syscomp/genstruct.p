@@ -676,12 +676,8 @@ define lconstant gen_prop_entries(prop_rec, firstentry_lab)
         genstructure(->> entry_key) -> pt_entry_key,
         genstructure() -> pt_default,
         genstructure() -> pt_count,
-        genstructure() -> pt_active;
-    ;;; arm64 port WIP: tolerate a false-leak in the table arg so the
-    ;;; rest of the file can still compile.  The table is normally a
-    ;;; vector whose datalength gives PT_HASH_LIM.
-    lvars _tab; () -> _tab;
-    if isvector(_tab) then datalength(_tab) else 0 endif -> tab_size;
+        genstructure() -> pt_active,
+        datalength() -> tab_size;   ;;; table -- only need size
 
     ;;; generate chain of entry records
 

@@ -4,11 +4,37 @@ Companion to `PORTING-ARM64-LINUX-RPI5.md`. Captures the state of an attempted
 smoke-test validation on branch `4-raspi5-arm64-port-round2`, host x86_64
 Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 
-**Status: Phase 2c (`make stamp_srclib`) blocked.** popc-compiler builds
-end-to-end and emits AArch64 assembly, but the emitted code has multiple
-classes of bug.  About 6 root-cause fixes already applied (uncommitted) push
-the build through the cross-popc stage; the remaining gaps below need
-engineering before a runnable `new_corepop` is reachable.
+**Status: Phase 2c (`make stamp_srclib`) ✅ PASSES (2026-06-02).** The stack-leak
+that blocked a clean source-library build is **fixed** (one line in
+`arm64/genproc.p` `outinst` — a spurious `false` arg to `asmf_printf` in the
+`#`-comment branch leaked onto the user stack, one per procedure). With that
+fixed, all three masking band-aids were removed and `do_asm.p` restored to its
+original **fatal** `ITEMS LEFT ON STACK` check; the full library now builds
+**exit 0, zero mishaps, zero assembler errors**. Both the `items-left` leak
+(≈291 files → 0) and the raw-values-to-`outdatum` corruption (16 → 0) were the
+same bug. Full write-up in `PORTING-ARM64-BUG-false-label-leak.md` (now marked
+RESOLVED). 
+
+**Stage advanced — `make stamp_new_corepop` ✅ + corepop runs under QEMU.**
+With the clean srclib, the cross-link produced a fresh arm64 `new_corepop`
+(`ELF 64-bit ARM aarch64`, NEEDS only libc/libm/ld-linux). Run under
+`qemu-aarch64-static` (`QEMU_LD_PREFIX=/usr/aarch64-linux-gnu`) it **executes
+real bootstrap work and exits cleanly** — 187 syscalls incl. `mmap`/`mprotect`,
+`rt_sigaction`, `uname`, 70× `openat` (path search), `brk`; **no segfault**
+(the broken codegen used to crash here). Strong evidence the codegen is correct.
+
+Build command (host x86_64, cross toolchain):
+```
+POP__cc="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed" \
+  POP__as=/usr/bin/aarch64-linux-gnu-as POP__ar=/usr/bin/aarch64-linux-gnu-ar \
+  make CC=aarch64-linux-gnu-gcc stamp_new_corepop
+```
+
+Next: build the full `basepop11` image (needs `libncurses6:arm64` +
+`libtinfo6:arm64` in the QEMU sysroot — see Stage 7.1) and run the 7.2 REPL
+smoke test (`2 + 2 =>` etc.) for observable output.
+
+The historical log below predates the fix; retained for context.
 
 > **Update (2026-05-15) — QEMU validation attempt: fruitless, root cause known.**
 >
@@ -125,6 +151,29 @@ engineering before a runnable `new_corepop` is reachable.
 > rebuilt clean; tree buildable. Next: diff x86_64-vs-arm64 emitted `.s` for one
 > closure-bearing file, and add a `stacklength()` delta probe around the arm64
 > `pas_PUSHQ`/`getstr` handlers to localize the imbalance.
+
+> **Update (2026-06-02, `.s` diff) — the two phenomena are SEPARATE; asm
+> corruption is tiny; the stack leak is the real blocker.** Captured emitted
+> assembly (`.a`) from clean arm64 and x86_64 popc for the same files and ran a
+> whole-library inventory of the `outdatum` band-aid's substitutions:
+> - **arm64 codegen is structurally sound** — correct per-procedure constant
+>   pool (PC-relative `ldr` loads, required on AArch64); `false/true/[]` →
+>   correct labels; most `.xword 0` are legitimate (rawstruct/stackmark, same on
+>   x86_64).
+> - **(A) raw-value-to-`outdatum` → null pointer is TINY:** 16 raw values
+>   library-wide, 9 are `false→c_false` (correct), only **7 genuinely corrupt**
+>   (6× `%OP_CALL` closure→0, 1× vector→0). Not ~285 files of damage.
+> - **(B) `items-left` stack leak is the real Phase 5 blocker and is unrelated
+>   to (A):** ≈285 files, values never reach `outdatum`. **Confirmed
+>   arm64-specific** — x86_64 leaves 0 items on the same files. `generate`/
+>   `m_optimise`/`outdatum` are all balanced, so the imbalance is in the
+>   per-procedure emission around them (suspect: post-`generate` literal/pdr
+>   emission in arm64 `mc_code_generator`).
+>
+> Bug doc updated (`Update 2` box + revised title/status). All captures used
+> throwaway assembler-wrapper scripts in `/tmp`; source tree clean, arm64
+> `stamp_popc` rebuilt. **Next: localize (B)** with a `stacklength()` delta probe
+> around `mc_code_generator`'s post-`generate` emission.
 
 ---
 

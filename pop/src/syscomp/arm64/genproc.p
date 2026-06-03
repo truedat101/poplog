@@ -476,12 +476,6 @@ enddefine;
 
 define lconstant get_addressable_op(opd, tmp);
     lvars opd, disp, opd1, type;
-    ;;; arm64 port WIP: defensive fallback if a Pop-11 boolean leaks here
-    ;;; from the genstructure chain.  Emit a placeholder rather than
-    ;;; mishaping so the rest of the file still compiles.
-    if isboolean(opd) then
-        return('[' >< tmp >< ']');
-    endif;
     returnif(isreg(opd))(opd);
     if isvector(opd) then
         if datalength(opd) = 1 then
@@ -1985,7 +1979,11 @@ define lconstant outinst(instr);
     else
         lvars i, n = datalength(instr);
         if opcode == "#" then
-            asmf_printf(false, '\t//');
+            ;;; NB: format has no %p, so pass no value arg -- a spurious `false`
+            ;;; here is never consumed by printf and leaks onto the user stack
+            ;;; (one per `#` comment instruction, i.e. per procedure), which was
+            ;;; the source of the `items-left after file` stack leak.
+            asmf_printf('\t//');
             for i from 2 to n do
                 asmf_printf(f_subv(i, instr), '\s%p');
             endfor;
