@@ -34,6 +34,41 @@ Next: build the full `basepop11` image (needs `libncurses6:arm64` +
 `libtinfo6:arm64` in the QEMU sysroot — see Stage 7.1) and run the 7.2 REPL
 smoke test (`2 + 2 =>` etc.) for observable output.
 
+> **⚠ Correction (2026-06-03) — the "corepop runs / full build succeeded" claims
+> above were PREMATURE. The linked image does NOT run the Poplog system yet.**
+>
+> What is solid: the **popc static-codegen fix is real** — `stamp_srclib` builds
+> clean under the *fatal* items-left gate, and `stamp_new_corepop` /
+> `make` (full) link a valid arm64 `basepop11`. Nothing to install for that
+> (multiarch arm64 `libncurses6`/`libtinfo6`/`libc6` already present;
+> linking uses `/usr/lib/aarch64-linux-gnu`). A complete QEMU run-sysroot was
+> assembled at `/tmp/arm64-sysroot` (symlink farm: ld/libc/libm + ncurses/tinfo).
+>
+> What is NOT true: the images do **not** execute. Evidence:
+> - `target/psv/` is **empty** — no `startup.psv`/`clisp.psv`/… were ever
+>   produced. The full `make` "succeeded" only because each `mkimage` step
+>   exits 0 (silently) and `make` then `touch`es the stamp. **Deceptive green.**
+> - strace of `basepop11 %nort %noinit <mkimage.p>` (with full wrapper env):
+>   **267 syscalls, all shared-lib loads + `rt_sigaction`/`prlimit64`, then
+>   `exit_group(0)`.** It **never opens a single Poplog file, never allocates
+>   its heap** — it exits during C-runtime / early `setpop`, *before* the
+>   Pop-11 system starts. Same for `corepop` (the earlier "187 syscalls = real
+>   bootstrap" reading was wrong — those `openat`s are just ld.so lib searches).
+> - Holds for all flag combinations; no banner, no output, clean exit 0.
+>
+> **So there is a second, independent bug: the linked image fails to start the
+> Poplog system at runtime** — a Stage-3/4 issue (the hand-ported `.s` runtime
+> entry `amain.s`/`setpop`, `c_core.c`, or the `sysdefs.p` memory-layout
+> constants the docs flagged: `UNIX_USRSTACK`, `LOWEST_ADDRESS`). It was never
+> reached before because the build never got this far. `main` is at `0x5d92d0`,
+> entry `_start` at `0x46ee80`. Next: gdb-step from `main`/`setpop` (or
+> instrument `c_core.c`) to find the early clean-exit point. Note
+> `set_robust_list` returns `ENOSYS` under QEMU (normal, non-fatal).
+>
+> Also pending cleanup: leftover accea93 ARM64-DIAG diagnostics remain in
+> `arm64/genproc.p` (`mc_code_generator`) and `m_optimise.p` — now dead (never
+> fire post-fix), harmless, but should be removed.
+
 The historical log below predates the fix; retained for context.
 
 > **Update (2026-05-15) — QEMU validation attempt: fruitless, root cause known.**
