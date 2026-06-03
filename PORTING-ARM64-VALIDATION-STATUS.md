@@ -4,6 +4,44 @@ Companion to `PORTING-ARM64-LINUX-RPI5.md`. Captures the state of an attempted
 smoke-test validation on branch `4-raspi5-arm64-port-round2`, host x86_64
 Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 
+> **Workflow update (2026-06-03) — debugging moved to real RPi5 hardware.**
+> A Pi 5 (DietPi, Debian 13 trixie, kernel 6.12, native `gdb`) is reachable over
+> SSH as `raspi5` (user `dietpi`). Cross-build on the x86_64 host, `rsync` the
+> tree to `~/poplog` on the Pi (sed the hardcoded path in the `poplog` wrapper:
+> `/home/dkords/.../poplog` → `/home/dietpi/poplog`), then run/debug **natively**.
+> Native gdb is far faster and more reliable than the qemu gdbstub, and avoids
+> qemu user-mode artifacts (e.g. the `linux_setper` execve re-exec). All crashes
+> below reproduce natively, so they are real bugs, not emulation artifacts.
+
+> **Runtime bring-up progress (2026-06-03) — two more real bugs fixed; basepop11
+> now executes far into startup.** With the codegen + stack-leak work done,
+> running the linked `basepop11` exposed runtime bugs, each fix advancing it:
+> 1. **Frame-size epilog bug** (`arm64/genproc.p`, `M_UNWIND_SF`): freed
+>    `(Nstkvars+1)*16`, treating every stkvar as a 16-byte slot, but
+>    `M_CREATE_SF` packs non-POP stkvars (e.g. `lstackmem` structs) 8 bytes each
+>    rounded to 16. For a proc with non-POP stkvars this over-freed by 16 bytes,
+>    restoring the saved LR from the wrong offset → return-to-garbage. Fixed by
+>    carrying the exact allocated byte count (`sf_var_bytes`) from CREATE to
+>    UNWIND. Advanced basepop11 from "exits cleanly during `Setpop_setup_system`"
+>    → "allocates heap, runs into execution."
+> 2. **`_move`/`_bfill` arg-order bug** (`arm64/amove.s`): both popped their USP
+>    args into exactly memmove/memset order (`x0=dst,x1=src,x2=n`) but then did a
+>    spurious `x0<->x2` (resp. `x0<->x1`) swap, calling `memmove(n,src,dst)` /
+>    `memset(val,dst,n)`. With `n`=0 (Prolog-area init) this became
+>    `memmove(NULL,…,huge)` → NULL-write segfault in `Area_expand`. The correct
+>    template is `_fill` right below them (no swap). Fixed by removing both
+>    swaps. Advanced past `Area_expand`.
+>
+> **Current crash (next):** an unhandled exception is raised during startup and
+> reaches `sys_exception_final` → `sys_pr_message` (errors.p:380), which crashes
+> walking the call stack: `_sframe!SF_OWNER` returns `popint 0` (not a procedure
+> record), so `call_pdr!PD_PROPS` (errors.p:544) dereferences 0x3-16. Two threads
+> to chase: (a) what exception is being raised (root cause), and (b) the
+> call-stack-frame layout bug in the reporter — `SF_OWNER` reading 0 implicates
+> the stack-frame owner placement (`M_CREATE_SF` `push_operand(PB)`) vs the
+> `SF_OWNER` field offset, and/or the callstack code in `aprocess.s`.
+> Both fixes are uncommitted in the working tree (`amove.s`, `genproc.p`).
+
 **Status: Phase 2c (`make stamp_srclib`) ✅ PASSES (2026-06-02).** The stack-leak
 that blocked a clean source-library build is **fixed** (one line in
 `arm64/genproc.p` `outinst` — a spurious `false` arg to `asmf_printf` in the

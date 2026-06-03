@@ -75,16 +75,17 @@ DEF_C_LAB (_smove)
 DEF_C_LAB (_imove)
 DEF_C_LAB (_dmove)
 DEF_C_LAB (_move)
-    ldr x0, [USP], #8          ;;; byte_count
-    ldr x1, [USP], #8          ;;; src
-    ldr x2, [USP]              ;;; dst
+    ;;; USP order is ( byte_count, src, dst ) with dst on TOP, so the pops
+    ;;; below already land args in memmove(dst, src, n) order. (The earlier
+    ;;; code mislabelled the stack as byte_count-on-top and added a spurious
+    ;;; x0<->x2 swap, which called memmove(byte_count, src, dst) -> NULL-dest
+    ;;; segfault.  cf. _fill below, which has the correct convention.)
+    ldr x0, [USP], #8          ;;; x0 = dst   (top of stack)
+    ldr x1, [USP], #8          ;;; x1 = src
+    ldr x2, [USP]              ;;; x2 = byte_count (peek; becomes result slot)
     add x3, x0, x2             ;;; dst + byte_count
-    str x3, [USP]              ;;; update dst on stack
-    ;;; memmove(dst, src, n): x0=dst=x2, x1=src=x1, x2=n=x0
-    mov x3, x0                 ;;; save byte_count
-    mov x0, x2                 ;;; dst
-    mov x2, x3                 ;;; n
-    ;;; x1 already has src
+    str x3, [USP]              ;;; update result on stack to dst + byte_count
+    ;;; x0=dst, x1=src, x2=byte_count already = memmove(dst, src, n)
     b memmove
 
 ;;; _bfill
@@ -92,14 +93,14 @@ DEF_C_LAB (_move)
 ;;;   ( fill_value, byte_count, dst )
 
 DEF_C_LAB (_bfill)
-    ldr x0, [USP], #8          ;;; fill_value (byte)
-    ldr x2, [USP], #8          ;;; byte_count
-    ldr x1, [USP], #8          ;;; dst
-    ;;; memset(dst, value, n): x0=dst=x1, x1=value=x0, x2=n=x2
-    mov x3, x0                 ;;; save fill_value
-    mov x0, x1                 ;;; dst
-    mov x1, x3                 ;;; value
-    ;;; x2 already has byte_count
+    ;;; USP order is ( fill_value, byte_count, dst ) with dst on TOP. The pops
+    ;;; below already land args in memset(dst, value, n) order, so no swap is
+    ;;; needed. (The earlier code mislabelled the stack and added a spurious
+    ;;; x0<->x1 swap -> memset(fill_value, dst, n), corrupting memory.)
+    ldr x0, [USP], #8          ;;; x0 = dst   (top of stack)
+    ldr x2, [USP], #8          ;;; x2 = byte_count
+    ldr x1, [USP], #8          ;;; x1 = fill_value
+    ;;; x0=dst, x1=value, x2=n already = memset(dst, value, n)
     b memset
 
 ;;; _ifill, _fill

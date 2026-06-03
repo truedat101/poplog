@@ -1456,6 +1456,9 @@ lvars
     ;;; Number of on-stack vars
     Nstkvars,
     Nregs,
+    ;;; Exact #bytes M_CREATE_SF allocated for POP stkvars + non-POP stkvars +
+    ;;; owner slot, so M_UNWIND_SF can free precisely the same amount.
+    sf_var_bytes,
 ;
 
 ;;; emit_stp_list / emit_ldp_list:
@@ -1535,6 +1538,19 @@ define M_CREATE_SF();
         -> Nstkvars -> Npopregs -> reg_locals -> ;
 
     listlength(reg_locals) -> Nregs;
+
+    ;;; Record the EXACT byte count this prologue allocates for stack vars +
+    ;;; owner, matching the allocation logic below: POP stkvars and the owner
+    ;;; use push_operand (16 bytes each); non-POP stkvars are a packed
+    ;;; 8-byte-each block rounded up to 16.  M_UNWIND_SF frees exactly this.
+    ;;; (The old (Nstkvars+1)*16 over-counted by treating non-POP stkvars as
+    ;;; 16 bytes each, corrupting the saved LR and crashing on return.)
+    lvars _nonpop_n = Nstkvars - Npopstkvars;
+    lvars _nonpop_bytes =
+        if _nonpop_n == 0 then 0
+        else (_nonpop_n * 8 + 15) && (~~15)
+        endif;
+    Npopstkvars * 16 + _nonpop_bytes + 16 -> sf_var_bytes;
 
     ;;; PD_REGMASK is a 16-bit field. AArch64 register numbers (e.g. x21
     ;;; would set bit 21 = 0x200000) overflow the short. The runtime code
@@ -1798,8 +1814,11 @@ define M_UNWIND_SF();
     ;;; the enclosing lblock. Actually, let me just adopt the same
     ;;; simple pattern as ARM32 but with 16-byte slots:
 
-    lvars total_bytes = (Nstkvars + 1) * 16;
-    gen_op_3(total_bytes, SP, SP, "add");
+    ;;; Free exactly what M_CREATE_SF allocated (POP stkvars + non-POP block +
+    ;;; owner).  Using sf_var_bytes instead of the old (Nstkvars+1)*16, which
+    ;;; over-counted whenever there were non-POP (e.g. lstackmem struct) stkvars
+    ;;; and so restored the saved LR from the wrong offset -> return to garbage.
+    gen_op_3(sf_var_bytes, SP, SP, "add");
 
     ;;; Pop dynamic locals (in reverse order)
     applist(rev(dlocal_labs), pop_operand);
