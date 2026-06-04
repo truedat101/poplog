@@ -35,18 +35,14 @@ DEF_C_LAB (_cmp)
 DEF_C_LAB (_icmp)
     stp x29, x30, [sp, #-16]!
     mov x29, sp
-    ldr x0, [USP], #8          ;;; byte count
-    ldr x1, [USP], #8          ;;; src2
-    ldr x2, [USP]              ;;; src1 (leave on stack for result)
-    ;;; memcmp(src1=x2, src2=x1, n=x0) -- reorder args:
-    ;;; C signature: memcmp(const void *s1, const void *s2, size_t n)
-    ;;; Pop stack order is: byte_count, src2, src1
-    ;;; so x0=byte_count, x1=src2, x2=src1
-    ;;; We need: x0=src1, x1=src2, x2=byte_count
-    mov x3, x0                 ;;; save byte_count
-    mov x0, x2                 ;;; s1 = src1
-    mov x2, x3                 ;;; n  = byte_count
-    ;;; x1 already has src2 (s2)
+    ;;; USP order is ( byte_count, src2, src1 ) with src1 on TOP, so the pops
+    ;;; below already land args in memcmp(s1, s2, n) order. (The earlier code
+    ;;; mislabelled the stack as byte_count-on-top and added a spurious x0<->x2
+    ;;; swap -> memcmp(byte_count, src2, src1), dereferencing the count.  cf.
+    ;;; _move / _bfill, fixed the same way.)
+    ldr x0, [USP], #8          ;;; x0 = src1   (top of stack) = memcmp s1
+    ldr x1, [USP], #8          ;;; x1 = src2                    = memcmp s2
+    ldr x2, [USP]              ;;; x2 = byte_count (peek; result slot) = memcmp n
     bl memcmp
     cmp x0, #0
     b.eq .Lcmp_true

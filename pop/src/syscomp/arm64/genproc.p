@@ -1449,16 +1449,15 @@ lvars
 
     ;;; These variables are set by M_CREATE_SF and used by M_UNWIND_SF
 
-    ;;; Names of dynamic local variables
-    dlocal_labs,
-    ;;; List of callee-saved registers to save/restore
-    save_reg_list,
-    ;;; Number of on-stack vars
-    Nstkvars,
-    Nregs,
-    ;;; Exact #bytes M_CREATE_SF allocated for POP stkvars + non-POP stkvars +
-    ;;; owner slot, so M_UNWIND_SF can free precisely the same amount.
-    sf_var_bytes,
+    ;;; Frame geometry recorded by M_CREATE_SF, read back by M_UNWIND_SF.
+    ;;; The frame is 8-byte-packed and SP-relative, matching the shared
+    ;;; STACK_FRAME struct (syscomp/symdefs.p) and sp_offset (m_trans.p).
+    ;;; See PORTING-ARM64-FRAME-CONTRACT.md.
+    sf_reg_locals,    ;;; register-locals, list order (pop regs first)
+    sf_Nstkvars,      ;;; total on-stack lvars (incl. m_trans alignment pad)
+    sf_Ndlocals,      ;;; dynamic-local slots
+    sf_Nregs,         ;;; register-local count
+    sf_frame_len,     ;;; pd_frame_len in words (== m_trans's; incl. return slot)
 ;
 
 ;;; emit_stp_list / emit_ldp_list:
@@ -1532,29 +1531,33 @@ enddefine;
 define M_CREATE_SF();
     lconstant popint_zero = popint(0);
     lvars reg_spec_id, Npopregs, Npopstkvars, reg_locals, n, regmask,
-          tmp, j;
+          tmp, j, dlocal_labs, Nstkvars, Nregs, Ndlocals, ix,
+          SFO = field_##("SF_OWNER"),
+          SFL = field_##("SF_LOCALS"),
+          SFR = field_##("SF_RETURN_ADDR"),
+          frame_len;
 
     explode(m_instr) -> reg_spec_id -> dlocal_labs -> Npopstkvars
         -> Nstkvars -> Npopregs -> reg_locals -> ;
 
     listlength(reg_locals) -> Nregs;
+    listlength(dlocal_labs) -> Ndlocals;
 
-    ;;; Record the EXACT byte count this prologue allocates for stack vars +
-    ;;; owner, matching the allocation logic below: POP stkvars and the owner
-    ;;; use push_operand (16 bytes each); non-POP stkvars are a packed
-    ;;; 8-byte-each block rounded up to 16.  M_UNWIND_SF frees exactly this.
-    ;;; (The old (Nstkvars+1)*16 over-counted by treating non-POP stkvars as
-    ;;; 16 bytes each, corrupting the saved LR and crashing on return.)
-    lvars _nonpop_n = Nstkvars - Npopstkvars;
-    lvars _nonpop_bytes =
-        if _nonpop_n == 0 then 0
-        else (_nonpop_n * 8 + 15) && (~~15)
-        endif;
-    Npopstkvars * 16 + _nonpop_bytes + 16 -> sf_var_bytes;
+    ;;; Canonical frame length in words -- identical to m_trans.p's pd_frame_len
+    ;;; (m_trans.p:2061): SF_LOCALS + Nstkvars + Ndlocals + Nregs - SF_RETURN_ADDR.
+    ;;; Nstkvars here already includes m_trans's STACK_ALIGN padding, so frame_len
+    ;;; is an even (16-byte-multiple) word count -- a single sub keeps SP aligned.
+    SFL + Nstkvars + Ndlocals + Nregs - SFR -> frame_len;
 
-    ;;; PD_REGMASK is a 16-bit field. AArch64 register numbers (e.g. x21
-    ;;; would set bit 21 = 0x200000) overflow the short. The runtime code
-    ;;; in pop/src/arm64/aprocess.s expects this mapping:
+    ;;; Hand the geometry to M_UNWIND_SF.
+    reg_locals -> sf_reg_locals;
+    Nstkvars   -> sf_Nstkvars;
+    Ndlocals   -> sf_Ndlocals;
+    Nregs      -> sf_Nregs;
+    frame_len  -> sf_frame_len;
+
+    ;;; PD_REGMASK bit-map (GC register scan). AArch64 register numbers would
+    ;;; overflow the 16-bit field, so aprocess.s expects this remap:
     ;;;   x21 -> bit 4, x22 -> bit 6, x23 -> bit 7, x24 -> bit 8, x25 -> bit 9
     0 -> regmask;
     fast_for n in reg_locals do
@@ -1568,20 +1571,11 @@ define M_CREATE_SF();
         endif -> bitpos;
         regmask || (1 << bitpos) -> regmask
     endfast_for;
-
     regmask -> idval(reg_spec_id);
 
-    ;;; Build the list of registers to save: the register locals + LR (x30)
-    ;;; On AArch64, register locals are in x19-x25 range (callee-saved)
-    [%
-        fast_for n in reg_locals do
-            reglabel(n);
-        endfast_for;
-        LR;    ;;; always save/restore LR
-    %] -> save_reg_list;
-
-    ;;; Save registers using stp pairs
-    emit_stp_push(save_reg_list);
+    ;;; Allocate the whole 8-byte-packed frame in one 16-aligned step.
+    ;;; SP now points at the SF_OWNER slot; all frame fields are [sp, #index*8].
+    gen_op_3(frame_len * WORD_OFFS, SP, SP, "sub");
 
     ;;; Setup PB: load the procedure record pointer.
     ;;; In the Poplog procedure layout, the procedure record pointer
@@ -1667,10 +1661,36 @@ define M_CREATE_SF();
     asm_emit("ldr", PB,
              current_pdr_exec_label >< ' - 8', 3);
 
-    ;;; Push dynamic locals
-    applist(dlocal_labs, push_operand);
+    ;;; SF_OWNER: store PB (just loaded above) at frame index SF_OWNER (= [sp]).
+    asm_emit("str", PB, '[sp, #' >< (SFO * WORD_OFFS) >< ']', 3);
 
-    ;;; Clear POP registers and allocate POP variables
+    ;;; SF_RETURN_ADDR: store LR (the return-into-caller that `bl` left in x30)
+    ;;; at the top frame slot, index frame_len-1.  This materialises the slot
+    ;;; the call-stack walkers / GC read, byte-identical to x86 `call`; the
+    ;;; matching `ret` reloads it from M_UNWIND_SF.
+    asm_emit("str", LR, '[sp, #' >< ((frame_len - 1) * WORD_OFFS) >< ']', 3);
+
+    ;;; Save the register-locals' INCOMING values into their reg slots (list
+    ;;; order: pop regs first), BEFORE clearing them below.  Reg region starts
+    ;;; just above the dlocals: SF_LOCALS + Nstkvars + Ndlocals.
+    SFL + Nstkvars + Ndlocals -> ix;
+    fast_for n in reg_locals do
+        asm_emit("str", reglabel(n), '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
+        ix + 1 -> ix;
+    endfast_for;
+
+    ;;; Store the dynamic-local save values into their slots (list order:
+    ;;; non-pop dlocals first, then pop, as the shared GC offsets assume).
+    ;;; Dlocal region starts at SF_LOCALS + Nstkvars.
+    SFL + Nstkvars -> ix;
+    fast_for n in dlocal_labs do
+        lvars dv = load_to_reg(n, R1);
+        asm_emit("str", dv, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
+        ix + 1 -> ix;
+    endfast_for;
+
+    ;;; Clear the POP register-locals (the registers themselves) to popint 0 --
+    ;;; the first Npopregs entries of reg_locals.
     false -> tmp;
     1 -> j;
     if Npopregs > 0 then
@@ -1686,150 +1706,49 @@ define M_CREATE_SF();
             endif;
         endfast_for;
     endif;
-    ;;; Allocate POP on-stack lvars (initialised to zero)
-    if not(tmp) and Npopstkvars > 0 then
-        R0 -> tmp;
-        gen_move(popint_zero, R0);
+
+    ;;; Initialise the POP on-stack lvars to popint 0; the non-POP ones are left
+    ;;; uninitialised (space already allocated by the single sub above).  Pop
+    ;;; stkvars occupy the high stkvar indices: SF_LOCALS + (Nstkvars-Npopstkvars)..
+    if Npopstkvars > 0 then
+        unless tmp then R0 -> tmp; gen_move(popint_zero, R0) endunless;
+        SFL + Nstkvars - Npopstkvars -> ix;
+        repeat Npopstkvars times
+            asm_emit("str", tmp, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
+            ix + 1 -> ix;
+        endrepeat;
     endif;
-    repeat Npopstkvars times push_operand(tmp) endrepeat;
-    ;;; Allocate non-POP on-stack lvars (uninitialised)
-    ;;; On AArch64: 16-byte aligned stack adjustments.
-    ;;; Each stkvar is 8 bytes; round up allocation to 16-byte boundary.
-    if Nstkvars /== Npopstkvars then
-        lvars extra_stkvars = Nstkvars - Npopstkvars;
-        lvars extra_bytes = extra_stkvars * 8;
-        ;;; Round up to 16-byte alignment
-        if (extra_bytes && 15) /== 0 then
-            (extra_bytes + 15) && (~~15) -> extra_bytes;
-        endif;
-        gen_op_3(extra_bytes, SP, SP, "sub");
-    endif;
-    ;;; Push the owner address
-    push_operand(PB);
 enddefine;
 
 ;;; {M_UNWIND_SF}
 ;;;     plant code to unwind a procedure stack frame
 
 define M_UNWIND_SF();
-    ;;; Remove owner address and on-stack vars (POP and non-POP)
-    ;;; On AArch64: each stack slot is 16 bytes (due to alignment in push_operand)
-    ;;; Owner = 1 slot, pop stkvars = Npopstkvars slots (each 16 bytes from push_operand)
-    ;;; Non-pop stkvars were allocated as a block rounded to 16 bytes.
-    ;;; The total to remove for owner + pop stkvars:
-    ;;;   (1 + Npopstkvars) * 16 bytes (from push_operand's 16-byte alignment)
-    ;;; plus the non-pop stkvars block.
-    ;;; Actually, we need to match what M_CREATE_SF allocated:
-    ;;; - Npopstkvars * 16 bytes (from push_operand)
-    ;;; - extra_bytes for non-pop stkvars (rounded to 16)
-    ;;; - 16 bytes for owner address (from push_operand)
-    ;;; Simplification: compute total and adjust sp once.
-    lvars npop_bytes = Nstkvars * 8;
-    ;;; Actually, re-examining: pop stkvars used push_operand (16 bytes each),
-    ;;; non-pop stkvars used gen_op_3 with (Nstkvars - Npopstkvars) * 8 rounded up.
-    ;;; Owner used push_operand (16 bytes).
-    ;;; To be safe and match exactly, we compute:
-    ;;; 1. Remove owner: add sp, sp, #16
-    ;;; 2. Remove non-pop stkvars: computed amount
-    ;;; 3. Remove pop stkvars (each was 16 bytes)
-    ;;; But we can combine into one add.
-    ;;; Wait - actually it's simpler to just reverse exactly what CREATE did:
+    lvars n, ix,
+          SFL = field_##("SF_LOCALS"),
+          frame_len = sf_frame_len;
 
-    ;;; Remove owner address (16 bytes from push_operand)
-    ;;; + all on-stack vars
-    lvars Npopstkvars_from_create;
-    ;;; We don't have Npopstkvars saved separately, but we have Nstkvars.
-    ;;; Looking at M_CREATE_SF: Npopstkvars uses push_operand (16 bytes each),
-    ;;; (Nstkvars - Npopstkvars) non-pop stkvars use gen_op_3 with 8 bytes each
-    ;;; rounded to 16.
-    ;;; Since we need both values, let's save Npopstkvars in a variable too.
-    ;;; Actually, looking at the ARM32 original, it just does:
-    ;;;   gen_op_3((Nstkvars + 1) * 4, SP, SP, "add");
-    ;;; This suggests that ALL stkvars (pop and non-pop) use the same size.
-    ;;; The +1 is for the owner address.
-    ;;; The ARM32 push_operand uses [sp, #-4]!, so each is 4 bytes.
-    ;;;
-    ;;; But on AArch64, push_operand uses [sp, #-16]! for 16-byte alignment!
-    ;;; So pop stkvars and owner are 16 bytes each, but non-pop stkvars
-    ;;; are allocated differently. This is a problem.
-    ;;;
-    ;;; REVISED APPROACH: For consistency and simplicity, use the same
-    ;;; 8-byte slots for everything on the Poplog-managed stack.
-    ;;; The system stack alignment requirement (16 bytes) applies to
-    ;;; SP at function call boundaries. Within a function, as long as
-    ;;; SP is aligned at calls, we can manage slots internally.
-    ;;;
-    ;;; Actually, AArch64 requires SP to be 16-byte aligned for ALL
-    ;;; stack accesses using SP as base. But we can use stur/ldur for
-    ;;; unaligned offsets, or maintain alignment another way.
-    ;;;
-    ;;; Simplest correct approach: keep everything 16-byte aligned.
-    ;;; Each push_operand uses 16 bytes. Non-pop stkvars rounded to 16.
-    ;;; Owner uses 16 bytes. Dynamic locals use 16 bytes each.
-    ;;;
-    ;;; Total to deallocate for stkvars + owner:
-    ;;;   16 (owner) + Npopstkvars * 16 + rounded_nonpop_bytes
-    ;;; But we don't have Npopstkvars in the unwind context!
-    ;;; The ARM32 code used (Nstkvars + 1) * 4 because all were 4 bytes.
-    ;;;
-    ;;; We need to save Npopstkvars between CREATE and UNWIND.
-    ;;; Let's add it as a saved variable. Or, better: compute the total
-    ;;; space at CREATE time and save it.
-    ;;;
-    ;;; Actually, re-reading the ARM32 code: it uses push_operand for
-    ;;; pop stkvars (4 bytes each via [sp, #-4]!) and gen_op_3 for
-    ;;; non-pop stkvars ((Nstkvars - Npopstkvars) * 4). The total for
-    ;;; unwind is (Nstkvars + 1) * 4 which equals:
-    ;;;   Npopstkvars * 4 + (Nstkvars - Npopstkvars) * 4 + 1 * 4
-    ;;; This only works because all are 4-byte slots.
-    ;;;
-    ;;; For AArch64 with 16-byte alignment on all push_operand calls,
-    ;;; this gets complicated. A MUCH simpler approach: use 8-byte slots
-    ;;; (the natural word size) and ensure SP is 16-byte aligned at
-    ;;; boundaries by padding. But Poplog manages its own stack and
-    ;;; doesn't need hardware alignment except at C calls.
-    ;;;
-    ;;; Actually, AArch64 hardware REQUIRES 16-byte alignment for SP
-    ;;; for ldr/str via SP. There IS a SCTLR flag but by default it's
-    ;;; enforced. So we MUST maintain 16-byte alignment.
-    ;;;
-    ;;; NEW APPROACH for push_operand/pop_operand: Use 8-byte slots
-    ;;; but keep total allocation 16-byte aligned. The CREATE/UNWIND
-    ;;; pair manages this:
-    ;;;   - The stp push already maintains 16-byte alignment (pairs).
-    ;;;   - Dynamic locals + pop stkvars + non-pop stkvars + owner
-    ;;;     need to be an even number of 8-byte slots total.
-    ;;;   - We can pad with an extra 8 bytes if the total is odd.
-    ;;;
-    ;;; BUT: push_operand and pop_operand are used individually for
-    ;;; dynamic locals and pop stkvars. Each one does str [sp, #-16]!
-    ;;; which maintains alignment. So: each push_operand is 16 bytes,
-    ;;; each pop_operand frees 16 bytes. The owner is 16 bytes.
-    ;;; Non-pop stkvars are rounded to 16 bytes. Total is correct.
-    ;;;
-    ;;; For unwind: we need to free:
-    ;;;   16 bytes (owner) + Npopstkvars * 16 + nonpop_rounded
+    ;;; Reverse M_CREATE_SF exactly, reading every value out of its 8-byte slot
+    ;;; before deallocating.  See PORTING-ARM64-FRAME-CONTRACT.md.
 
-    ;;; Simply use the stored total. We store total_stkvar_bytes in
-    ;;; the enclosing lblock. Actually, let me just adopt the same
-    ;;; simple pattern as ARM32 but with 16-byte slots:
+    ;;; Reload the return address (LR/x30) from SF_RETURN_ADDR (top slot,
+    ;;; index frame_len-1).  The following M_RETURN ( `ret` ) uses it.
+    asm_emit("ldr", LR, '[sp, #' >< ((frame_len - 1) * WORD_OFFS) >< ']', 3);
 
-    ;;; Free exactly what M_CREATE_SF allocated (POP stkvars + non-POP block +
-    ;;; owner).  Using sf_var_bytes instead of the old (Nstkvars+1)*16, which
-    ;;; over-counted whenever there were non-POP (e.g. lstackmem struct) stkvars
-    ;;; and so restored the saved LR from the wrong offset -> return to garbage.
-    gen_op_3(sf_var_bytes, SP, SP, "add");
+    ;;; Restore the register-locals from their reg slots, same order/offsets as
+    ;;; M_CREATE_SF saved them: SF_LOCALS + Nstkvars + Ndlocals ..
+    SFL + sf_Nstkvars + sf_Ndlocals -> ix;
+    fast_for n in sf_reg_locals do
+        asm_emit("ldr", reglabel(n), '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
+        ix + 1 -> ix;
+    endfast_for;
 
-    ;;; Pop dynamic locals (in reverse order)
-    applist(rev(dlocal_labs), pop_operand);
+    ;;; Restore PB to the caller's owner (its SF_OWNER one frame up, at
+    ;;; [sp + frame_len*8] == _caller_sp).  Read it before deallocating.
+    asm_emit("ldr", PB, '[sp, #' >< (frame_len * WORD_OFFS) >< ']', 3);
 
-    ;;; Restore registers using ldp pairs
-    emit_ldp_pop(save_reg_list);
-
-    ;;; Restore procedure base register from previous owner address
-    ;;; The owner address is at [sp] (top of the caller's frame)
-    ;;; On AArch64: load PB from the word at [sp]
-    gen_move({^SP}, PB);
+    ;;; Deallocate the whole frame in one step (keeps SP 16-aligned).
+    gen_op_3(frame_len * WORD_OFFS, SP, SP, "add");
 enddefine;
 
 endlblock;

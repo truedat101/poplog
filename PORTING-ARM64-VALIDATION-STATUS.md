@@ -84,6 +84,33 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > so the shared walkers/GC need no changes. Fix is localized to `M_CREATE_SF`,
 > `M_UNWIND_SF`, `push_operand`, `pop_operand` in `arm64/genproc.p`. All five
 > §7 questions resolved on paper. Ready to implement pending review.
+>
+> **Update (2026-06-03) — frame rewrite IMPLEMENTED and WORKS; basepop11 no
+> longer crashes.** Rewrote `M_CREATE_SF`/`M_UNWIND_SF` in `arm64/genproc.p` to
+> the canonical 8-byte-packed, SP-relative layout (D1): one `sub sp,#frame_len*8`
+> (frame_len recomputed identically to m_trans.p:2061 from the padded Nstkvars),
+> then `str` each field at `[sp,#index*8]` — `SF_OWNER` at index 0, LR at the
+> top `SF_RETURN_ADDR` slot (index frame_len-1), register-locals / dlocals / pop
+> stkvars at their m_trans indices; `M_UNWIND_SF` reloads LR + regs + caller's PB
+> and one `add sp`. Verified: srclib builds clean (0 items-left/errors); a
+> compiled prologue disassembles to exactly the §2 layout (e.g. `charout`:
+> `str x20,[sp]` owner, `str x30,[sp,#8]` return, epilog reloads from those +
+> `[sp,#16]` caller owner, `ret`). Net `genproc.p` −85 lines (removed the
+> 16-byte-slot cruft). The now-unused `push_operand`/`pop_operand`/
+> `emit_stp_push`/`emit_ldp_pop` remain as dead code (cleanup pending).
+>
+> A second instance of the `_move` arg-order bug was then exposed and fixed in
+> `arm64/amove.s`: the comparison primitives `_bcmp`/`_scmp`/`_cmp`/`_icmp` had
+> the same spurious `x0<->x2` swap → `memcmp(byte_count, src2, src1)`; removed it.
+>
+> **Result:** `basepop11` runs Pop-11 code end-to-end with **no segfault** — past
+> the call-stack-walk crash, into I/O setup — and the error reporter (which needs
+> the correct frame walk) now works. On a trivial `assert.p` it cleanly raises and
+> reports a **`DEVICE NEEDED`** mishap (`miscio.p:175`, `Check_device`) and exits
+> 1: a value passed where an I/O device is required isn't a device (also explains
+> the earlier no-stdout-output symptom). That I/O-device setup is the next bug —
+> a clean, named, non-crash error, on real Pi hardware via native gdb. Both fixes
+> (`genproc.p`, `amove.s`) uncommitted in the working tree.
 
 **Status: Phase 2c (`make stamp_srclib`) ✅ PASSES (2026-06-02).** The stack-leak
 that blocked a clean source-library build is **fixed** (one line in
