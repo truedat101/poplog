@@ -40,7 +40,50 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > call-stack-frame layout bug in the reporter — `SF_OWNER` reading 0 implicates
 > the stack-frame owner placement (`M_CREATE_SF` `push_operand(PB)`) vs the
 > `SF_OWNER` field offset, and/or the callstack code in `aprocess.s`.
-> Both fixes are uncommitted in the working tree (`amove.s`, `genproc.p`).
+> Both fixes are committed (`ab99219`).
+
+> **Update (2026-06-03, later) — the SF_OWNER=0 crash is the big one: arm64 stack
+> frames do not match the canonical Poplog `STACK_FRAME` layout.** Diagnosed on
+> the Pi with native gdb. The crash is the error reporter (`sys_pr_message`,
+> reached via `sys_exception_final` while trying to output via `charout`) walking
+> the call stack: `_caller_sp_flush() -> _sframe`, then `_sframe!SF_OWNER` returns
+> `popint 0` instead of a procedure record (the real owner, `c_charout`, sits 32
+> bytes away in the frame).
+>
+> Root cause: the **canonical frame is 8-byte-packed** (x86_64 `M_CREATE_SF`
+> uses `pushq` for regs/dlocals/pop-stkvars/owner and `subq (n)*8` for non-pop
+> stkvars; `STACK_FRAME` in `syscomp/symdefs.p` lays fields out 8 bytes apart:
+> `SF_RETURN_ADDR`@FP-8, `SF_OWNER`@FP, `SF_LOCALS`@FP+8). **arm64 uses 16-byte
+> slots** (`push_operand` = `str …,[sp,#-16]!`) to keep SP 16-aligned, producing
+> `owner,pad,return,pad` — doubled and mis-ordered. So every frame *consumer* —
+> the call-stack walkers (`errors.p`, `control.p`, `iscaller.p`,
+> `caller_valof.p`, `plogcore.p`), the GC frame scan (`gccopy.p`, `gcncopy.p`),
+> `_caller_sp`, and `m_trans.p`'s offset / `PD_FRAME_LEN` math — misreads arm64
+> frames. Procedure call/return is self-consistent (prologue/body/epilog agree),
+> which is why bring-up got this far; only frame *introspection* breaks.
+>
+> **Fix (substantial — the porting docs' "Hard" item):** rework the arm64
+> backend so frames match the canonical 8-byte-packed `STACK_FRAME`, while
+> keeping SP 16-aligned. The standard AArch64 approach: allocate the whole frame
+> once (`sub sp, sp, #rounded16`), set a frame-pointer register (x29) at the
+> `SF_OWNER` position, and access regs/dlocals/stkvars/owner via 8-byte offsets
+> from it — instead of incremental 16-byte `push_operand`s. Touches
+> `M_CREATE_SF`, `M_UNWIND_SF`, `push_operand`/`pop_operand`, and the frame-local
+> operand addressing in `arm64/genproc.p`; must keep `PD_FRAME_LEN` (computed by
+> shared `m_trans.p`) consistent. Reference: x86_64 `genproc.p` `M_CREATE_SF`
+> (1803) / `M_UNWIND_SF` (1859).
+>
+> **Contract written + design resolved (2026-06-03):** see
+> `PORTING-ARM64-FRAME-CONTRACT.md`. The frame must be **8-byte-packed,
+> SP-relative** (the 16-byte slots were never needed — `m_trans.p` already pads
+> `pd_frame_len` to 16 bytes via `STACK_ALIGN_BITS=128`, and AArch64 only needs
+> *SP* 16-aligned, not the slots). The only real arm64 difference is the return
+> address (`bl`→LR vs `call`→stack): the prologue stores LR into the
+> `SF_RETURN_ADDR` slot at `[SP+(pd_frame_len-1)*8]` (design **D1**), making
+> frames **byte-identical to x86_64** with identical `_caller_sp` arithmetic —
+> so the shared walkers/GC need no changes. Fix is localized to `M_CREATE_SF`,
+> `M_UNWIND_SF`, `push_operand`, `pop_operand` in `arm64/genproc.p`. All five
+> §7 questions resolved on paper. Ready to implement pending review.
 
 **Status: Phase 2c (`make stamp_srclib`) ✅ PASSES (2026-06-02).** The stack-leak
 that blocked a clean source-library build is **fixed** (one line in
