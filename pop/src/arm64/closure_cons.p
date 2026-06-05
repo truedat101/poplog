@@ -92,9 +92,10 @@ define Cons_closure(_nfroz) -> _clos;
         ;;; adr x0, .-N  (compute closure base address in x0)
         _adr_encode(_offs, _0) -> INSTR;
 
-        ;;; str x0, [x19, #-8]!  (push closure address on USP)
-        ;;; Encoding: 0xF81F8260
-        _16:F81F8260 -> INSTR;
+        ;;; str x0, [x19, #-8]!  (push closure address on USP, pre-index writeback)
+        ;;; Encoding: 0xF81F8E60 (idx=11 => writeback; 0xF81F8260 would be STUR
+        ;;; with NO writeback, leaving USP unchanged).
+        _16:F81F8E60 -> INSTR;
 
         ;;; Now load Exec_closure address from the data word.
         ;;; It is at frozvals[_nfroz], byte offset from closure base
@@ -128,9 +129,11 @@ define Cons_closure(_nfroz) -> _clos;
             _16:F9400001 _biset _shift(_shift(_fv_offs, _-3), _10)
                 -> INSTR;
 
-            ;;; str x1, [x19, #-8]!  (push frozval on USP)
-            ;;; Encoding: 0xF81F8261
-            _16:F81F8261 -> INSTR;
+            ;;; str x1, [x19, #-8]!  (push frozval on USP, pre-index writeback)
+            ;;; Encoding: 0xF81F8E61 (idx=11 => writeback; 0xF81F8261 would be
+            ;;; STUR with NO writeback, so every frozval would overwrite the
+            ;;; same slot and USP would never advance -> closure passes 0 args).
+            _16:F81F8E61 -> INSTR;
 
             _fv_offs _add _8 -> _fv_offs;
             _nfroz _sub _1 -> _nfroz;
