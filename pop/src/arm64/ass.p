@@ -385,6 +385,14 @@ lconstant
     ;;; Poplog uses x19 as its own "system stack pointer" to maintain
     ;;; compatibility with the VM model.  The hardware SP is used for
     ;;; C-interop frames only.
+    ;;; BUG #7 (TODO): this conflates the call frame with the Pop data stack --
+    ;;; runtime procs build their frame (saved FP/LR/PB) on x19, so `=>` eats it.
+    ;;; The fix is NOT a 1-line repoint to reg 31 (tried: breaks startup because
+    ;;; the frame LAYOUT/size must also match amisc.s _unwind_frame + the genproc.p
+    ;;; contract).  I_CREATE_SF/I_UNWIND_SF must be rewritten to the contract:
+    ;;; single `sub sp,sp,#(pd_frame_len*8)`, SF_OWNER(PB)@[sp+0],
+    ;;; SF_RETURN_ADDR(LR)@[sp+(len-1)*8], reg/dlocal slots per genproc.p, PB
+    ;;; loaded from the proc record ptr (not LR-offset).
 
     _USP    = _X19,             ;;; user stack pointer (x19)
     _PB     = _X20,             ;;; procedure base register (x20)
