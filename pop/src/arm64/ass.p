@@ -378,21 +378,16 @@ lconstant
 
     ;;; NAMED REGISTERS
 
-    _SP     = _X19,             ;;; NOT the hardware SP; this is the Poplog
-                                ;;; system stack pointer held in x19
-                                ;;; (callee-saved)
-    ;;; NOTE: On AArch64 the hardware stack pointer is the real SP register.
-    ;;; Poplog uses x19 as its own "system stack pointer" to maintain
-    ;;; compatibility with the VM model.  The hardware SP is used for
-    ;;; C-interop frames only.
-    ;;; BUG #7 (TODO): this conflates the call frame with the Pop data stack --
-    ;;; runtime procs build their frame (saved FP/LR/PB) on x19, so `=>` eats it.
-    ;;; The fix is NOT a 1-line repoint to reg 31 (tried: breaks startup because
-    ;;; the frame LAYOUT/size must also match amisc.s _unwind_frame + the genproc.p
-    ;;; contract).  I_CREATE_SF/I_UNWIND_SF must be rewritten to the contract:
-    ;;; single `sub sp,sp,#(pd_frame_len*8)`, SF_OWNER(PB)@[sp+0],
-    ;;; SF_RETURN_ADDR(LR)@[sp+(len-1)*8], reg/dlocal slots per genproc.p, PB
-    ;;; loaded from the proc record ptr (not LR-offset).
+    _SP     = _31,              ;;; the HARDWARE stack pointer (reg 31 == SP in
+                                ;;; the load/store + add/sub-immediate forms used
+                                ;;; for frames).  The procedure CALL FRAME lives
+                                ;;; here, SEPARATE from x19 (the Pop value stack,
+                                ;;; _USP).  I_CREATE_SF/I_UNWIND_SF now plant the
+                                ;;; genproc.p frame contract (SF_OWNER@[sp+0],
+                                ;;; SF_RETURN_ADDR@top, single sub sp).  NB the
+                                ;;; >4KB-frame paths would need extended-register
+                                ;;; sub/add (reg 31 is XZR there, not SP); those
+                                ;;; mishap for now.
 
     _USP    = _X19,             ;;; user stack pointer (x19)
     _PB     = _X20,             ;;; procedure base register (x20)
@@ -542,6 +537,14 @@ define drop_sub_imm(_dst, _src, _imm);
     lvars _dst, _src, _imm;
     drop_w(_SUB_IMM _biset _shift(_imm _bimask _16:FFF, _10)
                     _biset _shift(_src, _5) _biset _dst);
+enddefine;
+
+;;; drop_adr:
+;;;     ADR Xd, .   (Xd := address of THIS instruction; PC-relative offset 0)
+;;;     Encoding: 0001 0000 immlo(0) 10000 immhi(0) Rd  ==  0x10000000 | Rd
+define drop_adr(_dst);
+    lvars _dst;
+    drop_w(_16:10000000 _biset _dst);
 enddefine;
 
 ;;; drop_add_reg:
@@ -1792,114 +1795,138 @@ enddefine;
 ;;;       - Save dynamic locals
 ;;;       - Allocate on-stack lvars
 
-define I_CREATE_SF();
-    lvars   _offs, _num, _tmp;
+;;; I_create_sf_nreg:
+;;;     count the register-locals (x21..x25) recorded in _regmask.
+define lconstant I_create_sf_nreg() -> _nreg;
+    lvars _nreg = _0, _rnum = _21;
+    while _rnum _slteq _25 do
+        if _regmask _bitst _shift(_1, _rnum) then _nreg _add _1 -> _nreg endif;
+        _rnum _add _1 -> _rnum;
+    endwhile;
+enddefine;
 
-    ;;; Set the procedure base register.
-    ;;; On AArch64, we can't read PC directly. We use LR (x30) which
-    ;;; holds the return address, and subtract the known offset.
-    ;;; SUB PB, LR, #_pdr_offset
-    if _pdr_offset _slt _16:1000 then
-        drop_sub_imm(_PB, _LR, _pdr_offset);
+;;; I_create_sf_flen:
+;;;     frame length in words == the VM's _Nframewords / PD_FRAME_LEN
+;;;     (vm_conspdr.p: ##SF_LOCALS + Nstkvars + Nlocals + Nreg - ##SF_RETURN_ADDR).
+define lconstant I_create_sf_flen() -> _flen;
+    lvars _flen = ##SF_LOCALS _add _Nstkvars _add _Nlocals
+                    _add I_create_sf_nreg() _sub ##SF_RETURN_ADDR;
+enddefine;
+
+define I_CREATE_SF();
+    lvars _offs, _rnum, _ix, _flen = I_create_sf_flen();
+
+    ;;; --- Procedure base register: PB = the procedure record (pdr). ---
+    ;;; This MUST be the first instruction planted: `adr PB, .` yields the code
+    ;;; start (I_CREATE_SF is the first code instr, vm_conspdr.p), and
+    ;;; _pdr_offset = (code_start - pdr) + 8, so subtracting (_pdr_offset - 8)
+    ;;; gives pdr.  (The old `sub PB, LR, #..` was wrong: LR is the CALLER's
+    ;;; return address, not a point inside this procedure.)
+    drop_adr(_PB);
+    lvars _po = _pdr_offset _sub _8;
+    if _po _slt _16:1000 then
+        drop_sub_imm(_PB, _PB, _po);
     else
-        load_literal(_WK, _pdr_offset);
-        drop_sub_reg(_PB, _LR, _WK);
+        load_literal(_WK, _po);
+        drop_sub_reg(_PB, _PB, _WK);     ;;; PB(x20) is not sp, so reg form is OK
     endif;
 
-    ;;; Save LR and callee-saved registers that we use.
-    ;;; On AArch64 we use STP pairs for efficiency.
-    ;;; We always save LR (x30) and FP (x29) as a pair, plus any
-    ;;; register locals indicated by _regmask.
-    ;;; For now, save all potentially-used callee-saved regs in a
-    ;;; fixed sequence. TODO: optimise based on _regmask.
-    ;;; STP x29, x30, [SP, #-16]!
-    drop_stp_pre(_X29, _X30, _SP, _-16);
+    ;;; --- Allocate the whole frame in one step on the hardware sp. ---
+    ;;; (frame is 16-byte multiples via the VM's STACK_ALIGN padding, so a
+    ;;; single sub keeps sp 16-aligned.)
+    if @@(w)[_flen] _slt _16:1000 then
+        drop_sub_imm(_SP, _SP, @@(w)[_flen]);
+    else
+        ;;; NB drop_sub_reg encodes reg 31 as XZR not SP; >4KB runtime frames
+        ;;; would need the extended-register form.  These don't occur in
+        ;;; practice; fail loudly if one ever does.
+        mishap(0, 'I_CREATE_SF: stack frame exceeds 4KB');
+    endif;
 
-    ;;; Save any register locals.  Walk through possible registers
-    ;;; and save pairs.
-    ;;; _regmask has bit N set for each register to save (numbered by
-    ;;; the Poplog register encoding, i.e., X21=21, X22=22, etc.)
-    ;;; For simplicity, we save individual registers with STR pre-index.
-    lvars _rnum = _21;
+    ;;; --- SF_OWNER (= PB) at [sp + 0]. ---
+    drop_store_off(_PB, _SP, @@SF_OWNER);
+    ;;; --- SF_RETURN_ADDR (= LR) at the top slot [sp + (flen-1)*8]. ---
+    drop_store_off(_LR, _SP, @@(w)[_flen _sub _1]);
+
+    ;;; --- Save the incoming register-locals into their reg slots, at
+    ;;;     SF_LOCALS + Nstkvars + Nlocals + k. ---
+    _Nstkvars _add _Nlocals -> _ix;
+    _21 -> _rnum;
     while _rnum _slteq _25 do
         if _regmask _bitst _shift(_1, _rnum) then
-            drop_push_reg(_rnum, _SP);
+            drop_store_off(_rnum, _SP, @@SF_LOCALS[_ix]);
+            _ix _add _1 -> _ix;
         endif;
         _rnum _add _1 -> _rnum;
     endwhile;
 
-    ;;; Save dynamic locals
+    ;;; --- Save the dynamic-locals' current (old) values into their slots, at
+    ;;;     SF_LOCALS + Nstkvars + k (PD_TABLE order: non-pop first then pop). ---
     @@PD_TABLE -> _offs;
+    _Nstkvars -> _ix;
     fast_repeat _pint(_Nlocals) times
-        drop_load_off(_X1, _PB, _offs);
-        drop_load_off(_X0, _X1, _0);
-        drop_push_reg(_X0, _SP);
+        drop_load_off(_X1, _PB, _offs);             ;;; X1 = dlocal identifier
+        drop_load_off(_X0, _X1, _0);                ;;; X0 = its current idval
+        drop_store_off(_X0, _SP, @@SF_LOCALS[_ix]);
+        _ix _add _1 -> _ix;
         @@(w){_offs}++ -> _offs;
     endrepeat;
 
-    ;;; Clear and allocate POP on-stack lvars
-    _X0 -> _tmp;
+    ;;; --- Initialise the POP on-stack lvars to popint 0 (= 7); they occupy the
+    ;;;     high end of the stkvar region: SF_LOCALS + (Nstkvars - Npopstkvars).
+    ;;;     Non-pop on-stack lvars are left uninitialised (allocated by the sub). ---
     if _Npopstkvars _gr _0 then
-        ;;; Load popint 0 (tag bits only) = 7 on 64-bit with 3 tag bits
-        ;;; TODO: verify correct zero popint representation
-        load_literal(_tmp, _7);
+        load_literal(_X0, _7);
+        _Nstkvars _sub _Npopstkvars -> _ix;
         fast_repeat _pint(_Npopstkvars) times
-            drop_push_reg(_tmp, _SP);
+            drop_store_off(_X0, _SP, @@SF_LOCALS[_ix]);
+            _ix _add _1 -> _ix;
         endrepeat;
     endif;
-
-    ;;; Allocate non-Pop on-stack lvars
-    if _Nstkvars _gr _Npopstkvars then
-        lvars _nbytes = @@(w)[_Nstkvars _sub _Npopstkvars];
-        if _nbytes _slt _16:1000 then
-            drop_sub_imm(_SP, _SP, _nbytes);
-        else
-            load_literal(_WK, _nbytes);
-            drop_sub_reg(_SP, _SP, _WK);
-        endif;
-    endif;
-
-    ;;; Push the owner address (PB):
-    drop_push_reg(_PB, _SP);
 enddefine;
 
 
 define I_UNWIND_SF();
-    lvars _offs, _num;
+    lvars _offs, _rnum, _ix, _flen = I_create_sf_flen();
 
-    ;;; Remove owner address and on-stack lvars
-    lvars _frame_bytes = @@(w)[_Nstkvars _add _1];
-    if _frame_bytes _slt _16:1000 then
-        drop_add_imm(_SP, _SP, _frame_bytes);
-    else
-        load_literal(_WK, _frame_bytes);
-        drop_add_reg(_SP, _SP, _WK);
-    endif;
+    ;;; Reverse I_CREATE_SF, reading every value out of its slot before
+    ;;; deallocating (offset loads, so sp is invariant until the final add).
 
-    ;;; Restore dynamic locals (in reverse order)
-    @@PD_TABLE[_Nlocals] -> _offs;
-    fast_repeat _pint(_Nlocals) times
-        --@@(w){_offs} -> _offs;
-        drop_load_off(_X1, _PB, _offs);
-        drop_pop_reg(_X0, _SP);
-        drop_store_off(_X0, _X1, _0);
-    endrepeat;
+    ;;; Reload the return address (LR) from the top slot [sp + (flen-1)*8];
+    ;;; the following I_RETURN ( `ret` ) uses it.
+    drop_load_off(_LR, _SP, @@(w)[_flen _sub _1]);
 
-    ;;; Restore register locals
-    lvars _rnum = _25;
-    while _rnum _sgreq _21 do
+    ;;; Restore register-locals (same slots as I_CREATE_SF saved them).
+    _Nstkvars _add _Nlocals -> _ix;
+    _21 -> _rnum;
+    while _rnum _slteq _25 do
         if _regmask _bitst _shift(_1, _rnum) then
-            drop_pop_reg(_rnum, _SP);
+            drop_load_off(_rnum, _SP, @@SF_LOCALS[_ix]);
+            _ix _add _1 -> _ix;
         endif;
-        _rnum _sub _1 -> _rnum;
+        _rnum _add _1 -> _rnum;
     endwhile;
 
-    ;;; Restore FP and LR
-    drop_ldp_post(_X29, _X30, _SP, _16);
+    ;;; Restore the dynamic-locals' saved old values back into their idents.
+    @@PD_TABLE -> _offs;
+    _Nstkvars -> _ix;
+    fast_repeat _pint(_Nlocals) times
+        drop_load_off(_X1, _PB, _offs);             ;;; X1 = dlocal identifier
+        drop_load_off(_X0, _SP, @@SF_LOCALS[_ix]);  ;;; X0 = saved value
+        drop_store_off(_X0, _X1, _0);               ;;; restore idval
+        _ix _add _1 -> _ix;
+        @@(w){_offs}++ -> _offs;
+    endrepeat;
 
-    ;;; Restore procedure base register from the stack
-    ;;; (the caller's PB is at the top of the caller's frame)
-    drop_load_off(_PB, _SP, _0);
+    ;;; Restore the caller's PB (its SF_OWNER, one frame up at [sp + flen*8]).
+    drop_load_off(_PB, _SP, @@(w)[_flen]);
+
+    ;;; Deallocate the whole frame in one step.
+    if @@(w)[_flen] _slt _16:1000 then
+        drop_add_imm(_SP, _SP, @@(w)[_flen]);
+    else
+        mishap(0, 'I_UNWIND_SF: stack frame exceeds 4KB');
+    endif;
 enddefine;
 
 
