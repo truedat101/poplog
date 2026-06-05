@@ -1466,6 +1466,7 @@ lvars
     ;;; STACK_FRAME struct (syscomp/symdefs.p) and sp_offset (m_trans.p).
     ;;; See PORTING-ARM64-FRAME-CONTRACT.md.
     sf_reg_locals,    ;;; register-locals, list order (pop regs first)
+    sf_dlocal_labs,   ;;; dynamic-local save operands (so M_UNWIND_SF can restore)
     sf_Nstkvars,      ;;; total on-stack lvars (incl. m_trans alignment pad)
     sf_Ndlocals,      ;;; dynamic-local slots
     sf_Nregs,         ;;; register-local count
@@ -1596,11 +1597,12 @@ define M_CREATE_SF();
     SFL + Nstkvars + Ndlocals + Nregs - SFR -> frame_len;
 
     ;;; Hand the geometry to M_UNWIND_SF.
-    reg_locals -> sf_reg_locals;
-    Nstkvars   -> sf_Nstkvars;
-    Ndlocals   -> sf_Ndlocals;
-    Nregs      -> sf_Nregs;
-    frame_len  -> sf_frame_len;
+    reg_locals  -> sf_reg_locals;
+    dlocal_labs -> sf_dlocal_labs;
+    Nstkvars    -> sf_Nstkvars;
+    Ndlocals    -> sf_Ndlocals;
+    Nregs       -> sf_Nregs;
+    frame_len   -> sf_frame_len;
 
     ;;; PD_REGMASK bit-map (GC register scan). AArch64 register numbers would
     ;;; overflow the 16-bit field, so aprocess.s expects this remap:
@@ -1787,6 +1789,20 @@ define M_UNWIND_SF();
     SFL + sf_Nstkvars + sf_Ndlocals -> ix;
     fast_for n in sf_reg_locals do
         asm_emit("ldr", reglabel(n), '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
+        ix + 1 -> ix;
+    endfast_for;
+
+    ;;; Restore the dynamic-locals' saved (old) values back into their cells,
+    ;;; from the same slots M_CREATE_SF saved them: SF_LOCALS + Nstkvars + k.
+    ;;; This is the dlocal-context restore that x86_64 M_UNWIND_SF performs via
+    ;;; `applist(rev(dlocal_labs), asmPOPL)`; omitting it leaks dlocal values
+    ;;; (e.g. pop_expr_prec) across a returning call.  It MUST run before PB is
+    ;;; restored to the caller below, since a dlocal operand may be addressed
+    ;;; PB-relative (literal pool of THIS procedure).
+    SFL + sf_Nstkvars -> ix;
+    fast_for n in sf_dlocal_labs do
+        asm_emit("ldr", R1, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
+        gen_reg_store(R1, n, R5);
         ix + 1 -> ix;
     endfast_for;
 
