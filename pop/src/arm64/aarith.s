@@ -141,13 +141,15 @@ DEF_C_LAB (_pmult_testovf)
     asr x4, x5, #63
     cmp x3, x4
     b.eq .Lpmult_no_ovf
+    ;;; Pop true/false are the ADDRESSES of C_LAB(true)/C_LAB(false); load the
+    ;;; address (adrp+add), do not deref (the cell holds the C int 0/1).
     adrp x0, C_LAB(false)
-    ldr x0, [x0, #:lo12:C_LAB(false)]
+    add x0, x0, :lo12:C_LAB(false)
     str x0, [USP]
     ret
 .Lpmult_no_ovf:
     adrp x0, C_LAB(true)
-    ldr x0, [x0, #:lo12:C_LAB(true)]
+    add x0, x0, :lo12:C_LAB(true)
     str x0, [USP]
     ret
 
@@ -164,12 +166,12 @@ DEF_C_LAB (_pint_testovf)
     b.ne .Lpint_ovf
     str x1, [USP, #-8]!     /* push popint result */
     adrp x0, C_LAB(true)
-    ldr x0, [x0, #:lo12:C_LAB(true)]
+    add x0, x0, :lo12:C_LAB(true)
     str x0, [USP]
     ret
 .Lpint_ovf:
     adrp x0, C_LAB(false)
-    ldr x0, [x0, #:lo12:C_LAB(false)]
+    add x0, x0, :lo12:C_LAB(false)
     str x0, [USP]
     ret
 
@@ -191,12 +193,12 @@ DEF_C_LAB (_pshift_testovf)
     str x2, [USP, #8]
 .Lpshift_done:
     adrp x0, C_LAB(true)
-    ldr x0, [x0, #:lo12:C_LAB(true)]
+    add x0, x0, :lo12:C_LAB(true)
     str x0, [USP]
     ret
 .Lpshift_ovf:
     adrp x0, C_LAB(false)
-    ldr x0, [x0, #:lo12:C_LAB(false)]
+    add x0, x0, :lo12:C_LAB(false)
     ;;; pop one arg and replace the other
     str x0, [USP, #8]!
     ret

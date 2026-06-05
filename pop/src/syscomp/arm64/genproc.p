@@ -542,7 +542,7 @@ enddefine;
 ;;;     - Typed sub-word loads use ldrh/ldrb with sign extension via sxth/sxtb
 
 define lconstant load_to_reg(opd, tmp);
-    lvars opd, tmp, opd1, opcode, type, n;
+    lvars opd, tmp, opd1, opcode, type, rawtype, n, use_wreg = false;
     ;;; sp is "isreg" but can't appear as source operand of most arithmetic
     ;;; or store instructions on AArch64.  Move it into the requested
     ;;; scratch register first so callers can use it freely.
@@ -563,26 +563,34 @@ define lconstant load_to_reg(opd, tmp);
     get_addressable_op(opd, tmp) -> opd1;
     "ldr" -> opcode;
     if isvector(opd) and datalength(opd) == 3 then
-        f_subv(3, opd) && t_BASE_TYPE -> type;
-        if type == t_INT then "ldr"
-        elseif type == t_SHORT then "ldrh"
-        elseif type == t_BYTE then "ldrb"
+        f_subv(3, opd) -> rawtype;
+        rawtype && t_BASE_TYPE -> type;
+        ;;; NB: on LP64 (AArch64) t_WORD == t_DOUBLE, so a t_INT field is a
+        ;;; genuine 32-bit int and must be loaded as 32 bits (a 64-bit ldr
+        ;;; would pull in the adjacent field's bytes).  Signed -> ldrsw
+        ;;; (sign-extends into X); unsigned -> ldr into W (zero-extends X).
+        if type == t_INT then
+            if (rawtype && tv_SIGNED) /== 0 then "ldrsw"
+            else "ldr", true -> use_wreg
+            endif
+        elseif type == t_SHORT then "ldrh", true -> use_wreg
+        elseif type == t_BYTE then "ldrb", true -> use_wreg
         else
             mishap(opd, 1, 'Unhandled operand type');
         endif -> opcode;
     endif;
-    ;;; ldrb/ldrh require the destination register in W (32-bit) form.
-    if opcode == "ldrb" or opcode == "ldrh" then
+    ;;; ldrb/ldrh (and the unsigned 32-bit ldr of a t_INT) require the
+    ;;; destination register in W (32-bit) form.
+    if use_wreg then
         asm_emit(opcode, as_wreg(tmp), opd1, 3);
     else
         asm_emit(opcode, tmp, opd1, 3);
     endif;
-    ;;; Sign extension for sub-word types on AArch64
-    ;;; Use sxtb / sxth instructions instead of shift pairs
-    if opcode /== "ldr" then
-        f_subv(3, opd) -> type;
-        if (type && tv_SIGNED) /== 0 then
-            type && t_BASE_TYPE -> type;
+    ;;; Sign extension for sub-word ldrh/ldrb signed types on AArch64.
+    ;;; (t_INT is handled above via ldrsw; the unsigned ldr-into-W path
+    ;;; already zero-extends, so no fix-up is needed here.)
+    if opcode == "ldrh" or opcode == "ldrb" then
+        if (rawtype && tv_SIGNED) /== 0 then
             ;;; sxtb/sxth: destination Xd, source Wn (sign-extend low byte/half)
             if type == t_SHORT then
                 asm_emit("sxth", tmp, as_wreg(tmp), 3);
@@ -599,20 +607,24 @@ enddefine;
 ;;;     On AArch64: use str/strh/strb as appropriate for the type.
 
 define lconstant gen_reg_store(src, dst, tmp);
-    lvars src, dst, tmp, dst1, type, opcode;
+    lvars src, dst, tmp, dst1, type, opcode, use_wreg = false;
     get_addressable_op(dst, tmp) -> dst1;
     "str" -> opcode;
     if isvector(dst) and datalength(dst) == 3 then
         f_subv(3, dst) && t_BASE_TYPE -> type;
-        if type == t_INT then "str"
-        elseif type == t_SHORT then "strh"
-        elseif type == t_BYTE then "strb"
+        ;;; NB: on LP64 (AArch64) t_WORD == t_DOUBLE, so a t_INT field is a
+        ;;; genuine 32-bit int and MUST be stored as a 32-bit (W-register)
+        ;;; store -- a 64-bit str would overrun into the adjacent field.
+        if type == t_INT then "str", true -> use_wreg
+        elseif type == t_SHORT then "strh", true -> use_wreg
+        elseif type == t_BYTE then "strb", true -> use_wreg
         else
             mishap(dst, 1, 'Unhandled operand type');
         endif -> opcode;
     endif;
-    ;;; strb/strh require the source register in W (32-bit) form.
-    if opcode == "strb" or opcode == "strh" then
+    ;;; sub-word stores (str/strh/strb of t_INT/t_SHORT/t_BYTE) require the
+    ;;; source register in W (32-bit) form.
+    if use_wreg then
         asm_emit(opcode, as_wreg(src), dst1, 3);
     else
         asm_emit(opcode, src, dst1, 3);
@@ -1514,6 +1526,40 @@ define lconstant emit_ldp_pop(reg_list);
 enddefine;
 
 
+;;; gen_sp_adjust:
+;;;     Emit a DIRECT-immediate SP adjustment for frame alloc/dealloc:
+;;;         sub/add sp, sp, #nbytes
+;;;     -opcode- is "sub" (allocate) or "add" (deallocate).
+;;;
+;;;     This MUST NOT route the constant through load_to_reg/get_operand2,
+;;;     because those materialise a non-small immediate from the literal
+;;;     pool via PB (`ldr Xt, [PB, #off]`).  During M_UNWIND_SF, PB has
+;;;     already been restored to the *caller's* owner (NULL at the top of
+;;;     runtime startup), so a PB-relative load of the frame size faults.
+;;;     A direct add/sub immediate depends on nothing but SP -- matching the
+;;;     single rounded allocation specified in PORTING-ARM64-FRAME-CONTRACT.md.
+;;;
+;;;     AArch64 add/sub take a 12-bit unsigned immediate, optionally shifted
+;;;     left by 12.  nbytes is a multiple of 16 (STACK_ALIGN); cover the full
+;;;     24-bit range with at most two instructions.
+define lconstant gen_sp_adjust(nbytes, opcode);
+    lvars nbytes, opcode, low = nbytes && 16:FFF, high = nbytes && 16:FFF000;
+    if nbytes < 0 then
+        mishap(nbytes, 1, 'gen_sp_adjust: negative frame size');
+    elseif nbytes <= 16:FFF then
+        asm_emit(opcode, "sp", "sp", '#' >< nbytes, 4);
+    elseif (nbytes && 16:FFFFFF) == nbytes then
+        ;;; > 4095 bytes: emit the high (<<12) part, then any low 12 bits.
+        asm_emit(opcode, "sp", "sp", '#' >< (high >> 12) >< ', lsl #12', 4);
+        if low /== 0 then
+            asm_emit(opcode, "sp", "sp", '#' >< low, 4);
+        endif;
+    else
+        mishap(nbytes, 1, 'gen_sp_adjust: frame too large for direct immediate');
+    endif;
+enddefine;
+
+
 ;;; {M_CREATE_SF <reg_locals> <Npopreg> <Nstkvars> <Npopstkvars>
 ;;;             <dlocal_labs> <ident reg_spec>}
 ;;;     plant code to construct procedure stack frame
@@ -1575,7 +1621,8 @@ define M_CREATE_SF();
 
     ;;; Allocate the whole 8-byte-packed frame in one 16-aligned step.
     ;;; SP now points at the SF_OWNER slot; all frame fields are [sp, #index*8].
-    gen_op_3(frame_len * WORD_OFFS, SP, SP, "sub");
+    ;;; Direct immediate -- must not go via PB's literal pool (see gen_sp_adjust).
+    gen_sp_adjust(frame_len * WORD_OFFS, "sub");
 
     ;;; Setup PB: load the procedure record pointer.
     ;;; In the Poplog procedure layout, the procedure record pointer
@@ -1748,7 +1795,9 @@ define M_UNWIND_SF();
     asm_emit("ldr", PB, '[sp, #' >< (frame_len * WORD_OFFS) >< ']', 3);
 
     ;;; Deallocate the whole frame in one step (keeps SP 16-aligned).
-    gen_op_3(frame_len * WORD_OFFS, SP, SP, "add");
+    ;;; Direct immediate -- PB has already been restored to the caller's owner
+    ;;; above, so the frame size MUST NOT be loaded via PB (see gen_sp_adjust).
+    gen_sp_adjust(frame_len * WORD_OFFS, "add");
 enddefine;
 
 endlblock;

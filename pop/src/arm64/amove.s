@@ -46,14 +46,16 @@ DEF_C_LAB (_icmp)
     bl memcmp
     cmp x0, #0
     b.eq .Lcmp_true
+    ;;; Pop `false` is the ADDRESS of C_LAB(false) (that address is the boolean
+    ;;; value the compiler/VM use), NOT its contents -- the cell holds the C int
+    ;;; 0.  So load the address (adrp+add), never deref it.  cf. amisc.s/afloat.s
+    ;;; which spell the same value `.xword C_LAB(false)`.
     adrp x0, C_LAB(false)
     add  x0, x0, :lo12:C_LAB(false)
-    ldr  x0, [x0]
     b .Lcmp_done
 .Lcmp_true:
     adrp x0, C_LAB(true)
     add  x0, x0, :lo12:C_LAB(true)
-    ldr  x0, [x0]
 .Lcmp_done:
     str x0, [USP]
     ldp x29, x30, [sp], #16
