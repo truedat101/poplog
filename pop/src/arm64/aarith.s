@@ -164,10 +164,13 @@ DEF_C_LAB (_pint_testovf)
     orr x1, x1, #3          /* add pop tag */
     cmp x2, x0              /* did we lose bits? */
     b.ne .Lpint_ovf
-    str x1, [USP, #-8]!     /* push popint result */
+    str x1, [USP]           /* popint replaces the arg in its slot (-> USP[8]) */
     adrp x0, C_LAB(true)
     add x0, x0, :lo12:C_LAB(true)
-    str x0, [USP]
+    str x0, [USP, #-8]!     /* push true on top: USP[0]=true, USP[8]=popint.
+                               (The old order pushed the popint then overwrote
+                               it with true at USP[0], losing the popint and
+                               leaving the raw machine int below.) */
     ret
 .Lpint_ovf:
     adrp x0, C_LAB(false)
