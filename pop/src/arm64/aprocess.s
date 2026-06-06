@@ -42,120 +42,117 @@ lconstant macro MOVFL   = "ldrb";
     .file   "aprocess.s"
     .text
 
-    /* Swap out (suspend) process
+    /* --- Swap out (suspend) the live call stack into the process record ---
+
+       Frames live on the hardware sp, which AArch64 requires to be 16-byte
+       aligned at EVERY sp-based access.  Per the arm64 frame contract
+       (ass.p I_CREATE_SF / genproc.p M_CREATE_SF) sp points at the frame base:
+         [sp + 0]          = SF_OWNER (PB)
+         [sp + 8 + i*8]    = SF_LOCALS[i]: on-stack lvars (Nstkvars), then
+                             dynamic-local saved-old idvals (Nlocals), then
+                             register-local saved values (Nreg)
+         [sp + (flen-1)*8] = SF_RETURN_ADDR (LR)
+       flen = Nstkvars + Nlocals + Nreg + 2 and is always even, so each frame
+       is a whole number of 16-byte units.  We read each frame via a cursor
+       register (x4) plus fixed sp offsets and advance sp only by the WHOLE
+       frame (flen*8) -- never the 8-byte-at-a-time pops that would leave sp
+       8-misaligned and raise a SIGBUS.
+
+       Record format (written here, read back verbatim by _swap_in_callstack),
+       one block per frame filled upward from x3:
+         [+0]  relative return address (LR - PB)
+         [+8]  owner (PB)
+         [+16] on-stack lvar values         (Nstkvars)
+         [..]  dynamic-local current idvals  (Nlocals, PD_TABLE order)
+         [..]  register-local current values (Nreg, x21..x25 order)
+
+       On entry x30 = resume address into the immediate caller and PB = that
+       caller's PB (the first frame); later frames take the resume address from
+       the frame just consumed (its SF_RETURN_ADDR) and PB from the next
+       frame's SF_OWNER.
     */
 DEF_C_LAB (_swap_out_callstack)
-    ;;; load process from user stack
-    ldr  x0, [USP]
-    ldr  x3, [x0, #_PS_CALLSTACK_LIM]
-    str  x3, [x0, #_PS_CALLSTACK_PARTIAL]
-    b so_test_finished
+    ldr   x0, [USP]                     ;;; process record
+    ldr   x3, [x0, #_PS_CALLSTACK_LIM]  ;;; record write ptr (fills downward)
+    str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    b     so_test_finished
 
 so_loop:
-    ;;; make lr relative
-    sub   x30, x30, PB
+    ldr   PB, [SP]                      ;;; PB = SF_OWNER of current frame
+    sub   x30, x30, PB                  ;;; make resume address relative
 
-    ;;; If needed run dlocal expressions
-    ldrb w1, [PB, #_PD_FLAGS]
-    tst  w1, #_:M_PD_PROC_DLEXPR_CODE
-    b.ne so_do_dlexpr
+    ldrb  w1, [PB, #_PD_FLAGS]
+    tst   w1, #_:M_PD_PROC_DLEXPR_CODE
+    b.ne  so_do_dlexpr
 
 so_cont:
-    ;;; Continue swap out after running dlocal expressions
-    ;;; Stack pointer here still points to the stack frame
-
-    MOVFL w1, [PB, #_PD_FRAME_LEN]
-    ;;; Frame length is in words; shift left by 3 for 8-byte words
-    sub   x3, x3, x1, lsl #3
+    MOVFL w6, [PB, #_PD_FRAME_LEN]      ;;; flen (words; byte field)
+    sub   x3, x3, x6, lsl #3            ;;; reserve this frame's slot in record
     str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
+    str   x30, [x3, #0]                 ;;; relative return address
+    str   PB,  [x3, #8]                 ;;; owner
+    add   x3, x3, #16
 
-    str   x30, [x3], #8
-    str   PB,  [x3], #8
-    add   SP, SP, #16
+    add   x4, SP, #8                    ;;; x4 -> SF_LOCALS[0] (frame read cursor)
 
-    ;;; Save on-stack lvars into the process record
-
-    MOVFL w0, [PB, #_PD_NUM_STK_VARS]
-    cbz   w0, do_save_dl
-l_save_loop:
-    ldr   x12, [SP], #8
+    ;;; on-stack lvars: frame -> record
+    MOVFL w5, [PB, #_PD_NUM_STK_VARS]
+    cbz   w5, so_save_dl
+so_lv_loop:
+    ldr   x12, [x4], #8
     str   x12, [x3], #8
-    subs  w0, w0, #1
-    b.ne  l_save_loop
-do_save_dl:
-    ;;; Save dynamic locals
+    subs  w5, w5, #1
+    b.ne  so_lv_loop
 
-    ;;;   test if any
+so_save_dl:
+    ;;; dynamic locals: current idval -> record, frame's saved-old -> ident
+    MOVFL w5, [PB, #_PD_NLOCALS]
+    cbz   w5, so_save_regs
+    add   x2, PB, #_PD_TABLE
+so_dl_loop:
+    ldr   x1,  [x2], #8                 ;;; identifier (PD_TABLE forward)
+    ldr   x12, [x1]                     ;;; current idval
+    str   x12, [x3], #8                 ;;;   -> record
+    ldr   x12, [x4], #8                 ;;; saved-old value from frame slot
+    str   x12, [x1]                     ;;;   -> identifier
+    subs  w5, w5, #1
+    b.ne  so_dl_loop
 
-    MOVFL w0, [PB, #_PD_NLOCALS]
-    cbz   w0, perm_reg_save
-
-    ;;; Compute pointer to end of PD_TABLE array
-    ;;; Each entry is 8 bytes (pointer-sized)
-    add   x2, PB, x0, lsl #3
-    add   x2, x2, #(_PD_TABLE - 8)
-
-dl_save_loop:
-    ;;;      save idval in process record and restore previous from stack
-
-    ldr   x1,  [x2], #-8
-    ldr   x12, [x1]
-    str   x12, [x3], #8
-    ldr   x12, [SP], #8
-    str   x12, [x1]
-
-    subs  w0, w0, #1
-    b.ne  dl_save_loop
-
-perm_reg_save:
-    ;;; Save permanent registers to process struct, restore
-    ;;; previous values from stack frame
-    ;;; Bit positions in _PD_REGMASK:
-    ;;;   bit 9 = x25, bit 8 = x24, bit 7 = x23,
-    ;;;   bit 6 = x22, bit 4 = x21
-
-    ldrh  w0, [PB, #_PD_REGMASK]
-
-    ;;; bit 9 -> x25
-    tst   w0, #512
+so_save_regs:
+    ;;; register locals x21..x25 (PD_REGMASK remap: x21=bit4, x22=bit6,
+    ;;; x23=bit7, x24=bit8, x25=bit9 -- see genproc.p M_CREATE_SF).  Save the
+    ;;; current value into the record, restore the frame's saved value into the
+    ;;; register.  Ascending order matches the frame reg-slot order + cursor.
+    ldrh  w5, [PB, #_PD_REGMASK]
+    tst   w5, #16                       ;;; bit 4 -> x21
     b.eq  1f
-    str   x25, [x3], #8
-    ldr   x25, [SP], #8
+    str   x21, [x3], #8
+    ldr   x21, [x4], #8
 1:
-    ;;; bit 8 -> x24
-    tst   w0, #256
+    tst   w5, #64                       ;;; bit 6 -> x22
     b.eq  2f
-    str   x24, [x3], #8
-    ldr   x24, [SP], #8
+    str   x22, [x3], #8
+    ldr   x22, [x4], #8
 2:
-    ;;; bit 7 -> x23
-    tst   w0, #128
+    tst   w5, #128                      ;;; bit 7 -> x23
     b.eq  3f
     str   x23, [x3], #8
-    ldr   x23, [SP], #8
+    ldr   x23, [x4], #8
 3:
-    ;;; bit 6 -> x22
-    tst   w0, #64
+    tst   w5, #256                      ;;; bit 8 -> x24
     b.eq  4f
-    str   x22, [x3], #8
-    ldr   x22, [SP], #8
+    str   x24, [x3], #8
+    ldr   x24, [x4], #8
 4:
-    ;;; bit 5 currently not needed
-    ;;; tst   w0, #32
-    ;;; b.eq  5f
-    ;;; str   ..., [x3], #8
-    ;;; ldr   ..., [SP], #8
-    ;;; 5:
-
-    ;;; bit 4 -> x21
-    tst   w0, #16
-    b.eq  6f
-    str   x21, [x3], #8
-    ldr   x21, [SP], #8
-6:
-    ;;; Restore LR and PB from the caller's stack frame
-    ldr   x30, [SP], #8
-    ldr   PB,  [SP]
+    tst   w5, #512                      ;;; bit 9 -> x25
+    b.eq  5f
+    str   x25, [x3], #8
+    ldr   x25, [x4], #8
+5:
+    ;;; advance sp past the whole (16-aligned) frame; pick up the next frame's
+    ;;; resume address from this frame's SF_RETURN_ADDR (now at [sp-8]).
+    add   SP, SP, x6, lsl #3
+    ldr   x30, [SP, #-8]
 
 so_test_finished:
     ldr   x0, [USP]
@@ -164,7 +161,14 @@ so_test_finished:
     cmp   x3, x1
     b.hi  so_loop
 
-    ;;; Finished, save flags and chain to procedure on user stack
+    ;;; Finished.  sp now sits at the pre-existing (un-saved) frame that we are
+    ;;; about to resume; restore ITS procedure base from its SF_OWNER at [sp+0].
+    ;;; The usual chained trampoline (identfn) is a leaf `ret` that does NOT
+    ;;; restore PB, and the resumed code may use PB immediately; a non-leaf
+    ;;; chained proc restores PB via its own epilogue, so this is harmless there.
+    ldr   PB, [SP]
+
+    ;;; save flags and chain to procedure on user stack
     add   USP, USP, #8
     mov   x1, #0
     str   x1, [x0, #_PS_CALLSTACK_PARTIAL]
@@ -175,7 +179,7 @@ so_test_finished:
 
 so_do_dlexpr:
     str   x30, [x0, #_PS_PARTIAL_RETURN]
-    ;;; Jump to suspend code
+    ;;; Jump to suspend code (sp left at the frame base, frame intact)
     ldr   x16, [PB, #_PD_EXIT]
     sub   x16, x16, #(BRANCH_std << 1)
     br    x16
@@ -184,110 +188,100 @@ DEF_C_LAB (_swap_out_continue)
     ldr   x0, [USP]
     ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
     ldr   x30, [x0, #_PS_PARTIAL_RETURN]
-    b so_cont
+    b     so_cont
 
-    ;;; Swap in (resume) process
+    /* --- Swap in (resume) a saved call stack, rebuilding frames on sp ---
+       Reads the record written by _swap_out_callstack and reconstructs each
+       frame per the arm64 contract, allocating sp in whole 16-aligned frames
+       (no 8-byte pushes, which would 8-misalign sp).  Frames are processed
+       from PS_STATE (outermost) upward, so the outermost lands deepest and the
+       innermost ends on top, where execution resumes.
+    */
 DEF_C_LAB (_swap_in_callstack)
-    ;;; load process from user stack
-    ldr   x0, [USP]
-    ldr   x3, [x0, #_PS_STATE]
+    mov   x8, x30                       ;;; x8 = caller-return: becomes the SF_RETURN_ADDR
+                                        ;;;   of the OUTERMOST restored frame (the resume
+                                        ;;;   point in whoever called _swap_in_callstack).
+    ldr   x0, [USP]                     ;;; process record
+    ldr   x3, [x0, #_PS_STATE]          ;;; record read ptr (outermost first)
     str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
-    b si_test_finished
+    b     si_test_finished
 
 si_loop:
-    str   x30, [SP, #-16]!
-    ldr   PB,  [x3, #8]
-    MOVFL w1, [PB, #_PD_FRAME_LEN]
-    ;;; Advance x3 by frame_len words (8 bytes each)
-    add   x3, x3, x1, lsl #3
-    str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
-    sub   x3, x3, #8
+    ldr   x30, [x3, #0]                 ;;; this frame's saved RESUME addr (relative)
+    ldr   PB,  [x3, #8]                 ;;; owner (record [+8])
+    MOVFL w6, [PB, #_PD_FRAME_LEN]      ;;; flen
+    sub   SP, SP, x6, lsl #3            ;;; allocate the whole frame (16-aligned)
+    str   PB, [SP]                      ;;; SF_OWNER at [sp+0]
+    ;;; SF_RETURN_ADDR (where THIS frame RETURNS) = the next-outer frame's resume
+    ;;; addr, carried in x8.  saved_return[i] is where frame i RESUMES (the entry
+    ;;; trampoline / where frame i-1 returns), NOT frame i's own return -- so it
+    ;;; is shifted by one relative to the SF_RETURN_ADDR slots.
+    sub   x9, x6, #1
+    str   x8, [SP, x9, lsl #3]
+    add   x8, x30, PB                   ;;; x8 = THIS frame's resume (absolute), carried on
+    add   x4, SP, #8                    ;;; frame write cursor -> SF_LOCALS[0]
+    add   x2, x3, #16                   ;;; record read cursor -> lvars
 
-    ;;; Restore registers from process record and store values
-    ;;; to stack
+    ;;; on-stack lvars: record -> frame
+    MOVFL w5, [PB, #_PD_NUM_STK_VARS]
+    cbz   w5, si_restore_dl
+si_lv_loop:
+    ldr   x12, [x2], #8
+    str   x12, [x4], #8
+    subs  w5, w5, #1
+    b.ne  si_lv_loop
 
-    ldrh  w0, [PB, #_PD_REGMASK]
+si_restore_dl:
+    ;;; dynamic locals: current idval -> frame slot, record value -> identifier
+    MOVFL w5, [PB, #_PD_NLOCALS]
+    cbz   w5, si_restore_regs
+    add   x7, PB, #_PD_TABLE
+si_dl_loop:
+    ldr   x1,  [x7], #8                 ;;; identifier (PD_TABLE forward)
+    ldr   x12, [x1]                     ;;; current idval
+    str   x12, [x4], #8                 ;;;   -> frame slot
+    ldr   x12, [x2], #8                 ;;; saved value from record
+    str   x12, [x1]                     ;;;   -> identifier
+    subs  w5, w5, #1
+    b.ne  si_dl_loop
 
-    ;;; bit 4 -> x21
-    tst   w0, #16
+si_restore_regs:
+    ;;; register locals (PD_REGMASK remap, ascending): current reg -> frame
+    ;;; slot, record value -> register.
+    ldrh  w5, [PB, #_PD_REGMASK]
+    tst   w5, #16                       ;;; bit 4 -> x21
     b.eq  1f
-    str   x21, [SP, #-16]!
-    ldr   x21, [x3], #-8
+    str   x21, [x4], #8
+    ldr   x21, [x2], #8
 1:
-    ;;; bit 5 currently not needed
-    ;;; tst   w0, #32
-    ;;; b.eq  2f
-    ;;; str   ..., [SP, #-16]!
-    ;;; ldr   ..., [x3], #-8
-    ;;; 2:
-
-    ;;; bit 6 -> x22
-    tst   w0, #64
+    tst   w5, #64                       ;;; bit 6 -> x22
+    b.eq  2f
+    str   x22, [x4], #8
+    ldr   x22, [x2], #8
+2:
+    tst   w5, #128                      ;;; bit 7 -> x23
     b.eq  3f
-    str   x22, [SP, #-16]!
-    ldr   x22, [x3], #-8
+    str   x23, [x4], #8
+    ldr   x23, [x2], #8
 3:
-    ;;; bit 7 -> x23
-    tst   w0, #128
+    tst   w5, #256                      ;;; bit 8 -> x24
     b.eq  4f
-    str   x23, [SP, #-16]!
-    ldr   x23, [x3], #-8
+    str   x24, [x4], #8
+    ldr   x24, [x2], #8
 4:
-    ;;; bit 8 -> x24
-    tst   w0, #256
+    tst   w5, #512                      ;;; bit 9 -> x25
     b.eq  5f
-    str   x24, [SP, #-16]!
-    ldr   x24, [x3], #-8
+    str   x25, [x4], #8
+    ldr   x25, [x2], #8
 5:
-    ;;; bit 9 -> x25
-    tst   w0, #512
-    b.eq  6f
-    str   x25, [SP, #-16]!
-    ldr   x25, [x3], #-8
-6:
-    ;;; Restore dynamic locals
+    ;;; advance record ptr to the next frame
+    add   x3, x3, x6, lsl #3
+    str   x3, [x0, #_PS_CALLSTACK_PARTIAL]
 
-    ;;;   test if any
-
-    MOVFL w0, [PB, #_PD_NLOCALS]
-    cbz   w0, do_restore_lvars
-
-    add   x2, PB, #_PD_TABLE
-
-dl_restore_loop:
-    ;;;      save idval in stack and restore previous from process record
-    ldr   x1,  [x2], #8
-    ldr   x12, [x1]
-    str   x12, [SP, #-16]!
-    ldr   x12, [x3], #-8
-    str   x12, [x1]
-
-    subs  w0, w0, #1
-    b.ne  dl_restore_loop
-
-do_restore_lvars:
-    ;;; Restore on-stack lvars from the process record
-    MOVFL w0, [PB, #_PD_NUM_STK_VARS]
-    cbz   w0, si_lvars_done
-l_restore_loop:
-    ldr   x12, [x3], #-8
-    str   x12, [SP, #-16]!
-    subs  w0, w0, #1
-    b.ne  l_restore_loop
-
-si_lvars_done:
-    str   PB, [SP, #-16]!
-    ldr   x30, [x3, #-8]
-
-    ldr   x0, [USP]
-
-    ;;; If needed run dlocal expressions
+    ;;; run resume dlocal-expression code if present (x8 = carried resume addr)
     ldrb  w1, [PB, #_PD_FLAGS]
     tst   w1, #_:M_PD_PROC_DLEXPR_CODE
     b.ne  si_do_dlexpr
-
-si_cont:
-    add   x30, x30, PB
 
 si_test_finished:
     ldr   x0, [USP]
@@ -295,7 +289,9 @@ si_test_finished:
     ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
     cmp   x3, x1
     b.lo  si_loop
-    ;;; Finished, chain to procedure on user stack
+    ;;; Finished: x8 now holds the INNERMOST frame's resume addr, which is where
+    ;;; the chained trampoline proc must return to -- put it in LR, then chain.
+    mov   x30, x8
     add   USP, USP, #8
     mov   x1, #0
     str   x1, [x0, #_PS_CALLSTACK_PARTIAL]
@@ -304,8 +300,8 @@ si_test_finished:
     br    x16
 
 si_do_dlexpr:
-    str   x30, [x0, #_PS_PARTIAL_RETURN]
-    ;;; Jump to resume code
+    str   x8, [x0, #_PS_PARTIAL_RETURN]    ;;; preserve carried resume across dlexpr
+    ;;; Jump to resume code (sp left at the frame base, frame intact)
     ldr   x16, [PB, #_PD_EXIT]
     sub   x16, x16, #BRANCH_std
     br    x16
@@ -315,8 +311,8 @@ si_do_dlexpr:
 DEF_C_LAB (_swap_in_continue)
     ldr   x0, [USP]
     ldr   x3, [x0, #_PS_CALLSTACK_PARTIAL]
-    ldr   x30, [x0, #_PS_PARTIAL_RETURN]
-    b si_cont
+    ldr   x8, [x0, #_PS_PARTIAL_RETURN]
+    b     si_test_finished
 
     .align 3
 usrhi_lab:
