@@ -1217,24 +1217,21 @@ define load_field_addr(type, structure, _size, offset, exptr);
         lvars _n = field_size(type);
         if _size == 1 then
             @@V_BYTES-{_int(_n)} -> _disp;
-            if _n == 8 then
-                ;;; Index is popint; on 64-bit, popint has 3 tag bits
-                ;;; Index already scaled by 8 (word size), adjust displacement
-                1 -> _n;
-                _disp _sub _7 -> _disp;
-            else
-                ;;; ASR X1, X1, #3  (remove popint tag bits)
-                ;;; SBFM X1, X1, #3, #63
-                drop_w(_SBFM _biset _shift(_3, _16)
-                             _biset _shift(_16:3F, _10)
-                             _biset _shift(_X1, _5) _biset _X1);
-            endif;
+            ;;; The index in X1 is a popint = (i<<2)+3 (2-bit tag).  Recover the
+            ;;; integer index i with ASR X1,X1,#2 (SBFM X1,X1,#2,#63); the
+            ;;; scaled ADD below (LSL #index_scale(_n)) then multiplies by the
+            ;;; field byte size, giving i*_n.  (The old code assumed a 3-bit
+            ;;; tag -- using the popint directly as a byte offset for _n==8 and
+            ;;; ASR #3 otherwise -- both wrong for the real 2-bit encoding.)
+            drop_w(_SBFM _biset _shift(_2, _16)
+                         _biset _shift(_16:3F, _10)
+                         _biset _shift(_X1, _5) _biset _X1);
         else
             _int(_size fi_* _n) -> _size;
             @@V_BYTES-{_size} -> _disp;
             load_literal(_WK, _size);
-            ;;; ASR X1, X1, #3  (remove popint tag bits)
-            drop_w(_SBFM _biset _shift(_3, _16)
+            ;;; ASR X1, X1, #2  (recover integer index from 2-bit-tagged popint)
+            drop_w(_SBFM _biset _shift(_2, _16)
                          _biset _shift(_16:3F, _10)
                          _biset _shift(_X1, _5) _biset _X1);
             ;;; MUL X1, X1, WK
@@ -1276,8 +1273,8 @@ define lconstant do_bit_field(type, _size, structure, offset, upd, exptr);
         else
             mishap(0, 'SYSTEM ERROR do_bit_field');
         endif;
-        ;;; Remove popint tag: ASR X1, X1, #3
-        drop_w(_SBFM _biset _shift(_3, _16) _biset _shift(_16:3F, _10)
+        ;;; Recover integer offset from 2-bit-tagged popint: ASR X1, X1, #2
+        drop_w(_SBFM _biset _shift(_2, _16) _biset _shift(_16:3F, _10)
                      _biset _shift(_X1, _5) _biset _X1);
         load_literal(_WK, _int(_size));
         drop_mul(_X1, _X1, _WK);
@@ -1412,8 +1409,11 @@ define I_FAST_+-_2();
     if asm_instr!INST_ARGS[_0] then true else false endif -> _is_add;
     lvars _reg0 = load_fsrc_to_reg(_1, _X0);
     lvars _reg1 = load_fsrc_to_reg(_2, _X1);
-    ;;; Remove popint tag from one operand: SUB X0, reg0, #7
-    drop_sub_imm(_X0, _reg0, _7);
+    ;;; Remove popint tag from one operand before adding the two popints.
+    ;;; popint(n) = (n<<2)+3, so the tag is 3 (2-bit), NOT 7.
+    ;;;   popint(a)+popint(b) = (a+b)<<2 + 6; subtract one tag (3) to land
+    ;;;   on popint(a+b) = (a+b)<<2 + 3.  (Using #7 gave popint(a+b-1).)
+    drop_sub_imm(_X0, _reg0, _3);
     if _is_add then
         drop_add_reg(_X0, _reg1, _X0);
     else
@@ -1433,8 +1433,8 @@ define I_FAST_+-_3();
     if asm_instr!INST_ARGS[_0] then true else false endif -> _is_add;
     lvars _reg0 = load_fsrc_to_reg(_1, _X0);
     lvars _reg1 = load_fsrc_to_reg(_2, _X1);
-    ;;; Remove popint tag from one operand
-    drop_sub_imm(_X0, _reg0, _7);
+    ;;; Remove popint tag (3, 2-bit) from one operand -- see I_FAST_+-_2.
+    drop_sub_imm(_X0, _reg0, _3);
     if _is_add then
         drop_add_reg(_X0, _reg1, _X0);
     else
@@ -1945,10 +1945,13 @@ define I_STACKLENGTH();
     load_literal(_X1, ident _userhi);
     drop_load_off(_X1, _X1, _0);
     drop_sub_reg(_X0, _X1, _USP);
-    ;;; Add popint tag bits: on 64-bit, tag = (val << 3) | 7
-    ;;; But stack length is already in bytes which equals words * 8
-    ;;; so effectively it is already shifted. Add tag bits.
-    load_literal(_X3, _7);
+    ;;; X0 = userhi - USP = byte count = items*8.  popint(items) = (items<<2)+3
+    ;;; = (bytes>>1)+3 since bytes = items*8.  ASR X0,X0,#1 then ORR X0,X0,#3.
+    ;;; (Old code did ORR #7, assuming a 3-bit tag with the *8 word-scale folded
+    ;;;  into the tag -- wrong for the real 2-bit popint encoding.)
+    drop_w(_SBFM _biset _shift(_1, _16) _biset _shift(_16:3F, _10)
+                 _biset _shift(_X0, _5) _biset _X0);
+    load_literal(_X3, _3);
     drop_w(_ORR_REG _biset _shift(_X3, _16) _biset _shift(_X0, _5)
                     _biset _X0);
     drop_push_reg(_X0, _USP);
@@ -1962,11 +1965,13 @@ define I_SETSTACKLENGTH();
         ;;; a known number of results (a popint):
         ;;; expand code for "_setstklen" inline
         lvars _reg = load_fsrc_to_reg(_0, _X2);
-        ;;; On 64-bit, popint tag adjustment is different.
-        ;;; _nresults is a popint; subtract tag overhead.
-        ;;; TODO: verify exact popint arithmetic for 64-bit
-        load_literal(_X3, _nresults _sub _14);
-        drop_add_reg(_X2, _reg, _X3);
+        ;;; Expected USP = userhi - (saved_len + nresults) items * 8 bytes.
+        ;;; popints are (k<<2)+3 (2-bit tag): saved + (nresults-6) = (s+n)<<2
+        ;;; = items*4, then double to items*8.  (The old #14 magic assumed a
+        ;;; 3-bit tag where popint already carried the <<3 word-scale.)
+        load_literal(_X3, _nresults _sub _6);
+        drop_add_reg(_X2, _reg, _X3);       ;;; X2 = (saved+nresults)*4
+        drop_add_reg(_X2, _X2, _X2);        ;;; X2 = (saved+nresults)*8 bytes
         load_literal(_X3, ident _userhi);
         drop_load_off(_X3, _X3, _0);
         drop_sub_reg(_X2, _X3, _X2);
