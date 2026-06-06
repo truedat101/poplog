@@ -59,7 +59,13 @@ global constant macro (
     BSD_MMAP  = true,     ;;; has -mmap- and -mprotect- facilities
     BSD_MPROTECT  = true,
 
-    VPAGE_OFFS = 4096,    ;;; word address offset of a virtual page
+    VPAGE_OFFS = 4096,    ;;; virtual page size in bytes.  NB: the Raspberry Pi 5
+                          ;;; (rpi-2712 kernel) actually uses 16 KB pages, so a
+                          ;;; saved image built with 4 KB alignment fails to mmap
+                          ;;; (MAP_FIXED, EINVAL) on load.  Bumping this to 16384
+                          ;;; lets basepop11 run but ripples into the image-save
+                          ;;; size arithmetic (Check_integral crash) -- see
+                          ;;; memory arm64-port-status "Image save/load".
 
     ;;; LOWEST_ADDRESS:
     LOWEST_ADDRESS = 0,
