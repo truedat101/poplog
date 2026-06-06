@@ -21,3 +21,7 @@ pop/**/help/*index
 pop/**/ref/*index
 pop/**/ref/doc_index/
 pop/**/teach/*index
+
+# ci-watch.sh runtime logs
+tools/ci-watch.build.log
+tools/ci-watch.log
