@@ -1366,36 +1366,33 @@ define I_UFASTFIELD();
     drop_store_off(_X2, _reg0, _offs);
 enddefine;
 
+;;; Fast vector subscript address (mirrors the x86_64 runtime VM I_FASTSUBV):
+;;;   addr = vector + popint*2 + (INST_ARGS[0] - 8)
+;;; The index is a 2-bit popint = (i<<2)+3; scaling it by 2 gives 8i+6, and the
+;;; displacement (INST_ARGS[0] - 8) absorbs the base + the (i-1) and tag offset,
+;;; landing on element i at [vector + (i-1)*8].  Verified against the measured
+;;; vector layout (element i at [v + (i-1)*8]).  The OLD code used the popint
+;;; directly as a byte offset (X1 + offs*8), assuming a 3-bit/scale-8 tag that
+;;; never existed -- garbage for the real 2-bit popints (broke for..in_vector).
+;;; (x86_64 subtracts 14 because its operand = V; arm64's operand = V-6, so -8.)
+
 define I_FASTSUBV();
-    ;;; Fast subscript into a vector
-    lvars _offs = _int(asm_instr!INST_ARGS[_0]) _sub 1;
+    ;;; Fast subscript into a (full, 8-byte-element, V_BYTES=0) vector.
+    ;;; element i is at [vector + (i-1)*8].  The index is a 2-bit popint =
+    ;;; (i<<2)+3, so popint*2 = 8i+6 and popint*2 - 14 = (i-1)*8.
     lvars _reg0 = load_fsrc_to_reg(_1, _X0);
     drop_pop_reg(_X1, _USP);
-    ;;; Adjust index: X1 = X1 + offs * 8
-    lvars _byte_offs = _shift(_offs, _3);
-    if _byte_offs _sgreq _0 and _byte_offs _slt _16:1000 then
-        drop_add_imm(_X1, _X1, _byte_offs);
-    elseif _byte_offs _slt _0 and _negate(_byte_offs) _slt _16:1000 then
-        drop_sub_imm(_X1, _X1, _negate(_byte_offs));
-    else
-        mishap(0, 'I_FASTSUBV: too large offset');
-    endif;
+    drop_add_reg(_X1, _X1, _X1);            ;;; X1 = popint*2 = 8i + 6
+    drop_sub_imm(_X1, _X1, _14);            ;;; X1 = (i-1)*8
     drop_ldr_reg(_X0, _X0, _X1);
     drop_push_reg(_X0, _USP);
 enddefine;
 
 define I_UFASTSUBV();
-    lvars _offs = _int(asm_instr!INST_ARGS[_0]) _sub 1;
     lvars _reg0 = load_fsrc_to_reg(_1, _X0);
     drop_pop_reg(_X1, _USP);
-    lvars _byte_offs = _shift(_offs, _3);
-    if _byte_offs _sgreq _0 and _byte_offs _slt _16:1000 then
-        drop_add_imm(_X1, _X1, _byte_offs);
-    elseif _byte_offs _slt _0 and _negate(_byte_offs) _slt _16:1000 then
-        drop_sub_imm(_X1, _X1, _negate(_byte_offs));
-    else
-        mishap(0, 'I_UFASTSUBV: too large offset');
-    endif;
+    drop_add_reg(_X1, _X1, _X1);            ;;; X1 = popint*2 = 8i + 6
+    drop_sub_imm(_X1, _X1, _14);            ;;; X1 = (i-1)*8
     drop_pop_reg(_X2, _USP);
     drop_str_reg(_X2, _X0, _X1);
 enddefine;
