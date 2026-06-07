@@ -1379,23 +1379,36 @@ enddefine;
 ;;; never existed -- garbage for the real 2-bit popints (broke for..in_vector).
 ;;; (x86_64 subtracts 14 because its operand = V; arm64's operand = V-6, so -8.)
 
-define I_FASTSUBV();
-    ;;; Fast subscript into a (full, 8-byte-element, V_BYTES=0) vector.
-    ;;; element i is at [vector + (i-1)*8].  The index is a 2-bit popint =
-    ;;; (i<<2)+3, so popint*2 = 8i+6 and popint*2 - 14 = (i-1)*8.
-    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+;;; Fast vector subscript byte-offset into X1, faithful port of the x86_64
+;;; handler: addr = structure + popint*2 + (INST_ARGS[0] - 14).
+;;; The index is a 2-bit popint = (i<<2)+3, so popint*2 = 8i+6.  INST_ARGS[0]
+;;; is the byte offset to the first element and DIFFERS by subscript base:
+;;; fast_subscrv (1-based) has arg 0 = 0 -> offs -14, giving (i-1)*8;
+;;; fast_subscrv0 (0-based) has arg 0 = 8 -> offs -6, giving i*8.
+;;; (Hardcoding -14 only worked for the 1-based case, and made 0-based writes
+;;; -- e.g. chars.p's Char_name_table built via fast_subscrv0 -- land one
+;;; element before the vector, corrupting the preceding heap structure.)
+define lconstant fastsubv_index();
+    lvars _offs = _int(asm_instr!INST_ARGS[_0]) _sub _14;
     drop_pop_reg(_X1, _USP);
     drop_add_reg(_X1, _X1, _X1);            ;;; X1 = popint*2 = 8i + 6
-    drop_sub_imm(_X1, _X1, _14);            ;;; X1 = (i-1)*8
+    if _offs _sgr _0 then
+        drop_add_imm(_X1, _X1, _offs);
+    elseif _offs _slt _0 then
+        drop_sub_imm(_X1, _X1, _negate(_offs));
+    endif;
+enddefine;
+
+define I_FASTSUBV();
+    lvars _reg0 = load_fsrc_to_reg(_1, _X0);
+    fastsubv_index();
     drop_ldr_reg(_X0, _X0, _X1);
     drop_push_reg(_X0, _USP);
 enddefine;
 
 define I_UFASTSUBV();
     lvars _reg0 = load_fsrc_to_reg(_1, _X0);
-    drop_pop_reg(_X1, _USP);
-    drop_add_reg(_X1, _X1, _X1);            ;;; X1 = popint*2 = 8i + 6
-    drop_sub_imm(_X1, _X1, _14);            ;;; X1 = (i-1)*8
+    fastsubv_index();
     drop_pop_reg(_X2, _USP);
     drop_str_reg(_X2, _X0, _X1);
 enddefine;
