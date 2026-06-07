@@ -112,24 +112,26 @@ define Array$-Cons(_tabsize) -> _arrayp;
     ;;; EXIT point
     _arrayp@(w){_drop_ptr} -> _arrayp!PD_EXIT;
 
-    ;;; Instruction 4: add sp, sp, #8
-    ;;; Skip past SF_OWNER on the stack.
-    ;;; Encoding: 0x910023FF
-    _16:910023FF -> _arrayp!(i){_drop_ptr};
+    ;;; Frame teardown -- MUST keep sp 16-byte aligned at every sp-based access
+    ;;; (AArch64 SP-alignment check).  The old sequence (`add sp,#8` ;
+    ;;; `ldr x30,[sp],#8` ; `ldr x20,[sp]`) stepped sp through an 8-misaligned
+    ;;; state and faulted in runtime-compiled array accessors (e.g. loading
+    ;;; Lisp).  Use offset loads then one 16-byte `add` instead.  Frame is
+    ;;; [sp+0]=SF_OWNER(self PB), [sp+8]=LR; caller's SF_OWNER is at [sp+16].
+
+    ;;; Instruction 4: ldr x30, [sp, #8]      ; restore LR (offset load)
+    ;;; Encoding: 0xF94007FE
+    _16:F94007FE -> _arrayp!(i){_drop_ptr};
     _drop_ptr _add _4 -> _drop_ptr;
 
-    ;;; Instruction 5: ldr x30, [sp], #8
-    ;;; Restore LR (SF_RETURN_ADDR) and pop.
-    ;;; Post-index load, 64-bit, imm9=8.
-    ;;; Encoding: 0xF84087FE
-    _16:F84087FE -> _arrayp!(i){_drop_ptr};
+    ;;; Instruction 5: ldr x20, [sp, #16]     ; restore caller's PB (caller SF_OWNER)
+    ;;; Encoding: 0xF9400BF4
+    _16:F9400BF4 -> _arrayp!(i){_drop_ptr};
     _drop_ptr _add _4 -> _drop_ptr;
 
-    ;;; Instruction 6: ldr x20, [sp]
-    ;;; Restore PB from the caller's stack frame (caller's SF_OWNER).
-    ;;; Unsigned offset load, 64-bit, offset=0.
-    ;;; Encoding: 0xF94003F4
-    _16:F94003F4 -> _arrayp!(i){_drop_ptr};
+    ;;; Instruction 6: add sp, sp, #16        ; drop the whole frame, 16-aligned
+    ;;; Encoding: 0x910043FF
+    _16:910043FF -> _arrayp!(i){_drop_ptr};
     _drop_ptr _add _4 -> _drop_ptr;
 
     ;;; Instruction 7: ret
