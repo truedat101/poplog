@@ -1307,12 +1307,15 @@ define I_PUSH_FIELD();
                         _X0, _reg, _X1);
     endif;
     if cvt then
-        ;;; convert to popint: X0 = X0 << 3 | 7
-        ;;; LSL X0, X0, #3: UBFM X0, X0, #(64-3), #(63-3) = UBFM X0, X0, #61, #60
-        drop_w(_UBFM _biset _shift(_16:3D, _16) _biset _shift(_16:3C, _10)
+        ;;; convert raw field value to a popint: X0 = (X0 << 2) | 3
+        ;;; (2-bit tag.  The old code did << 3 | 7, a 3-bit/scale-8 tag that
+        ;;;  never existed -> integer fields read back as huge wrong popints,
+        ;;;  which then corrupt the heap when used as indices.)
+        ;;; LSL X0, X0, #2: UBFM X0, X0, #(64-2), #(63-2) = UBFM X0, X0, #62, #61
+        drop_w(_UBFM _biset _shift(_16:3E, _16) _biset _shift(_16:3D, _10)
                      _biset _shift(_X0, _5) _biset _X0);
-        ;;; ORR X0, X0, #7  -- use immediate form or load 7 and ORR
-        load_literal(_X1, _7);
+        ;;; ORR X0, X0, #3
+        load_literal(_X1, _3);
         drop_w(_ORR_REG _biset _shift(_X1, _16) _biset _shift(_X0, _5)
                         _biset _X0);
     endif;
@@ -1623,10 +1626,11 @@ define I_SWITCH();
     ;;; After the table: if there was no explicit "else" case, push the
     ;;; argument back on the stack for a following error
     unless elselab then
-        ;;; Reconstruct popint: LSL reg, reg, #3 then ORR with 7
-        drop_w(_UBFM _biset _shift(_16:3D, _16) _biset _shift(_16:3C, _10)
+        ;;; Reconstruct popint (2-bit): LSL reg, reg, #2 then ORR with 3
+        ;;; (was << 3 | 7, a 3-bit tag).  LSL #2 = UBFM reg,reg,#62,#61.
+        drop_w(_UBFM _biset _shift(_16:3E, _16) _biset _shift(_16:3D, _10)
                      _biset _shift(_reg, _5) _biset _reg);
-        load_literal(_X1, _7);
+        load_literal(_X1, _3);
         drop_w(_ORR_REG _biset _shift(_X1, _16) _biset _shift(_reg, _5)
                         _biset _reg);
         drop_push_reg(_reg, _USP);
@@ -1869,11 +1873,12 @@ define I_CREATE_SF();
         @@(w){_offs}++ -> _offs;
     endrepeat;
 
-    ;;; --- Initialise the POP on-stack lvars to popint 0 (= 7); they occupy the
-    ;;;     high end of the stkvar region: SF_LOCALS + (Nstkvars - Npopstkvars).
+    ;;; --- Initialise the POP on-stack lvars to popint 0 (= 3 with the 2-bit
+    ;;;     tag; was 7, a 3-bit popint(0)); they occupy the high end of the
+    ;;;     stkvar region: SF_LOCALS + (Nstkvars - Npopstkvars).
     ;;;     Non-pop on-stack lvars are left uninitialised (allocated by the sub). ---
     if _Npopstkvars _gr _0 then
-        load_literal(_X0, _7);
+        load_literal(_X0, _3);
         _Nstkvars _sub _Npopstkvars -> _ix;
         fast_repeat _pint(_Npopstkvars) times
             drop_store_off(_X0, _SP, @@SF_LOCALS[_ix]);
