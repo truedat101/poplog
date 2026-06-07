@@ -80,7 +80,7 @@ rebuild() {
 pi_smoke() {
     say "sync -> $RASPI + smoke test"
     if ! rsync -az --delete --exclude='.git' --exclude='corepop.amd64' \
-            --exclude='.claude' ./ "$RASPI:~/poplog/" >/dev/null 2>&1; then
+            --exclude='.claude' --exclude='target/psv' ./ "$RASPI:~/poplog/" >/dev/null 2>&1; then
         err "rsync to $RASPI failed (skipping smoke test)"
         return 1
     fi
