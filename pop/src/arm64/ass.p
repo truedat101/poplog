@@ -1580,12 +1580,26 @@ define I_SWITCH();
 
     ;;; Compute the offset from the start of the procedure code to the end
     ;;; of the jump offset table.
-    ;;; After this point we plant: SUB, B.HI, ADR, LDR, BR = 5 instrs = 20 bytes
+    ;;; After this point we plant 7 instrs = 28 bytes:
+    ;;;   ASR, LSL (popint->byte-offset), B.HI, ADR, LDR, ADD, BR
     ;;; Then (_ncases + 1) * 8 bytes of 64-bit offset entries.
-    _asm_code_offset _add _20 _add _int((_ncases + 1) * 8) -> _tabend;
+    ;;; (The old "20" undercounted: it listed 5 instrs and omitted the ADD,
+    ;;; so _tabend -- the out-of-range jump target and the table position --
+    ;;; was 8 bytes short, faulting on any jump-table switch.)
+    _asm_code_offset _add _28 _add _int((_ncases + 1) * 8) -> _tabend;
 
-    ;;; Remove popint bits from argument: ASR reg, reg, #3
-    drop_w(_SBFM _biset _shift(_3, _16) _biset _shift(_16:3F, _10)
+    ;;; Convert the 2-bit popint index to a BYTE offset into the 8-byte table
+    ;;; entries: i = popint asr 2, then i*8 = i lsl 3.  (drop_ldr_reg below is a
+    ;;; plain [Xn+Xm] with NO scale, so reg must already be the byte offset.  The
+    ;;; old code did asr #3 -- a 3-bit tag AND it left the value unscaled, so the
+    ;;; jump-table dispatch was wildly wrong for any switch with enough cases to
+    ;;; use a jump table.)  Neither SBFM nor UBFM touches the cmp flags from
+    ;;; above, so the out-of-range test still works.
+    ;;; ASR reg, reg, #2  (SBFM reg,reg,#2,#63)
+    drop_w(_SBFM _biset _shift(_2, _16) _biset _shift(_16:3F, _10)
+                 _biset _shift(_reg, _5) _biset _reg);
+    ;;; LSL reg, reg, #3  (UBFM reg,reg,#61,#60)
+    drop_w(_UBFM _biset _shift(_16:3D, _16) _biset _shift(_16:3C, _10)
                  _biset _shift(_reg, _5) _biset _reg);
 
     ;;; If the argument was out of range, jump to after the table
@@ -1594,20 +1608,24 @@ define I_SWITCH();
 
     ;;; Use X1 to index into jump offset table.
     ;;; Each table entry is 8 bytes (64-bit offset from procedure start).
-    ;;; Table starts 3 instructions (12 bytes) after current position.
-    ;;; ADR X1, table_start
-    ;;; Note: we use a sequence of:
-    ;;;   LDR X1, [X1, reg, LSL #3]  ; load offset from table
-    ;;;   ADD X1, PB, X1             ; compute absolute address
-    ;;;   BR X1                      ; jump
+    ;;; The table is planted right after the BR below.  From the ADR we plant
+    ;;; three more instructions (LDR, ADD, BR) before the table, so the table
+    ;;; starts 16 bytes ahead of the ADR (ADR@+0, LDR@+4, ADD@+8, BR@+12,
+    ;;; table@+16) -- NOT 12.  (The old #12 pointed the base at the BR itself,
+    ;;; so [base + i*8] read 4 bytes misaligned across table entries and the
+    ;;; BR jumped to garbage.)
+    ;;; ADR X1, table_start  (note: reg/X0 already holds the i*8 byte offset,
+    ;;; and drop_ldr_reg is a plain [Xn+Xm] with no scaling).
+    ;;;   LDR X1, [X1, reg]   ; load offset from table
+    ;;;   ADD X1, PB, X1      ; compute absolute address
+    ;;;   BR X1               ; jump
 
-    ;;; The table starts right after these 3 instructions = 12 bytes ahead
-    ;;; ADR X1, #12:  X1 = PC + 12
+    ;;; ADR X1, #16:  X1 = PC + 16
     ;;; ADR: 0 immlo(2) 10000 immhi(19) Rd
-    ;;; imm = 12, immlo = 12 & 3 = 0, immhi = 12 >> 2 = 3
-    drop_w(_16:10000000 _biset _shift(_3, _5) _biset _X1);
+    ;;; imm = 16, immlo = 16 & 3 = 0, immhi = 16 >> 2 = 4
+    drop_w(_16:10000000 _biset _shift(_4, _5) _biset _X1);
 
-    ;;; LDR X1, [X1, reg, LSL #3]
+    ;;; LDR X1, [X1, reg]   (reg is already the i*8 byte offset)
     drop_ldr_reg(_X1, _X1, _reg);
 
     ;;; ADD X1, PB, X1  then  BR X1
