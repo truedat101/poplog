@@ -1892,15 +1892,23 @@ define I_CREATE_SF();
         _rnum _add _1 -> _rnum;
     endwhile;
 
-    ;;; --- Save the dynamic-locals' current (old) values into their slots, at
-    ;;;     SF_LOCALS + Nstkvars + k (PD_TABLE order: non-pop first then pop). ---
+    ;;; --- Save the dynamic-locals' current (old) values into their slots. ---
+    ;;; The canonical layout (which the shared `Dlocal_frame_offset`,
+    ;;; procedure.p:138, and the GC frame-scan / plogcore rely on) stores
+    ;;; dlocals in REVERSE PD_TABLE order: PD_TABLE[k] goes to
+    ;;; SF_LOCALS[Nstkvars + (Nlocals-1-k)].  So iterate PD_TABLE forward but
+    ;;; fill the slots from the top down.  (Saving forward was self-consistent
+    ;;; with UNWIND so plain dlocals worked, but for a proc with >1 dlocal the
+    ;;; introspection offset read the MIRRORED slot -- e.g. the exception
+    ;;; handler reading pop_exception_final got a different dlocal's value and
+    ;;; called it.)  Single-dlocal procs are unaffected (forward == reverse).
     @@PD_TABLE -> _offs;
-    _Nstkvars -> _ix;
+    _Nstkvars _add _Nlocals _sub _1 -> _ix;
     fast_repeat _pint(_Nlocals) times
         drop_load_off(_X1, _PB, _offs);             ;;; X1 = dlocal identifier
         drop_load_off(_X0, _X1, _0);                ;;; X0 = its current idval
         drop_store_off(_X0, _SP, @@SF_LOCALS[_ix]);
-        _ix _add _1 -> _ix;
+        _ix _sub _1 -> _ix;
         @@(w){_offs}++ -> _offs;
     endrepeat;
 
@@ -1941,13 +1949,15 @@ define I_UNWIND_SF();
     endwhile;
 
     ;;; Restore the dynamic-locals' saved old values back into their idents.
+    ;;; Mirror I_CREATE_SF's reverse-order layout: PD_TABLE[k] is at
+    ;;; SF_LOCALS[Nstkvars + (Nlocals-1-k)].
     @@PD_TABLE -> _offs;
-    _Nstkvars -> _ix;
+    _Nstkvars _add _Nlocals _sub _1 -> _ix;
     fast_repeat _pint(_Nlocals) times
         drop_load_off(_X1, _PB, _offs);             ;;; X1 = dlocal identifier
         drop_load_off(_X0, _SP, @@SF_LOCALS[_ix]);  ;;; X0 = saved value
         drop_store_off(_X0, _X1, _0);               ;;; restore idval
-        _ix _add _1 -> _ix;
+        _ix _sub _1 -> _ix;
         @@(w){_offs}++ -> _offs;
     endrepeat;
 
