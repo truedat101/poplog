@@ -1,8 +1,9 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Prolog support assembly routines for ARM
+   Purpose: Prolog support assembly routines for AArch64
    Author:  Waldek Hebisch
+   AArch64 port by truedat101
 */
 
 #_<
@@ -20,9 +21,8 @@ vars
      ;
 
 lconstant macro (
-    USP   = "r10",
-    LR    = "lr",
-    SP    = "sp",
+    USP   = "x19",
+    PB    = "x20",
     _KEY            = @@KEY,
     _PGT_FUNCTOR    = @@PGT_FUNCTOR,
     _PGT_LENGTH     = @@PGT_LENGTH,
@@ -37,216 +37,224 @@ lconstant macro (
 
 >_#
 
-    .arch armv8
+    .arch armv8-a
     .file   "aprolog.s"
     .text
 
 ;;; Wrapping in POP object
    .text
-   .word   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+   .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
 .L11.special:
-    .word C_LAB(_special_var_block)
+    .xword C_LAB(_special_var_block)
 
 DEF_C_LAB (_prolog_save_check)
-    ldr  r0, .L11.special
-    ldr  r1, [r0, #_SVB_OFFS(_plog_next_var)]
-    str  r1, [SP, #_SF_PLGSV_NEXT_VAR]
-    ldr  r1, [r0, #_SVB_OFFS(_plog_trail_sp)]
-    ldr  r2, [r0, #_SVB_OFFS(_plog_trail_barrier)]
-    sub  r1, r1, r2
-    str  r1, [SP, #_SF_PLGSV_TRAIL_SP]
+    ldr  x0, .L11.special
+    ldr  x1, [x0, #_SVB_OFFS(_plog_next_var)]
+    str  x1, [sp, #_SF_PLGSV_NEXT_VAR]
+    ldr  x1, [x0, #_SVB_OFFS(_plog_trail_sp)]
+    ldr  x2, [x0, #_SVB_OFFS(_plog_trail_barrier)]
+    sub  x1, x1, x2
+    str  x1, [sp, #_SF_PLGSV_TRAIL_SP]
 
-    ldr  r1, [r0, #_SVB_OFFS(_plog_contn_sp)]
-    str  r1, [r0, #_SVB_OFFS(_plog_save_contn_sp)]
-    ldr  r1, [r0, #_SVB_OFFS(_plog_contn_top)]
-    str  r1, [SP, #_SF_PLGSV_CONTN_TOP]
+    ldr  x1, [x0, #_SVB_OFFS(_plog_contn_sp)]
+    str  x1, [x0, #_SVB_OFFS(_plog_save_contn_sp)]
+    ldr  x1, [x0, #_SVB_OFFS(_plog_contn_top)]
+    str  x1, [sp, #_SF_PLGSV_CONTN_TOP]
 
     ;;; Check for overflow etc.
     b C_LAB (_checkplogall)
 
 DEF_C_LAB (_prolog_restore)
-    ldr  r0, .L11.special
-    ldr  r1, [SP, #_SF_PLGSV_NEXT_VAR]
-    str  r1, [r0, #_SVB_OFFS(_plog_next_var)]
-    ldr  r1, [r0, #_SVB_OFFS(_plog_save_contn_sp)]
-    str  r1, [r0, #_SVB_OFFS(_plog_contn_sp)]
-    ldr  r1, [SP, #_SF_PLGSV_CONTN_TOP]
-    str  r1, [r0, #_SVB_OFFS(_plog_contn_top)]
+    ldr  x0, .L11.special
+    ldr  x1, [sp, #_SF_PLGSV_NEXT_VAR]
+    str  x1, [x0, #_SVB_OFFS(_plog_next_var)]
+    ldr  x1, [x0, #_SVB_OFFS(_plog_save_contn_sp)]
+    str  x1, [x0, #_SVB_OFFS(_plog_contn_sp)]
+    ldr  x1, [sp, #_SF_PLGSV_CONTN_TOP]
+    str  x1, [x0, #_SVB_OFFS(_plog_contn_top)]
 
-    ldr  r2, [r0, #_SVB_OFFS(_plog_trail_barrier)]
-    ldr  r1, [SP, #_SF_PLGSV_TRAIL_SP]
-    add  r1, r1, r2
-    ldr  r2, [r0, #_SVB_OFFS(_plog_trail_sp)]
-    cmp  r1, r2
-    bxeq LR
-    str  r1, [r0, #_SVB_OFFS(_plog_trail_sp)]
+    ldr  x2, [x0, #_SVB_OFFS(_plog_trail_barrier)]
+    ldr  x1, [sp, #_SF_PLGSV_TRAIL_SP]
+    add  x1, x1, x2
+    ldr  x2, [x0, #_SVB_OFFS(_plog_trail_sp)]
+    cmp  x1, x2
+    b.eq trail.done
+    str  x1, [x0, #_SVB_OFFS(_plog_trail_sp)]
 trail.loop:
-    ldr  r3, [r1], #4
-    str  r3, [r3, #_PGV_CONT]
-    cmp  r1, r2
-    bne  trail.loop
-    bx   LR
+    ldr  x3, [x1], #8
+    str  x3, [x3, #_PGV_CONT]
+    cmp  x1, x2
+    b.ne trail.loop
+trail.done:
+    ret
 
 DEF_C_LAB (_prolog_unify_atom)
 deref.loop3:
-    tst r0, #1
-    bne notvar.ret
-    ldr r3, [r0, #_KEY]
-    ldr r12, plog.var_key
-    cmp r3, r12
-    bne notvar.ret
-    mov r12, r0
-    ldr r0, [r0, #_PGV_CONT]
-    cmp r0, r12
-    bne deref.loop3
-    str r1, [r0, #_PGV_CONT]
-    ldr r2, plog_trail_sp.lab
-    ldr r3, [r2]
-    str r0, [r3], #4
-    str r3, [r2]
-    ;;; Flags are still set to EQ
-    bx  LR
+    tst  x0, #1
+    b.ne notvar.ret
+    ldr  x3, [x0, #_KEY]
+    ldr  x9, plog.var_key
+    cmp  x3, x9
+    b.ne notvar.ret
+    mov  x9, x0
+    ldr  x0, [x0, #_PGV_CONT]
+    cmp  x0, x9
+    b.ne deref.loop3
+    ;;; Unbound variable: assign atom and trail
+    str  x1, [x0, #_PGV_CONT]
+    ldr  x2, plog_trail_sp.lab
+    ldr  x3, [x2]
+    str  x0, [x3], #8
+    str  x3, [x2]
+    ;;; Flags are still set to EQ (from cmp x0, x9 which was equal)
+    ret
 notvar.ret:
-    cmp r0, r1
-    bx  LR
+    cmp  x0, x1
+    ret
 
 plog.pair_key:
-    .word C_LAB(pair_key)
+    .xword C_LAB(pair_key)
 
 DEF_C_LAB (_prolog_pair_switch)
 deref.loop2:
-    tst r0, #1
-    bne fail.ret
-    ldr r3, [r0, #_KEY]
-    ldr r12, plog.var_key
-    cmp r3, r12
-    bne deref.notvar2
-    mov r12, r0
-    ldr r0, [r0, #_PGV_CONT]
-    cmp r0, r12
-    bne deref.loop2
-    str r0, [USP, #-4]!
-    ;;; set flags: r0 is nonzero so we get HI (unsigned higher)
-    cmp r0, #0
-    bx  LR
+    tst  x0, #1
+    b.ne fail.ret
+    ldr  x3, [x0, #_KEY]
+    ldr  x9, plog.var_key
+    cmp  x3, x9
+    b.ne deref.notvar2
+    mov  x9, x0
+    ldr  x0, [x0, #_PGV_CONT]
+    cmp  x0, x9
+    b.ne deref.loop2
+    ;;; Unbound variable: push onto user stack
+    str  x0, [USP, #-8]!
+    ;;; set flags: x0 is nonzero so we get HI (unsigned higher)
+    cmp  x0, #0
+    ret
 deref.notvar2:
-    ldr r12, plog.pair_key
-    cmp r3, r12
-    bne fail.ret
-    bx LR
+    ldr  x9, plog.pair_key
+    cmp  x3, x9
+    b.ne fail.ret
+    ret
 
 plog.term_key:
-    .word C_LAB(prologterm_key)
+    .xword C_LAB(prologterm_key)
 
 DEF_C_LAB (_prolog_term_switch)
 deref.loop1:
-    tst r0, #1
-    bne fail.ret
-    ldr r3, [r0, #_KEY]
-    ldr r12, plog.var_key
-    cmp r3, r12
-    bne deref.notvar
-    mov r12, r0
-    ldr r0, [r0, #_PGV_CONT]
-    cmp r0, r12
-    bne deref.loop1
-    str r0, [USP, #-4]!
-    ;;; set flags: r0 is nonzero so we get HI (unsigned higher)
-    cmp r0, #0
-    bx  LR
+    tst  x0, #1
+    b.ne fail.ret
+    ldr  x3, [x0, #_KEY]
+    ldr  x9, plog.var_key
+    cmp  x3, x9
+    b.ne deref.notvar
+    mov  x9, x0
+    ldr  x0, [x0, #_PGV_CONT]
+    cmp  x0, x9
+    b.ne deref.loop1
+    ;;; Unbound variable: push onto user stack
+    str  x0, [USP, #-8]!
+    ;;; set flags: x0 is nonzero so we get HI (unsigned higher)
+    cmp  x0, #0
+    ret
 deref.notvar:
-    ldr r12, plog.term_key
-    cmp r3, r12
-    bne fail.ret
-    ldr r3, [r0, #_PGT_FUNCTOR]
-    cmp r1, r3
-    bne fail.ret
-    ldr r3, [r0, #_PGT_LENGTH]
-    cmp r3, r2, asr #2
-    bxeq LR
+    ldr  x9, plog.term_key
+    cmp  x3, x9
+    b.ne fail.ret
+    ldr  x3, [x0, #_PGT_FUNCTOR]
+    cmp  x1, x3
+    b.ne fail.ret
+    ldr  x3, [x0, #_PGT_LENGTH]
+    asr  x4, x2, #2
+    cmp  x3, x4
+    b.eq term.match
+    b    fail.ret
+term.match:
+    ret
 fail.ret:
-    ;;; set flags to CC (unsigned lower)
-    mov r3, #0
-    cmp r3, #1
-    bx  LR
+    ;;; set flags to CC (unsigned lower): compare 0 < 1
+    mov  x3, #0
+    cmp  x3, #1
+    ret
 
 plog_trail_sp.lab:
-    .word I_LAB(_plog_trail_sp)
+    .xword I_LAB(_plog_trail_sp)
 
 DEF_C_LAB (_prolog_assign)
-    ldr r0, [USP, #4]
-    ldr r1, [USP], #8
-    str r1, [r0, #_PGV_CONT]
+    ldr  x0, [USP, #8]
+    ldr  x1, [USP], #16
+    str  x1, [x0, #_PGV_CONT]
     ;;; Put var on trail
-    ldr r2, plog_trail_sp.lab
-    ldr r3, [r2]
-    str r0, [r3], #4
-    str r3, [r2]
-    bx  LR
+    ldr  x2, plog_trail_sp.lab
+    ldr  x3, [x2]
+    str  x0, [x3], #8
+    str  x3, [x2]
+    ret
 
 free_pairs.lab:
-    .word I_LAB(Sys$- _free_pairs)
+    .xword I_LAB(Sys$- _free_pairs)
 
 DEF_C_LAB (_prolog_assign_pair)
-    ldr r1, free_pairs.lab
-    ldr r0, [r1]
-    tst r0, #1
-    bne XC_LAB(Sys$-Plog$-Assign_pair)
-    ldr r2, [r0, #_P_BACK]
-    str r2, [r1]
-    ldr r2, [USP, #8]
-    ldr r1, [USP, #4]
-    ldr r3, [USP], #12
-    str r3, [r0, #_P_BACK]
-    str r1, [r0, #_P_FRONT]
-    str r0, [r2, #_PGV_CONT]
+    ldr  x1, free_pairs.lab
+    ldr  x0, [x1]
+    tst  x0, #1
+    b.ne XC_LAB(Sys$-Plog$-Assign_pair)
+    ldr  x2, [x0, #_P_BACK]
+    str  x2, [x1]
+    ldr  x2, [USP, #16]
+    ldr  x1, [USP, #8]
+    ldr  x3, [USP], #24
+    str  x3, [x0, #_P_BACK]
+    str  x1, [x0, #_P_FRONT]
+    str  x0, [x2, #_PGV_CONT]
     ;;; Put var on trail
-    ldr r0, plog_trail_sp.lab
-    ldr r3, [r0]
-    str r2, [r3], #4
-    str r3, [r0]
-    bx  LR
+    ldr  x0, plog_trail_sp.lab
+    ldr  x3, [x0]
+    str  x2, [x3], #8
+    str  x3, [x0]
+    ret
 
 plog.var_key:
-    .word C_LAB(prologvar_key)
+    .xword C_LAB(prologvar_key)
 
 DEF_C_LAB (_prolog_deref)
-    ldr r0, [USP]
+    ldr  x0, [USP]
 deref.loop:
-    tst r0, #1
-    bne deref.ret
-    ldr r1, [r0, #_KEY]
-    ldr r2, plog.var_key
-    cmp r1, r2
-    bne deref.ret
-    mov r3, r0
-    ldr r0, [r0, #_PGV_CONT]
-    cmp r0, r3
-    bne deref.loop
+    tst  x0, #1
+    b.ne deref.ret
+    ldr  x1, [x0, #_KEY]
+    ldr  x2, plog.var_key
+    cmp  x1, x2
+    b.ne deref.ret
+    mov  x3, x0
+    ldr  x0, [x0, #_PGV_CONT]
+    cmp  x0, x3
+    b.ne deref.loop
 deref.ret:
-    str r0, [USP]
-    bx  LR
+    str  x0, [USP]
+    ret
 
 ref_key.lab:
-    .word C_LAB(ref_key)
+    .xword C_LAB(ref_key)
 
 next_var.lab:
-    .word I_LAB(_plog_next_var)
+    .xword I_LAB(_plog_next_var)
 
 DEF_C_LAB (_prolog_newvar)
-    ldr r1, next_var.lab
-    ldr r0, [r1]
-    ldr r2, ref_key.lab
-    ldr r3, [r0, #_KEY]
-    cmp r2, r3
-    beq XC_LAB(Sys$-Plog$-New_var)
-    str r0, [r0, #_PGV_CONT]
-    str r0, [USP, #-4]!
-    add r0, #_PGV_SIZE
-    str r0, [r1]
-    bx  LR
+    ldr  x1, next_var.lab
+    ldr  x0, [x1]
+    ldr  x2, ref_key.lab
+    ldr  x3, [x0, #_KEY]
+    cmp  x2, x3
+    b.eq XC_LAB(Sys$-Plog$-New_var)
+    str  x0, [x0, #_PGV_CONT]
+    str  x0, [USP, #-8]!
+    add  x0, x0, #_PGV_SIZE
+    str  x0, [x1]
+    ret
 
     .align  3
 

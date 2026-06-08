@@ -1,8 +1,9 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Floating point assembly routines for ARM
+   Purpose: Floating point assembly routines for AArch64
    Author:  Waldek Hebisch
+   AArch64 port by Poplog contributors
  */
 
 #_<
@@ -28,95 +29,93 @@ lconstant macro (
 
         ;;; User stack pointer
 
-        USP     = "r10",
-        LR      = "lr",
+        USP     = "x19",
 
         ;;; Pop ddecimal structure fields:
-        ;;; _DD_1 = MS part, _DD_2 = LS part
+        ;;; On AArch64 64-bit, DDECIMAL has only DD_1 (8 bytes) holding the
+        ;;; full IEEE 754 double precision value.  DD_2 only exists when
+        ;;; WORD_BITS /= DOUBLE_BITS (i.e. on 32-bit hosts).
 
         _DD_1   = @@DD_1,
-        _DD_2   = @@DD_2,
 
 );
 
 >_#
-    .arch armv8
-    .fpu vfp
+    .arch armv8-a
     .file   "afloat.s"
     .text
 
 ;;; Wrapping in POP object
    .text
-   .word   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+   .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
 /* Calling conventions:
-   - double floats are represented by their addresess (pointers),
-     addresess point to raw memory (without a key)
+   - double floats are represented by their addresses (pointers),
+     addresses point to raw memory (without a key)
    - ddecimals are represented by pointers to Pop structures
    - decimals and single floats are passed by value
+   - Poplog word = 8 bytes on AArch64
 */
 
 DEF_C_LAB (_pfcopy)
-    ldr     r3, [USP, #4]
-    ldr     r2, [USP], #8
-    fldd    d7, [r2]
-    fstd    d7, [r3]
-    bx LR
+    ldr     x3, [USP, #8]
+    ldr     x2, [USP], #16
+    ldr     d7, [x2]
+    str     d7, [x3]
+    ret
 
-;;; Convertions
+;;; Conversions
 
 ;;; Pop decimal to single float, just drop pop tag bit
 DEF_C_LAB (_pf_sfloat_dec)
     b C_LAB (_pf_sfloat_dec)
-    ldr   r3, [USP]
-    sub   r3, r3, #1
-    str r3, [USP]
-    bx LR
+    ldr   x3, [USP]
+    sub   x3, x3, #1
+    str   x3, [USP]
+    ret
 
 ;;; Used to read floats
 ;;; argument on top of stack is storage for result, second one
 ;;; is machine integer
 DEF_C_LAB (_pf_dfloat_int)
-    flds    s13, [USP, #4]
-    ldr     r2, [USP], #8
-    ;;; fmsr    s13, r3
-    fsitod  d7, s13
-    fstd    d7, [r2, #0]
-    bx LR
+    ldr     x3, [USP, #8]          /* load machine integer (64-bit) */
+    ldr     x2, [USP], #16         /* load result pointer, pop 2 words */
+    scvtf   d7, x3                 /* signed 64-bit int to double */
+    str     d7, [x2, #0]
+    ret
 
 DEF_C_LAB (_pf_dfloat_uint)
-    flds    s13, [USP, #4]
-    ldr     r2, [USP], #8
-    fuitod  d7, s13
-    fstd    d7, [r2, #0]
-    bx LR
+    ldr     x3, [USP, #8]          /* load machine unsigned int (64-bit) */
+    ldr     x2, [USP], #16         /* load result pointer, pop 2 words */
+    ucvtf   d7, x3                 /* unsigned 64-bit int to double */
+    str     d7, [x2, #0]
+    ret
 
 ;;; Pop decimal to double float, pointer to result is on top
 ;;; of user stack
 DEF_C_LAB (_pf_dfloat_dec)
-    ldr   r3, [USP, #4]
-    ldr   r2, [USP], #8
-    sub   r3, r3, #1
-    fmsr  s13, r3
-    fcvtds  d7, s13
-    fstd    d7, [r2, #0]
-    bx LR
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #16
+    sub   w3, w3, #1               /* drop pop tag bit (32-bit single) */
+    fmov  s13, w3
+    fcvt  d7, s13                  /* single to double */
+    str   d7, [x2, #0]
+    ret
 
 ;;; Pop ddecimal to double float, pointer to result is on top
-;;; of user stack
+;;; of user stack.
+;;; On AArch64 64-bit: DD_1 holds the full 64-bit IEEE 754 double.
 DEF_C_LAB (_pf_dfloat_ddec)
-    ldr   r3, [USP, #4]
-    ldr   r2, [USP], #8
-    ldr   r1, [r3, #_DD_1]
-    str   r1, [r2, #4]
-    ldr   r1, [r3, #_DD_2]
-    str   r1, [r2]
-    bx LR
+    ldr   x3, [USP, #8]            /* ddecimal pointer */
+    ldr   x2, [USP], #16           /* result pointer, pop 2 words */
+    ldr   d7, [x3, #_DD_1]
+    str   d7, [x2]
+    ret
 
-;;; Double float do Pop decimal, returns false on overflow
+;;; Double float to Pop decimal, returns false on overflow
 DEF_C_LAB (_pf_cvt_to_dec)
-    ldr   r3, [USP]
+    ldr   x3, [USP]
     ;;; Rounding: single float has 8 bit exponent, while double
     ;;; float has 11 bit exponent, so when converting double
     ;;; to single 3 lowest bits of single come from low
@@ -127,316 +126,359 @@ DEF_C_LAB (_pf_cvt_to_dec)
     ;;;   010...0
     ;;; Otherwise we round outwards.  To get correct rounding
     ;;; we set 3 bits in double to 1, computing OR with
-    ;;; 0x38000000.  In *0*... case convertion
+    ;;; 0x38000000.  In *0*... case conversion
     ;;; from double to single gives correct 30 upper bits and
     ;;; masking 2 lowest bits gives correctly rounded decimal.
     ;;; In *1*... case we have set 3 bits to get *1111*... After
-    ;;; that convertion from double to single rounds outwards
+    ;;; that conversion from double to single rounds outwards
     ;;; and also gives correct 30 upper bits, except for
     ;;; 010...0 case.  In this last case we just use double as-is.
-    ldr   r1, [r3]
-    cmp   r1, #0x40000000
-    ldr   r2, [r3, #4]
-    orrne r1, #0x38000000
-    fmdrr d7, r1, r2
-    fcvtsd  s13, d7
-    fmrs   r2, s13
-    bic    r2, r2, #3
-    orr    r2, #1
-    mov    r1, r2, asl #1
-    mov    r1, r1, lsr #24
-    cmp    r1, #0
-    moveq  r2, #1
-    cmp    r1, #0xff
-    ldreq  r2, L.false
-    str    r2, [USP]
-    bx LR
+    ;;;
+    ;;; On AArch64: get the full 64-bit double, extract the low 32 bits,
+    ;;; apply the rounding fix, reconstruct, convert to single.
+    ldr   d7, [x3]
+    fmov  x9, d7                   /* get 64-bit IEEE representation */
+    mov   w10, w9                  /* low 32 bits of double */
+    lsr   x11, x9, #32            /* high 32 bits of double */
+    /* cmp w10, #0x40000000 -- immediate too large; load to scratch first */
+    mov   w12, #0x40000000
+    cmp   w10, w12
+    b.eq  1f
+    /* orr  w10, w10, #0x38000000 is encodable as a logical bitmask
+       only on some assemblers; use mov+orr form to be safe */
+    mov   w12, #0x38000000
+    orr   w10, w10, w12
+1:
+    orr   x9, x10, x11, lsl #32   /* reconstruct 64-bit double */
+    fmov  d7, x9
+    fcvt  s13, d7                  /* double to single */
+    fmov  w2, s13
+    bic   w2, w2, #3
+    orr   w2, w2, #1              /* set pop tag bit */
+    lsl   w10, w2, #1
+    lsr   w10, w10, #24           /* extract exponent */
+    cbz   w10, 2f                 /* exponent 0 -> return pop integer 1 */
+    cmp   w10, #0xff
+    b.eq  3f                      /* exponent 0xff -> overflow, return false */
+    /* Normal case: store tagged decimal */
+    str   x2, [USP]
+    ret
+2:
+    /* Zero exponent: return pop integer 1 */
+    mov   x2, #1
+    str   x2, [USP]
+    ret
+3:
+    /* Overflow: return false */
+    adrp  x9, L.false
+    ldr   x2, [x9, #:lo12:L.false]
+    str   x2, [USP]
+    ret
 
-;;; Double float do Pop ddecimal,
+;;; Double float to Pop ddecimal
 DEF_C_LAB (_pf_cvt_to_ddec)
-    ldr   r3, [USP, #4]
-    ldr   r2, [USP], #8
-    ldr   r1, [r3, #4]
-    str   r1, [r2, #_DD_1]
-    ldr   r1, [r3]
-    str   r1, [r2, #_DD_2]
-    bx LR
+    ldr   x3, [USP, #8]            /* source double pointer */
+    ldr   x2, [USP], #16           /* ddecimal pointer, pop 2 words */
+    ldr   d7, [x3]
+    str   d7, [x2, #_DD_1]
+    ret
 
 DEF_C_LAB (_pf_round_d_to_s)
-    ldr     r3, [USP]
-    fldd    d7, [r3]
-    fcvtsd  s13, d7
-    fmrs    r2, s13
-    mov     r1, r2, asl #1
-    mov     r1, r1, lsr #24
-    cmp     r1, #0xff
-    beq     L.ret_false
-    fsts    s13, [r3]
-    bx    LR
+    ldr     x3, [USP]
+    ldr     d7, [x3]
+    fcvt    s13, d7                /* double to single */
+    fmov    w2, s13
+    lsl     w10, w2, #1
+    lsr     w10, w10, #24          /* extract exponent */
+    cmp     w10, #0xff
+    b.eq    L.ret_false
+    str     s13, [x3]
+    ret
 
 DEF_C_LAB (_pf_extend_s_to_d)
-    ldr   r3, [USP]
-    ldr   r2, [r3]
-    mov   r1, r2, asl #1
-    mov   r1, r1, lsr #24
-    cmp   r1, #0xff
-    beq   L.ret_false
-    fmsr  s13, r2
-    fcvtds  d7, s13
-    fstd    d7, [r3]
-    bx    LR
-
-L.expmask:
-    .word 0x7ff00000
+    ldr   x3, [USP]
+    ldr   w2, [x3]
+    lsl   w10, w2, #1
+    lsr   w10, w10, #24
+    cmp   w10, #0xff
+    b.eq  L.ret_false
+    fmov  s13, w2
+    fcvt  d7, s13                  /* single to double */
+    str   d7, [x3]
+    ret
 
 DEF_C_LAB(_pf_check_d)
-    ldr   r3, [USP]
-    ldr   r2, [r3, #4]
-    ldr   r1, L.expmask
-    and   r2, r1
-    cmp   r2, r1
+    ldr   x3, [USP]
+    ldr   d7, [x3]
+    fmov  x9, d7
+    lsr   x9, x9, #32             /* get high 32 bits */
+    mov   w10, #0x7ff00000         /* exponent mask */
+    and   w9, w9, w10
+    cmp   w9, w10
 L.ret_false:
-    ldreq r3, L.false
-    streq r3, [USP]
-    bx LR
+    b.ne  1f
+    adrp  x9, L.false
+    ldr   x3, [x9, #:lo12:L.false]
+    str   x3, [USP]
+1:
+    ret
 
+;;; Convert double to integer (signed, 64-bit on AArch64)
+;;; On 64-bit, integers are 64-bit. Max/min adjusted for 64-bit range.
 DEF_C_LAB (_pf_intof)
-    ldr r3, [USP]
-    fldd    d7, [r3]
-    fldd    d6, L.maxint
-    fcmped  d7, d6
-    fmstat
-    bpl     L.out_of_range
-    fldd    d6, L.minint
-    fcmped  d7, d6
-    fmstat
-    ble     L.out_of_range
-    ftosizd s13, d7
-    fsts    s13, [USP]
-    ldr   r0, L.true
-    str  r0, [USP, #-4]!
-    bx LR
+    ldr   x3, [USP]
+    ldr   d7, [x3]
+    adrp  x9, L.maxint
+    ldr   d6, [x9, #:lo12:L.maxint]
+    fcmp  d7, d6
+    b.pl  L.out_of_range
+    adrp  x9, L.minint
+    ldr   d6, [x9, #:lo12:L.minint]
+    fcmp  d7, d6
+    b.le  L.out_of_range
+    fcvtzs x9, d7                  /* double to signed 64-bit int */
+    str   x9, [USP]
+    adrp  x10, L.true
+    ldr   x0, [x10, #:lo12:L.true]
+    str   x0, [USP, #-8]!         /* push true */
+    ret
 L.out_of_range:
-    ldr   r0, L.false
-    str  r0, [USP]
-    bx LR
+    adrp  x9, L.false
+    ldr   x0, [x9, #:lo12:L.false]
+    str   x0, [USP]
+    ret
+
     .align  3
 L.maxint:
-    .word   0
-    .word   1105199104
+    ;;; 2^63 = 9223372036854775808.0 = 0x43E0000000000000
+    .xword  0x43E0000000000000
 L.minint:
-    .word   2097152
-    .word   -1042284544
+    ;;; -(2^63) - 1 approximately = -9223372036854775809.0
+    ;;; We use -(2^63) = 0xC3E0000000000000
+    .xword  0xC3E0000000000000
 L.maxuint:
-    .word   0
-    .word   1106247680
+    ;;; 2^64 = 0x43F0000000000000
+    .xword  0x43F0000000000000
 
 DEF_C_LAB (_pf_uintof)
-    ldr r3, [USP]
-    fldd    d7, [r3]
-    fldd    d6, L.maxuint
-    fcmped  d7, d6
-    fmstat
-    bpl     L.out_of_range
-    fcmpezd d7
-    fmstat
-    bmi     L.out_of_range
-    ftouizd s13, d7
-    fsts    s13, [USP]
-    ldr   r0, L.true
-    str  r0, [USP, #-4]!
-    bx LR
+    ldr   x3, [USP]
+    ldr   d7, [x3]
+    adrp  x9, L.maxuint
+    ldr   d6, [x9, #:lo12:L.maxuint]
+    fcmp  d7, d6
+    b.pl  L.out_of_range
+    fcmp  d7, #0.0
+    b.mi  L.out_of_range
+    fcvtzu x9, d7                  /* double to unsigned 64-bit int */
+    str   x9, [USP]
+    adrp  x10, L.true
+    ldr   x0, [x10, #:lo12:L.true]
+    str   x0, [USP, #-8]!         /* push true */
+    ret
 
+;;; Extract exponent of double float
 DEF_C_LAB (_pf_expof)
-    ldr     r0, [USP]
-    ldr     r2, [r0, #4]
-    mov     r3, r2, asl #1
-    mov     r3, r3, lsr #21
-    sub     r3, r3, #1020
-    sub     r3, r3, #2
-    str     r3, [USP]
-    bx      LR
+    ldr     x0, [USP]
+    ldr     d7, [x0]
+    fmov    x9, d7
+    lsr     x9, x9, #52           /* shift to get exponent + sign */
+    and     x9, x9, #0x7ff        /* mask exponent (11 bits) */
+    sub     x9, x9, #1023         /* remove bias */
+    str     x9, [USP]
+    ret
 
+;;; Set exponent of double float
 DEF_C_LAB(-> _pf_expof)
-    ldr     r0, [USP]
-    ldr     r1, [USP, #4]!
-    add     r1, r1, #1020
-    ldr     r2, [r0, #4]
-    ldr     r3, L.expmask
-    add     r1, r1, #2
-    bic     r2, r3
-    cmp     r1, #2048
-    bcs     L.exp_too_big
-    mov     r1, r1, asl #20
-    orr     r2, r1
-    str     r2, [r0, #4]
-    ldr     r3, L.true
-    str     r3, [USP]
-    bx LR
+    ldr     x0, [USP]
+    ldr     x1, [USP, #8]!        /* new exponent, advance USP by 8 */
+    add     x1, x1, #1023         /* add bias */
+    ldr     d7, [x0]
+    fmov    x9, d7
+    mov     x10, #0x7ff
+    lsl     x10, x10, #52         /* exponent mask at position */
+    bic     x9, x9, x10           /* clear exponent bits */
+    cmp     x1, #2048
+    b.cs    L.exp_too_big
+    lsl     x1, x1, #52
+    orr     x9, x9, x1            /* set new exponent */
+    fmov    d7, x9
+    str     d7, [x0]
+    adrp    x9, L.true
+    ldr     x3, [x9, #:lo12:L.true]
+    str     x3, [USP]
+    ret
 L.exp_too_big:
-    ldr     r3, L.false
-    str     r3, [USP]
-    bx LR
+    adrp    x9, L.false
+    ldr     x3, [x9, #:lo12:L.false]
+    str     x3, [USP]
+    ret
 
+;;; _pfmodf: split double into integer and fractional parts
+;;; On AArch64 we manipulate the 64-bit IEEE representation directly.
+;;; The double is 1 sign bit + 11 exponent bits + 52 mantissa bits.
 DEF_C_LAB (_pfmodf)
-    ldr     r1, [USP, #4]
-    ldr     r0, [USP], #8
-    ldr     r2, [r0, #4]
-    mov     r3, r2, asl #1
-    mov     r3, r3, lsr #21
-    sub     r3, r3, #1020
-    subs    r3, r3, #3
-    bmi     L.negexp
-    cmp     r3, #51
-    bgt     L.bigexp
-    ;;; Normal case, store argument in d7
-    fldd    d7, [r0]
-    cmp     r3, #20
-    ldrgt   r2, [r0]
-    mvn     r12, #0
-    rsbgt   r3, r3, #52
-    rsble   r3, r3, #20
-    and     r12, r2, r12, asl r3
-    movle   r2, #0
-    stmleia r0, {r2, r12}
-    strgt   r12, [r0]
-    ;;; Load integer part from memory, subtract from argument giving
-    ;;; fractional part, store result
-    fldd    d6, [r0]
-    fsubd   d7, d7, d6
-    fstd    d7, [r1]
-    bx      lr
+    ldr     x1, [USP, #8]         /* pointer for fractional result */
+    ldr     x0, [USP], #16        /* pointer to argument (integer result), pop 2 */
+    ldr     d7, [x0]
+    fmov    x9, d7                 /* get 64-bit representation */
+    /* Extract unbiased exponent */
+    ubfx    x2, x9, #52, #11      /* extract 11-bit exponent field */
+    sub     x2, x2, #1023         /* unbias */
+    subs    x2, x2, #0            /* test sign (negative exponent) */
+    b.mi    L.negexp
+    cmp     x2, #52
+    b.gt    L.bigexp
+    /* Normal case: zero out fractional mantissa bits */
+    /* We need to mask out the lower (52 - exponent) bits */
+    mov     x3, #52
+    sub     x3, x3, x2            /* number of bits to clear */
+    mov     x10, #-1              /* all ones */
+    lsl     x10, x10, x3          /* mask: upper bits set, lower cleared */
+    and     x11, x9, x10          /* integer part bits */
+    fmov    d6, x11               /* integer part as double */
+    str     d6, [x0]              /* store integer part */
+    fsub    d7, d7, d6            /* fractional = original - integer */
+    str     d7, [x1]              /* store fractional part */
+    ret
 
 L.bigexp:
-    mov     r3, #0
-    str     r3, [r1]
-    str     r3, [r1, #4]
-    bx      lr
+    /* Exponent >= 53: number is already an integer, fraction = 0.0 */
+    str     xzr, [x1]             /* store 0.0 (all zero bits = +0.0) */
+    ret
 L.negexp:
-    ldr     r2, [r0]
-    mov     r3, #0
-    str     r2, [r1]
-    ldr     r2, [r0, #4]
-    str     r2, [r1, #4]
-    str     r3, [r0]
-    str     r3, [r0, #4]
-    bx      lr
+    /* Exponent < 0: number is purely fractional, integer part = 0 */
+    ldr     d7, [x0]              /* load original */
+    str     d7, [x1]              /* store as fractional part */
+    /* Set integer part to +/-0.0 preserving sign */
+    and     x9, x9, #0x8000000000000000  /* keep sign bit only */
+    str     x9, [x0]              /* store signed zero */
+    ret
 
 DEF_C_LAB (_pfzero)
-    ldr r3, [USP]
-    fldd    d7, [r3]
-    fcmpzd  d7
-    fmstat
-    ldrne   r0, L.false
-    ldreq   r0, L.true
-    str  r0, [USP]
-    bx LR
+    ldr   x3, [USP]
+    ldr   d7, [x3]
+    fcmp  d7, #0.0
+    adrp  x9, L.false
+    ldr   x0, [x9, #:lo12:L.false]
+    adrp  x9, L.true
+    ldr   x1, [x9, #:lo12:L.true]
+    csel  x0, x1, x0, eq
+    str   x0, [USP]
+    ret
 
 DEF_C_LAB (_pfneg)
-    ldr r3, [USP]
-    fldd    d7, [r3]
-    fcmpezd d7
-    fmstat
-    ldrpl   r0, L.false
-    ldrmi   r0, L.true
-    str  r0, [USP]
-    bx LR
+    ldr   x3, [USP]
+    ldr   d7, [x3]
+    fcmp  d7, #0.0
+    adrp  x9, L.false
+    ldr   x0, [x9, #:lo12:L.false]
+    adrp  x9, L.true
+    ldr   x1, [x9, #:lo12:L.true]
+    csel  x0, x1, x0, mi
+    str   x0, [USP]
+    ret
 
 DEF_C_LAB (_pfeq)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d7, [r3]
-    fldd    d6, [r2]
-    ;;; d6 <= d7 ?
-    fcmpd  d6, d7
-    fmstat
-    ldrne   r0, L.false
-    ldreq   r0, L.true
-    str  r0, [USP]
-    bx LR
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d7, [x3]
+    ldr   d6, [x2]
+    fcmp  d6, d7
+    adrp  x9, L.false
+    ldr   x0, [x9, #:lo12:L.false]
+    adrp  x9, L.true
+    ldr   x1, [x9, #:lo12:L.true]
+    csel  x0, x1, x0, eq
+    str   x0, [USP]
+    ret
 
 DEF_C_LAB (_pfsgreq)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d7, [r3]
-    fldd    d6, [r2]
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d7, [x3]
+    ldr   d6, [x2]
     ;;; d6 <= d7 ?
-    fcmped  d6, d7
-    fmstat
-    ldrhi   r0, L.false
-    ldrls   r0, L.true
-    str  r0, [USP]
-    bx LR
+    fcmp  d6, d7
+    adrp  x9, L.false
+    ldr   x0, [x9, #:lo12:L.false]
+    adrp  x9, L.true
+    ldr   x1, [x9, #:lo12:L.true]
+    csel  x0, x1, x0, ls          /* ls = unsigned lower or same (C clear or Z set) */
+    str   x0, [USP]
+    ret
 
 DEF_C_LAB (_pfsgr)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d7, [r3]
-    fldd    d6, [r2]
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d7, [x3]
+    ldr   d6, [x2]
     ;;; d6 < d7 ?
-    fcmped  d6, d7
-    fmstat
-    ldrpl   r0, L.false
-    ldrmi   r0, L.true
-    str  r0, [USP]
-    bx LR
+    fcmp  d6, d7
+    adrp  x9, L.false
+    ldr   x0, [x9, #:lo12:L.false]
+    adrp  x9, L.true
+    ldr   x1, [x9, #:lo12:L.true]
+    csel  x0, x1, x0, mi          /* mi = negative (less than) */
+    str   x0, [USP]
+    ret
 
 DEF_C_LAB (_pfabs)
-    ldr r3, [USP], #4
-    fldd    d7, [r3]
-    fabsd   d7, d7
-    fstd    d7, [r3]
-    bx      LR
+    ldr   x3, [USP], #8
+    ldr   d7, [x3]
+    fabs  d7, d7
+    str   d7, [x3]
+    ret
 
 DEF_C_LAB (_pfnegate)
-    ldr r3, [USP], #4
-    fldd    d7, [r3]
-    fnegd   d7, d7
-    fstd    d7, [r3]
-    bx      LR
+    ldr   x3, [USP], #8
+    ldr   d7, [x3]
+    fneg  d7, d7
+    str   d7, [x3]
+    ret
 
 ;;; address of first argument is on top of stack, the second is also
 ;;; the result
 DEF_C_LAB (_pfadd)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d7, [r3]
-    fldd    d6, [r2]
-    faddd   d7, d7, d6
-    fstd    d7, [r3]
-    bx      LR
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d7, [x3]
+    ldr   d6, [x2]
+    fadd  d7, d7, d6
+    str   d7, [x3]
+    ret
 
 DEF_C_LAB (_pfsub)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d7, [r3]
-    fldd    d6, [r2]
-    fsubd   d7, d7, d6
-    fstd    d7, [r3]
-    bx      LR
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d7, [x3]
+    ldr   d6, [x2]
+    fsub  d7, d7, d6
+    str   d7, [x3]
+    ret
 
 DEF_C_LAB (_pfmult)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d7, [r3]
-    fldd    d6, [r2]
-    fmuld   d7, d7, d6
-    fstd    d7, [r3]
-    bx      LR
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d7, [x3]
+    ldr   d6, [x2]
+    fmul  d7, d7, d6
+    str   d7, [x3]
+    ret
 
 DEF_C_LAB (_pfdiv)
-    ldr r3, [USP, #4]
-    ldr r2, [USP], #4
-    fldd    d6, [r2]
-    fldd    d7, [r3]
-    fdivd   d7, d7, d6
-    fstd    d7, [r3]
-    bx LR
+    ldr   x3, [USP, #8]
+    ldr   x2, [USP], #8
+    ldr   d6, [x2]
+    ldr   d7, [x3]
+    fdiv  d7, d7, d6
+    str   d7, [x3]
+    ret
 
+    .align  3
 L.true:
-    .word C_LAB(true)
+    .xword C_LAB(true)
 L.false:
-    .word C_LAB(false)
+    .xword C_LAB(false)
 
 DEF_C_LAB (_pfqrem)
     b XC_LAB(Sys$-Float_qrem)
