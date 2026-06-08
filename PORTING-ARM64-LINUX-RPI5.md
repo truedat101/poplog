@@ -644,3 +644,70 @@ for initial functionality, with bug fixes continuing through 2022.
 - **QEMU user-mode emulation** (`qemu-aarch64-static`) can test individual
   binaries on the host without a real RPi5, though full system testing requires
   the real hardware.
+
+---
+
+## Portability to other AArch64 platforms
+
+The ARM32 port carried a real "how broad a target?" question (armel vs armhf,
+soft- vs hard-float, ARMv6 vs v7, Thumb, optional VFP/NEON). **On AArch64 that
+question is almost entirely gone**: there is one ABI (AAPCS64 / LP64 /
+little-endian), FP+SIMD are *mandatory*, and `armv8-a` is a universal baseline
+every AArch64 core implements. This port is written to that baseline and is not
+tuned to the Pi 5's Cortex-A76, so moving to a MediaTek Genio 520/720
+(Cortex-A78+A55) or a Qualcomm Snapdragon (Kryo) Linux board is mostly a
+*rebuild*, not a re-port. Concretely:
+
+**Already generic (no change needed):**
+
+- **ISA baseline.** Every `.s` file and the runtime code generator emit
+  `.arch armv8-a` (see `asmout.p`). No `-mcpu`/`-mtune`/LSE/optional extensions,
+  so the same code runs on A53/A55/A72/A76/A78/Kryo alike. Tuning for a specific
+  core would only buy performance on the *C* support files, at the cost of
+  breadth -- not worth it. (The hand-written `.s` and the JIT are assembly, so
+  compiler `-mcpu` would not touch them anyway.)
+- **I-cache coherency for JIT'd code.** Poplog compiles code at the REPL and
+  must sync I/D caches afterwards. `CACHEFLUSH` (`sysdefs.p`) is wired to
+  `__clear_cache`, which reads `CTR_EL0` and issues the correct
+  `dc cvau`/`ic ivau`/`dsb`/`isb` for *that* core's cache-line size -- so it is
+  already correct across microarchitectures (this is the #1 thing that bites
+  naive AArch64 JIT ports; here it is handled).
+- **Calling convention, data model, endianness, FP-as-single** -- all fixed by
+  AAPCS64; identical on every AArch64 Linux board.
+
+**Platform-specific knobs to check when retargeting:**
+
+1. **Kernel page size (the main one).** `sysdefs.p VPAGE_OFFS` is hard-coded to
+   `16384` because the Pi 5 (rpi-2712 kernel) uses **16 KB** pages, and saved
+   images are `mmap`'d `MAP_FIXED`, which requires the base+offset to be aligned
+   to the *runtime* page size. Most other AArch64 Linux boards (Genio, Snapdragon
+   dev boards, generic arm64 distros) use **4 KB** pages -- a 16 KB-aligned image
+   still loads there (16384 is a multiple of 4096), so the current images are
+   forward-compatible to 4 KB. But a **64 KB**-page kernel (some server/RHEL
+   configs) would *reject* a 16 KB-aligned image. The robust options, in order of
+   preference: (a) build natively on the target with `VPAGE_OFFS` set to that
+   kernel's page size; (b) set `VPAGE_OFFS = 65536` for "build once, load
+   anywhere" images (64 KB is a multiple of 4/16/64 KB -- costs a little image
+   padding); (c) make it dynamic via `sysconf(_SC_PAGESIZE)`. Check with
+   `getconf PAGE_SIZE` on the target first.
+2. **Non-PIE fixed load address.** `basepop11` is linked `-no-pie` and the saved
+   image loads at its fixed link address. Standard Linux allows this; a kernel
+   that *forces* PIE, or a very different memory map / high `mmap_min_addr`, could
+   refuse it. Rare, but verify the image loads (not just that it builds).
+3. **PAC / BTI / MTE on newer cores + hardened kernels.** ARMv8.3+ pointer
+   authentication and BTI are not used or required here, but if a distro enforces
+   **BTI** on executable mappings, the JIT'd pages (plain `br`/`blr`, no `bti`
+   landing pads) could fault. It works today because the binary does not opt into
+   BTI (`GNU_PROPERTY_AARCH64_FEATURE_1_BTI`). Keep in mind for hardened targets.
+4. **libc.** The toolchain assumed is `aarch64-linux-gnu-*` (glibc). A musl distro
+   (e.g. Alpine) needs a musl cross-toolchain; `__clear_cache` is a compiler
+   builtin so it is fine, but other `_extern` C support assumes glibc.
+
+**big.LITTLE (Genio/Snapdragon) is a non-issue** for correctness: Poplog's core
+is single-threaded, and both the big and LITTLE clusters implement the same
+`armv8-a` ISA, so it simply runs on whichever core the scheduler picks.
+
+Bottom line: for a Genio 520/720 or a Snapdragon Linux board, expect to (1)
+check `getconf PAGE_SIZE` and set `VPAGE_OFFS` accordingly (likely 4 KB), (2)
+cross-build with the generic `aarch64-linux-gnu` toolchain, (3) verify the image
+*loads* and the REPL JIT runs. No instruction-set or ABI work should be needed.
