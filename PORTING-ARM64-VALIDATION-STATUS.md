@@ -63,19 +63,33 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > builds+runs, Prolog computes (append, 720) AND reports errors, Pop-11
 > regression (incl. dlocal-mix/weakref-dlocal/nested-dlocal) clean.
 >
-> **⚠️ One narrower gap remains — piped-stdin EOF without `halt`.** When the
-> Prolog toplevel reads **past EOF on a non-TTY pipe** (no explicit `halt.`), it
-> crashes in the lexer (`Lex_get_base`, item.w/`item.p`): the `dlocal lexstream`
-> in `Incharitem` ends up holding `&_pop_set_async_check` (a raw C-function
-> address, from the `_extern _pop_set_async_check` **active-dlocal** in the
-> device read / `sys_clear_input.p`) instead of its `consref` — the char reader
-> then dereferences code bytes → SIGSEGV in `_L2D` (`item.w`).  **Race/signal
-> Heisenbug:** it does NOT reproduce under heavier gdb instrumentation (a
-> `tbreak`+conditional-watchpoint run exited cleanly), pointing at the
-> SIGIO/async-check dispatch on the closed pipe.  **Narrow** — interactive Prolog
-> under a PTY works, and piped input ending in `halt.` works; only bare-EOF on a
-> pipe is affected.  Not yet root-caused (extern-call result handling in the
-> active dlocal, vs. the arm64 async/signal trampoline `_call_sys`, asignals.s).
+> **✅ FIXED (2026-06-08, `2c5c674`) — piped-stdin EOF without `halt`.** Root
+> cause was a one-line latent bug in **`pop/lib/lib/emacsreadline.p`** (the
+> active `readline` in every image, via `startup.p`'s `uses emacsreadline`): it
+> built each line as `[% until (rep() ->> item) == newline do item enduntil %]`
+> — stopping **only on newline, never on `termin`**.  A non-interactive pipe can
+> hit EOF with no closing newline; the repeater then returns `termin` forever,
+> the loop spins re-reading it and pushing `termin` onto the user stack, and
+> with nothing checking the user-stack limit on that path the stack **overruns
+> into the heap**, corrupting live structures — including the lexer's
+> `dlocal lexstream`, which is why it surfaced as `lexstream` holding a raw
+> code/stack address (`&_pop_set_async_check`, a USP address, etc. — the value
+> varied by run) → SIGSEGV/SIGILL in `Lex_get_base`/`_L2D`.  The async/SIGIO
+> dispatch (`Async_raise_signal`, confirmed firing) and the
+> `&_pop_set_async_check` value were **downstream symptoms of the overrun**, not
+> the cause; the "Heisenbug" behaviour (vanishing under watchpoints) was the
+> overrun's timing-sensitivity.  Pinned by passive logging-breakpoint tracing
+> (watchpoints perturbed it away) that showed `Incharitem` being called in a
+> tight loop returning `termin`, then reading the source: `emacsreadline`.  Fix:
+> also quit the loop on `termin` and return `termin` at EOF (standard readline
+> semantics).  Verified after rebuilding all images: piped goals with no
+> trailing `halt.` exit cleanly for Prolog/Pop-11/Lisp; computation, error
+> reporting, and interactive-PTY use all still work.
+>
+> **No known functional gaps remain — the port is at feature parity with
+> raspi32.** All four languages run, compute, report errors cleanly, and handle
+> both interactive (PTY) and piped (incl. bare-EOF) input; all three images
+> build.
 
 > **Runtime bring-up progress (2026-06-03) — two more real bugs fixed; basepop11
 > now executes far into startup.** With the codegen + stack-leak work done,
