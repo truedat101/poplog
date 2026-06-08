@@ -13,6 +13,53 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > qemu user-mode artifacts (e.g. the `linux_setper` execve re-exec). All crashes
 > below reproduce natively, so they are real bugs, not emulation artifacts.
 
+> ## ★ MILESTONE (2026-06-08) — all four languages run; all three images build; ≈feature parity with raspi32
+>
+> Verification ladder is essentially complete on the Pi 5:
+> **Pop-11 REPL ✅ → startup.psv ✅ → clisp.psv ✅ (Common Lisp FULLY works) →
+> prolog.psv ✅ (Prolog computes correctly) → pml.psv ✅ (Standard ML runs).**
+> All three language images build (clisp 2.8 MB, prolog 786 KB, pml 1.2 MB).
+> Verified on the Pi:
+> - **Common Lisp:** `(fact 12)`→479001600, `mapcar`, `format`,
+>   `make-array`+`setf aref`, `loop`→(1 4 9 16 25), `sort`→(1 1 2 3 4 5 6 9).
+> - **Prolog:** recursive `append`→[1,2,3,4,5], factorial `f(6,X)`→720, `member`,
+>   `findall`→[10,20,30], naive-reverse; interactive `?-` clean under a PTY.
+> - **Standard ML:** `print "x"`→`"x"` + `val it = "x" : string` (reader,
+>   evaluator, type-inference all run).
+>
+> **The bug class that unlocked Lisp (and the language layer in general):**
+> AArch64 has no conditional STR/BLR, so the codegen planted
+> `B.cc +N ; load_literal Xr,addr ; OP Xr`.  But `load_literal` of a 32-bit
+> address is **2 instructions** (MOVZ+MOVK), and the branch (`+12`) skipped the
+> load, so on the taken path `OP` ran with a **stale Xr** → `BLR` to garbage /
+> `STR` of stale `<false>` over a live value.  Two sites, both pervasive:
+> `I_SETSTACKLENGTH` (`e3380ca`) and `I_LISP_TRUE` (`a59e745`, the headline — it
+> backs every Lisp boolean; fixing it made the whole 22-file Lisp system build).
+> Plus a **byte-scaling** bug in `_setstklen` (`alisp.s`, `74008da`): it computed
+> `4*(items)` from popints but LP64 stack items are 8 bytes — missing a `×2`
+> (the ARM32 original used 4-byte items); this was the "Ste: stack empty"
+> underflow blocking ALL Lisp macro/eval.  Earlier in the same push:
+> `fast_subscrv0` base-offset (`23b57d4`, THE chars.p heap-corruptor),
+> `I_SWITCH` jump-table (`858fc57`), 3 more 3-bit-popint-tag sites (`0009ea2`).
+> (All in `pop/src/arm64/ass.p` unless noted.  9 commits this push; pushed.)
+>
+> **ONE known gap remains — Prolog (and likely Lisp) ERROR REPORTING.** Prolog
+> *computes* perfectly, but any Prolog **error** (type error, undefined pred,
+> EOF) crashes the error printer instead of showing a clean message:
+> `prolog_pr_exception` → a value with a malformed field (a pointer INTO a string
+> literal "no") gets called via `_popenter` → `br` into string data → SIGILL.
+> Ruled out (clean isolated tests all pass): dlocals, `weakref`-in-value, the
+> exact `prolog_sysinvoke` weakref-dlocal pattern, nested `define dlocal`,
+> applying non-procedures.  So it is a **heap corruption** of the call-target
+> structure during error reporting — same CLASS as the early `SF_OWNER`=popint-0
+> frame-walk crash noted below (the error reporter walks the call stack / builds
+> the message and a wrong field/offset write corrupts a live structure).  It
+> recovers under a TTY, so interactive Prolog is usable.  This is the last polish
+> item, not a functional blocker.  Localization plan (in agent memory + below):
+> lower `popmemlim` so a GC fires right after the error and reports BAD STRUCTURE
+> near the corruptor (the per-file-GC trick that pinned chars.p), or single-step
+> the error path watching for the string-interior write.
+
 > **Runtime bring-up progress (2026-06-03) — two more real bugs fixed; basepop11
 > now executes far into startup.** With the codegen + stack-leak work done,
 > running the linked `basepop11` exposed runtime bugs, each fix advancing it:
