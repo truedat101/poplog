@@ -86,10 +86,18 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > trailing `halt.` exit cleanly for Prolog/Pop-11/Lisp; computation, error
 > reporting, and interactive-PTY use all still work.
 >
-> **No known functional gaps remain — the port is at feature parity with
-> raspi32.** All four languages run, compute, report errors cleanly, and handle
-> both interactive (PTY) and piped (incl. bare-EOF) input; all three images
-> build.
+> **No known functional gaps remain in the CONSOLE core — at feature parity
+> with raspi32.** All four languages run, compute, report errors cleanly, and
+> handle both interactive (PTY) and piped (incl. bare-EOF) input; all three
+> images build.
+>
+> **Next frontier — the graphical subsystem (X11/Xt/Motif/XVed) is unbuilt.**
+> The build is currently `-nox`, so nothing graphical has been compiled on
+> AArch64 (no `libXpw.so`, no `xved.psv`). The forward Poplog→C call path works,
+> but the **C→Poplog callback trampolines** (`aextern.s` `_pop_external_callback`
+> / `_exfunc_clos_action`, exercised by every Xt event) are implemented yet
+> never executed, and are the real remaining AArch64 risk. Full plan +
+> prerequisites in `PORTING-ARM64-LINUX-RPI5.md` § "Graphical subsystem".
 
 > **Runtime bring-up progress (2026-06-03) — two more real bugs fixed; basepop11
 > now executes far into startup.** With the codegen + stack-leak work done,

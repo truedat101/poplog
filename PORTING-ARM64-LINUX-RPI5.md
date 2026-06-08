@@ -711,3 +711,63 @@ Bottom line: for a Genio 520/720 or a Snapdragon Linux board, expect to (1)
 check `getconf PAGE_SIZE` and set `VPAGE_OFFS` accordingly (likely 4 KB), (2)
 cross-build with the generic `aarch64-linux-gnu` toolchain, (3) verify the image
 *loads* and the REPL JIT runs. No instruction-set or ABI work should be needed.
+
+---
+
+## Graphical subsystem (X11 / Xt / Motif / XVed) — status & remaining work
+
+**Status: not yet built or tested on AArch64.** The console core (all four
+languages, all three saved images) is complete, but the build is currently
+configured **`-nox`** (`Makefile` `XL_FLAG=-nox`), so nothing graphical has been
+compiled or linked. The X source is all present in-tree; only the *core* externs
+are built on the Pi (`c_core.o`, `c_callback.o`, `ext_arm.o`, … — no `Xpw`
+objects, no `libXpw.so`, no `xved.psv`).
+
+### What "graphical" comprises in Poplog
+
+- `pop/x/Xpw/` — Poplog's primitive X widget set (15 C files: `Graphics.c`,
+  `Text.c`, `XpwComposit.c`, `CallMethod.c`, …) → `libXpw.so`.
+- `pop/x/ved/` — **XVed**, the windowed editor → `xved.psv` (built via `mkxved`;
+  `stamp_images` already lists `stamp_xved`).
+- `pop/x/ui/`, `pop/x/src/` — the Pop-11 X / widget / graphics libraries.
+- `XtPoplog.c` — the Xt ↔ Poplog glue (event loop + callback dispatch).
+- Pop-11 graphics (`XpwGraphic` line/pixmap drawing) and XVed need only
+  **X11 + Xt + Xpw**; the heavier widget GUI (propsheets, menus) needs **Motif**
+  (`libXm`).
+
+### Pi prerequisites (currently missing)
+
+- Runtime `libX11.so.6` / `libXt.so.6` / `libXext.so.6` are present, but the
+  **`-dev` packages are not** (no bare `libX11.so` link / full headers):
+  `sudo apt install libx11-dev libxt-dev libxext-dev`.
+- **Motif is entirely absent** (`libXm`, `/usr/include/Xm`). For the full GUI:
+  `sudo apt install libmotif-dev`. Not needed for XVed / basic graphics.
+- A display for testing: the Pi 5 desktop, SSH X-forwarding, or headless `Xvfb`.
+
+### Work required (in order)
+
+1. **Install the X (and optionally Motif) `-dev` packages** above.
+2. **Flip the build off `-nox`** (`XL_FLAG`) and rebuild. This compiles the 15
+   `Xpw` C files → `libXpw.so`, links X into `basepop11`, and builds `xved.psv`.
+   *Low AArch64 risk* — the Xpw C is generic, portable X-widget code, and Motif
+   builds normally on aarch64 (standard Debian package).
+3. **Validate the C→Poplog callback path — the real AArch64 work.** X is
+   event-driven: Xt calls *back into* Poplog for every event/callback (button,
+   expose, timer), via `XtPoplog.c` → `aextern.s` (`_pop_external_callback`,
+   `_exfunc_clos_action`) → `Sys$-Extern$-Callback`. These trampolines are
+   *implemented but have never executed* under `-nox`. It is the same class of
+   frame / register / USP-reconstruction asm as the forward `_extern` path, but
+   in the harder *reverse* direction (rebuilding Poplog's register + stack state
+   from a cold C entry), so expect it to need the same gdb-on-the-Pi validation
+   pass the forward path got. The arg marshaller `copy_external_arguments` must
+   also handle X's call patterns — mostly pointers (fine); watch struct-by-value
+   and any varargs (Poplog generally avoids Xt's `Va*` forms).
+4. **Test on a display** (desktop / X-forward / `Xvfb`).
+
+### Risk summary
+
+The **forward** call path (Poplog→C) already works — it is how the runtime
+reaches `_pop_set_async_check`, `__clear_cache`, etc. — so calling *into*
+libX11/libXt is on solid ground. The genuinely new AArch64 risk is the
+**callback trampolines** (step 3); everything else is "install dev libs, flip the
+flag, rebuild." Motif is optional unless the full widget GUI is wanted.
