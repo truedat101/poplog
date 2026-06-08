@@ -2034,12 +2034,20 @@ enddefine;
 ;;;     replace <false> result on top of stack by nil.
 
 define I_LISP_TRUE();
+    ;;; Replace a <false> on top of the user stack with nil; leave anything
+    ;;; else untouched.  No conditional STR on AArch64, so: load nil into X1
+    ;;; BEFORE the branch (load_literal is variable length -- 2 instrs for the
+    ;;; nil address), compare, then B.NE skips ONLY the single STR (+8).
+    ;;; The old code branched +12 and loaded nil AFTER the B.NE, so on the NE
+    ;;; path (top /== false, the common case) it jumped onto the STR with X1
+    ;;; still holding <false> and overwrote the live top-of-stack value with
+    ;;; <false> -- pervasive value corruption (I_LISP_TRUE backs every Lisp
+    ;;; boolean coercion).
     load_literal(_X1, false);
     drop_load_off(_X0, _USP, _0);
     drop_cmp_reg(_X0, _X1);
-    ;;; On AArch64, no conditional STR. Use: B.NE skip; STR nil; skip:
-    drop_br_cond(_cc_NE, _asm_code_offset _add _12);
     load_literal(_X1, nil);
+    drop_br_cond(_cc_NE, _asm_code_offset _add _8);
     drop_store_off(_X1, _USP, _0);
     ;;; skip: (falls through here if not equal)
 enddefine;
