@@ -43,22 +43,39 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > `I_SWITCH` jump-table (`858fc57`), 3 more 3-bit-popint-tag sites (`0009ea2`).
 > (All in `pop/src/arm64/ass.p` unless noted.  9 commits this push; pushed.)
 >
-> **ONE known gap remains — Prolog (and likely Lisp) ERROR REPORTING.** Prolog
-> *computes* perfectly, but any Prolog **error** (type error, undefined pred,
-> EOF) crashes the error printer instead of showing a clean message:
-> `prolog_pr_exception` → a value with a malformed field (a pointer INTO a string
-> literal "no") gets called via `_popenter` → `br` into string data → SIGILL.
-> Ruled out (clean isolated tests all pass): dlocals, `weakref`-in-value, the
-> exact `prolog_sysinvoke` weakref-dlocal pattern, nested `define dlocal`,
-> applying non-procedures.  So it is a **heap corruption** of the call-target
-> structure during error reporting — same CLASS as the early `SF_OWNER`=popint-0
-> frame-walk crash noted below (the error reporter walks the call stack / builds
-> the message and a wrong field/offset write corrupts a live structure).  It
-> recovers under a TTY, so interactive Prolog is usable.  This is the last polish
-> item, not a functional blocker.  Localization plan (in agent memory + below):
-> lower `popmemlim` so a GC fires right after the error and reports BAD STRUCTURE
-> near the corruptor (the per-file-GC trick that pinned chars.p), or single-step
-> the error path watching for the string-interior write.
+> **✅ FIXED (2026-06-08, `a68d066`) — Prolog ERROR REPORTING now works.**
+> Prolog **computation errors report cleanly**: `X is foo+1` →
+> `;;; PROLOG ERROR - NUMBER(S) NEEDED / INVOLVING: foo 1` + a DOING backtrace,
+> instead of a SIGILL.  Root cause was **not** heap corruption but a **dlocal
+> frame-slot ORDER mismatch** in the runtime VM (`pop/src/arm64/ass.p`,
+> `I_CREATE_SF`/`I_UNWIND_SF`): they saved dynamic-locals in FORWARD `PD_TABLE`
+> order (`PD_TABLE[k]`→`SF_LOCALS[Nstkvars+k]`), but the shared introspection
+> code (`Dlocal_frame_offset`, procedure.p:138; matched by `genproc.p`, which
+> stores `dlocal_labs` — the *reverse* of `PD_TABLE` — forward) expects the
+> REVERSE: `PD_TABLE[k]`→`SF_LOCALS[Nstkvars+(Nlocals-1-k)]`.  Save/restore were
+> self-consistent so plain dlocals always worked; the bug only bit **frame
+> introspection of a multi-dlocal runtime proc**.  `sys_exception_handler`
+> (errors.p:753) uses `Dlocal_frame_offset` to read `pop_exception_final`'s saved
+> value in `prolog_sysinvoke`'s frame (8 dlocals) and **calls it** — with the
+> mirror it read a different dlocal (the word `"no"` from `oride`) and branched
+> into a string literal → SIGILL.  Fix: fill the dlocal slots top-down.
+> Single-dlocal procs unaffected (forward == reverse).  Verified: clisp still
+> builds+runs, Prolog computes (append, 720) AND reports errors, Pop-11
+> regression (incl. dlocal-mix/weakref-dlocal/nested-dlocal) clean.
+>
+> **⚠️ One narrower gap remains — piped-stdin EOF without `halt`.** When the
+> Prolog toplevel reads **past EOF on a non-TTY pipe** (no explicit `halt.`), it
+> crashes in the lexer (`Lex_get_base`, item.w/`item.p`): the `dlocal lexstream`
+> in `Incharitem` ends up holding `&_pop_set_async_check` (a raw C-function
+> address, from the `_extern _pop_set_async_check` **active-dlocal** in the
+> device read / `sys_clear_input.p`) instead of its `consref` — the char reader
+> then dereferences code bytes → SIGSEGV in `_L2D` (`item.w`).  **Race/signal
+> Heisenbug:** it does NOT reproduce under heavier gdb instrumentation (a
+> `tbreak`+conditional-watchpoint run exited cleanly), pointing at the
+> SIGIO/async-check dispatch on the closed pipe.  **Narrow** — interactive Prolog
+> under a PTY works, and piped input ending in `halt.` works; only bare-EOF on a
+> pipe is affected.  Not yet root-caused (extern-call result handling in the
+> active dlocal, vs. the arm64 async/signal trampoline `_call_sys`, asignals.s).
 
 > **Runtime bring-up progress (2026-06-03) — two more real bugs fixed; basepop11
 > now executes far into startup.** With the codegen + stack-leak work done,
