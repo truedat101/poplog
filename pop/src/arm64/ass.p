@@ -2008,22 +2008,20 @@ define I_SETSTACKLENGTH();
         load_literal(_X3, ident _userhi);
         drop_load_off(_X3, _X3, _0);
         drop_sub_reg(_X2, _X3, _X2);
-        drop_cmp_reg(_USP, _X2);
-        ;;; If USP != expected, call _setstklen_diff
-        ;;; On AArch64 we can't do conditional BLR directly.
-        ;;; Use: B.EQ skip; BLR _setstklen_diff; skip:
-        lvars _skip_off = _asm_code_offset _add _12;
-        ;;; 12 = 3 instructions * 4 bytes (load_literal may be 2 + BLR = 1)
-        ;;; Actually load_literal can be variable length, so we need
-        ;;; a different approach. Use B.EQ to skip over the call.
-        ;;; Plant B.EQ +8 (skip 2 instructions: load + BLR)
-        ;;; But load_literal may produce 1-3 instructions...
-        ;;; Solution: always use literal pool for the address and
-        ;;; produce exactly: LDR Xwk, [literal]; BLR Xwk
-        ;;; So B.EQ skips exactly 2 instructions = 8 bytes.
-        ;;; For simplicity, force literal pool load:
-        drop_br_cond(_cc_EQ, _asm_code_offset _add _12);
+        ;;; If USP == expected, skip the call; else call _setstklen_diff.
+        ;;; AArch64 has no conditional BLR.  load_literal is VARIABLE length
+        ;;; (2 instrs MOVZ+MOVK for a 32-bit code address), so we must load WK
+        ;;; BEFORE the branch and have the B.EQ skip only the single BLR (+8).
+        ;;; The previous code loaded WK *after* a B.EQ +12: on the equal path
+        ;;; (USP==expected, the COMMON case) it branched straight onto the BLR
+        ;;; while skipping the WK load, so `BLR WK` jumped to a stale/garbage
+        ;;; address and smashed the heap -- the corruption that blocked Lisp
+        ;;; eval once the _setstklen underflow was fixed.  Loading WK first and
+        ;;; branching +8 (one instruction, the BLR) is robust to load_literal's
+        ;;; length and leaves WK valid on the fall-through.
         load_literal(_WK, _setstklen_diff);
+        drop_cmp_reg(_USP, _X2);
+        drop_br_cond(_cc_EQ, _asm_code_offset _add _8);
         drop_w(_BLR _biset _shift(_WK, _5));
     else
         ;;; general case, simply call _setstklen
