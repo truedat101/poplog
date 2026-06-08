@@ -19,6 +19,9 @@ Ubuntu, cross-toolchain `aarch64-linux-gnu-{gcc,as,ld}`.
 > **Pop-11 REPL ✅ → startup.psv ✅ → clisp.psv ✅ (Common Lisp FULLY works) →
 > prolog.psv ✅ (Prolog computes correctly) → pml.psv ✅ (Standard ML runs).**
 > All three language images build (clisp 2.8 MB, prolog 786 KB, pml 1.2 MB).
+> **Reproduce any time:** run `bash tools/validate-raspi5.sh` on the Pi — it
+> builds any missing images and runs the whole ladder as a 12-gate PASS/FAIL
+> check (`--rebuild` forces fresh images; last run: 12/12 PASS).
 > Verified on the Pi:
 > - **Common Lisp:** `(fact 12)`→479001600, `mapcar`, `format`,
 >   `make-array`+`setf aref`, `loop`→(1 4 9 16 25), `sort`→(1 1 2 3 4 5 6 9).
