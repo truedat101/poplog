@@ -36,6 +36,14 @@ DEF_C_LAB (_setstklen)
     ldr   x2, [USP], #16
     add   x2, x2, x3
     sub   x2, x2, #6
+    ;;; (nresults + saved_len) are POPINTS (scale 4/item); subtracting the two
+    ;;; tags (#6) leaves 4*(items).  Stack items are 8 bytes on LP64, so double
+    ;;; to get the byte offset 8*(items).  The ARM32 original omitted this (its
+    ;;; items were 4 bytes); the matching inline I_SETSTACKLENGTH in ass.p
+    ;;; already doubles.  Without it _setstklen set USP at half the distance,
+    ;;; misaligning the user stack by 4 and underflowing -- the "Ste: stack
+    ;;; empty" that blocked all Lisp eval (lisp_apply's nresults protocol).
+    add   x2, x2, x2
     adrp  x3, L0._userhi
     add   x3, x3, :lo12:L0._userhi
     ldr   x3, [x3]
