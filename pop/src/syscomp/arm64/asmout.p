@@ -469,6 +469,14 @@ define global extern_name_translate(lang, symbol, type) -> symbol;
     returnif(lang = 'ASM');
     if lang = 'FORTRAN' then uppertolower(symbol) <> '_' -> symbol endif;
 #_IF DEF UNIX_MACHO
+    ;;; Darwin variadic ABI: the variadic part of a call goes on the STACK,
+    ;;; but Pop's extern calls pass everything in registers -- so calls to
+    ;;; variadic libc functions read garbage (e.g. open(2) got mode 000).
+    ;;; Route them to fixed-arity C wrappers (pop/extern/lib/pop_vararg_fix.c).
+    if symbol = 'open' or symbol = 'fcntl' or symbol = 'ioctl'
+    or symbol = 'printf' then
+        'pop_w_' <> symbol -> symbol
+    endif;
     ;;; Mach-O: external C/Fortran symbols carry a leading underscore (foo -> _foo)
     '_' <> symbol -> symbol;
 #_ENDIF
