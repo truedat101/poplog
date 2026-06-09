@@ -577,7 +577,11 @@ int set_libc_errno(int x) {
 #if !(defined(__linux__) || defined(__NetBSD__) || defined(__APPLE__))
 #include <siginfo.h>
 #endif
+#if defined(__APPLE__)
+#include <sys/ucontext.h>   /* mcontext types only; <ucontext.h> gates on _XOPEN_SOURCE */
+#else
 #include <ucontext.h>
+#endif
 
 #if defined(sparc) && !defined(REG_PC)
 /* old style */
