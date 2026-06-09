@@ -394,14 +394,40 @@ blob whose pointer fields are stored as blob-relative *offsets* + a reloc table
 of those field offsets → `mmap(MAP_JIT)` → `pthread_jit_write_protect_np(0)` →
 copy + add the JIT base to each tagged field → `pthread_jit_write_protect_np(1)`
 → `sys_icache_invalidate` → execute. Verified: entry code runs from MAP_JIT and
-the relocated pointer resolves to the JIT base. **Remaining build:** (1) codegen
-— emit pointer fields as blob-relative offsets + collect the reloc table
-(`asmout.p` `outdatum`/`asm_outword`; delimit the seed with start/end symbols);
-(2) wire the loader into `c_sysinit.c`/startup (locate the seed segment, run the
-proven sequence, hand off to `Sys$-Poplog_Main`); (3) handle pointers that target
-*outside* the blob (C runtime / real `__DATA`) — leave those absolute. Artifacts
-staged at `~/poplog-mac-build` (poplink_*.o, src.olb, libpop.a); the corepop link
-is 0-undefined — only this relocation layer remains.
+the relocated pointer resolves to the JIT base.
+
+**Offset emission — also proven** (`.quad target - seed_base`): a cross-`.o`
+subtractor relocation resolves to a link-time *constant* offset with **no
+text-relocation** (tested: value 16 for a target 16 bytes past `seed_base`). So
+the two halves of the scheme — the loader and the offset codegen — are both
+de-risked. Note: the 983 distinct text-reloc symbols are all *intra-seed* Pop
+labels (`c_`/`xc_`/`p_`/`_L…`); the only external-C references are in *code*
+(`bl`/`adr_l`, already handled), so data pointer fields are uniformly intra-seed.
+
+**Remaining build (piece 1, codegen):**
+1. **Contiguity + markers:** route all Pop objects into one contiguous section
+   (e.g. `__DATA,__popseed`, gated `UNIX_MACHO`) so `seed_base..seed_end` is a
+   single copyable region; emit `seed_base`/`seed_end` globals (or use the
+   linker's `section$start$…`). This also makes the link succeed (the `.quad`s
+   become `__DATA`, dyld-rebasable) even before offsets land.
+2. **Offset pointers:** in `outdatum`/`asm_outword`, when the datum is a *label*
+   (always an intra-seed pointer), emit `<label> - seed_base` instead of
+   `<label>`.
+3. **Reloc table:** collect the field offsets and emit them as a table the loader
+   reads. Emitted where the seed is consolidated — this is a **poplink**-level
+   change (it lays out the final image), not asmout alone; or plant a per-field
+   label and emit `.quad <field> - seed_base` rows.
+
+*(Alternative if the reloc-table emission proves heavy: keep absolute `.quad`s in
+`__DATA`, let dyld rebase, and have the loader read dyld's rebase info (chained
+fixups) as the reloc table + a range check for intra-seed — simpler codegen,
+fiddlier loader. The offset scheme above matches the proven PoC, so prefer it.)*
+
+**Piece 2 (loader):** wire the proven sequence into `c_sysinit.c` startup
+(locate `__popseed`, MAP_JIT-copy-relocate, hand off to `Sys$-Poplog_Main`);
+leave out-of-blob pointers absolute. Artifacts staged at `~/poplog-mac-build`
+(poplink_*.o, src.olb, libpop.a); the corepop link is 0-undefined — only this
+relocation layer remains.
 - [ ] Build, load, and **run** `startup.psv`.
 - [ ] Pop-11 REPL: literals, lists/vectors/floats, operator precedence,
       `define`s, records, stack constructs.
