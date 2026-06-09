@@ -569,12 +569,12 @@ int set_libc_errno(int x) {
  *  Handler for error-type signals, i.e. QUIT, ILL, IOT, EMT, FPE, BUS, SEGV
  */
 
-#if defined(SVR4) || defined(__linux__) || defined(__NetBSD__)
+#if defined(SVR4) || defined(__linux__) || defined(__NetBSD__) || defined(__APPLE__)
 /* Default case for SVR4, but not (yet) used for SG IRIX */
 #if !defined(__sgi)
 #define _POP_ERRSIG_HANDLER_
 
-#if !(defined(__linux__) || defined(__NetBSD__))
+#if !(defined(__linux__) || defined(__NetBSD__) || defined(__APPLE__))
 #include <siginfo.h>
 #endif
 #include <ucontext.h>
@@ -655,7 +655,11 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     /* copy the details into a memory structure that pop can access */
     __pop_sigcontext.PSC_SIG    = sig;
     __pop_sigcontext.PSC_CODE   = code;
-#if defined(__aarch64__)
+#if defined(__APPLE__)
+        /* Darwin: uc_mcontext is a _STRUCT_MCONTEXT* (see <mach/arm/_structs.h>);
+           the saved PC is __ss.__pc (__uint64_t). */
+        __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext->__ss.__pc;
+#elif defined(__aarch64__)
         __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.pc;
 #elif defined(__arm__)
         __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.arm_pc;
@@ -665,7 +669,9 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     __pop_sigcontext.PSC_ADDR   = (char *) addr;
 
     /* return to routine that cleans up and calls Error_signal */
-#if defined(__aarch64__)
+#if defined(__APPLE__)
+        context->uc_mcontext->__ss.__pc = (unsigned long) __pop_errsig;
+#elif defined(__aarch64__)
         context->uc_mcontext.pc = (unsigned long) __pop_errsig;
 #elif defined(__arm__)
         context->uc_mcontext.arm_pc = (greg_t) __pop_errsig;
@@ -2208,6 +2214,15 @@ linux_setper(int argc, char * * argv, char * * envp)
         }
     }
 #endif
+}
+#elif defined(__APPLE__)
+/* macOS has no personality(2)/ADDR_NO_RANDOMIZE: PIE is mandatory on Darwin and
+   the (non-randomised) image load is rethought in the OS-layer port. But the
+   shared arm64 amain.s calls linux_setper unconditionally (amain.s:69), so
+   provide a no-op here to resolve the link. */
+void
+linux_setper(int argc, char * * argv, char * * envp)
+{
 }
 #endif
 /* --- Revision History ---------------------------------------------------
