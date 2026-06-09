@@ -49,14 +49,24 @@ define Cons_closure(_nfroz) -> _clos;
           _offs, _fv_offs, _exec_offs;
 
     ;;; Compute code size in bytes
+    ;;; (DARWIN: +1 instruction per closure -- the canonicalising AND after
+    ;;; the adr; see below.)
     if _nfroz _gr _16 then
         ;;; Large closure: 1 data word (Exec_closure addr) + 4 instructions
         ;;; = 8 + 16 = 24 bytes
+#_IF DEF DARWIN
+        _28
+#_ELSE
         _24
+#_ENDIF
     else
         ;;; Small closure: adr + nfroz*(ldr+str) + ldr_pdpart + ldr_exec + br
         ;;; = nfroz*2 + 4 instructions, each 4 bytes
+#_IF DEF DARWIN
+        (_nfroz _mult _2 _add _5) _mult _4
+#_ELSE
         (_nfroz _mult _2 _add _4) _mult _4
+#_ENDIF
     endif -> _code_bytes;
 
     ;;; Convert code bytes to words, rounding up
@@ -92,6 +102,13 @@ define Cons_closure(_nfroz) -> _clos;
         ;;; adr x0, .-N  (compute closure base address in x0)
         _adr_encode(_offs, _0) -> INSTR;
 
+#_IF DEF DARWIN
+        ;;; dual-mapped heap: the adr executed in the RX view yields
+        ;;; closure_base + 2**36; canonicalise before x0 escapes as a Pop
+        ;;; pointer.  and x0, x0, #0xffffffefffffffff  (verified vs clang)
+        _16:925BF800 -> INSTR;
+#_ENDIF
+
         ;;; str x0, [x19, #-8]!  (push closure address on USP, pre-index writeback)
         ;;; Encoding: 0xF81F8E60 (idx=11 => writeback; 0xF81F8260 would be STUR
         ;;; with NO writeback, leaving USP unchanged).
@@ -119,6 +136,11 @@ define Cons_closure(_nfroz) -> _clos;
 
         ;;; adr x0, .-N  (compute closure base address in x0)
         _adr_encode(_offs, _0) -> INSTR;
+
+#_IF DEF DARWIN
+        ;;; canonicalise (see large-closure path above)
+        _16:925BF800 -> INSTR;
+#_ENDIF
 
         ;;; Compute byte offset of first frozval from closure base
         _clos@PD_CLOS_FROZVALS[_0] _sub _clos -> _fv_offs;
