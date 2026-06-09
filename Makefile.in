@@ -21,12 +21,12 @@ POP_arch = @@POP_arch@@
 
 ifeq (${GFX_CONF},imgui)
 # Experimental native graphics backend (Dear ImGui + Metal, macOS); no X linked.
-# TODO: first vendor ImGui -> ./tools/fetch-imgui.sh (pop/extern/imgui/, gitignored).
-# Then define GFX_OBJECT=${popexlib}/imgui_backend.o, add rules to build
-# pop/extern/lib/imgui_backend.mm + ImGui core (imgui*.cpp) + the native backends
-# (backends/imgui_impl_metal.mm, backends/imgui_impl_osx.mm) with clang++ -ObjC++,
-# and link the frameworks (-framework Metal -framework MetalKit -framework AppKit
-# -framework QuartzCore). Until then this just builds -nox.
+# Glue: pop/extern/lib/imgui_backend.{h,mm}; ImGui vendored by ./tools/fetch-imgui.sh.
+# 'make gfx-smoke' (below) builds + links the whole stack into a window and
+# validates the toolchain end-to-end without a Poplog image.
+# TODO (basepop11 integration): compile the GFX objects into ${popexlib}, set
+# GFX_OBJECT so they fold into the Poplog link, and thread GFX_FRAMEWORKS through
+# pglink. Until that lands, an --experimental-gfx Poplog still builds -nox.
 XL_FLAG=-nox
 else
 ifeq (${X_CONF},no)
@@ -42,6 +42,30 @@ XL_FLAG=-xm
 endif
 endif
 endif
+
+# --- Experimental graphics backend (Dear ImGui + Metal, macOS) -------------
+# Vendored ImGui (./tools/fetch-imgui.sh) + the glue in pop/extern/lib.  These
+# vars also feed the eventual basepop11 integration (GFX_OBJECT/GFX_FRAMEWORKS).
+GFX_IMGUI      ?= pop/extern/imgui
+GFX_INCLUDES   ?= -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib
+GFX_FRAMEWORKS ?= -framework Metal -framework MetalKit -framework Cocoa \
+                  -framework QuartzCore -framework GameController -framework Carbon
+GFX_IMGUI_SRCS ?= ${GFX_IMGUI}/imgui.cpp ${GFX_IMGUI}/imgui_draw.cpp \
+                  ${GFX_IMGUI}/imgui_tables.cpp ${GFX_IMGUI}/imgui_widgets.cpp \
+                  ${GFX_IMGUI}/backends/imgui_impl_metal.mm \
+                  ${GFX_IMGUI}/backends/imgui_impl_osx.mm
+GFX_GLUE_SRC   ?= pop/extern/lib/imgui_backend.mm
+
+# Standalone smoke test: build + link the whole graphics stack into a window and
+# render a few frames (no Poplog needed) -- proves the --experimental-gfx
+# toolchain.  Usage: ./tools/fetch-imgui.sh && make gfx-smoke && ./gfx-smoke
+.PHONY: gfx-smoke
+gfx-smoke:
+	@test -f ${GFX_IMGUI}/imgui.cpp || { echo "Run ./tools/fetch-imgui.sh first."; exit 1; }
+	clang++ -std=c++17 -fobjc-arc ${GFX_INCLUDES} \
+	    ${GFX_GLUE_SRC} pop/extern/lib/imgui_smoke.mm ${GFX_IMGUI_SRCS} \
+	    ${GFX_FRAMEWORKS} -o gfx-smoke
+	@echo "Built ./gfx-smoke -- run it to open the window."
 
 PACK_CONF = @@PACK_CONF@@
 

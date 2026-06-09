@@ -28,3 +28,6 @@ tools/ci-watch.log
 
 # Vendored third-party source (fetched by tools/fetch-imgui.sh, not committed)
 /pop/extern/imgui/
+
+# Standalone graphics smoke-test binary (make gfx-smoke)
+/gfx-smoke
