@@ -26,12 +26,30 @@ endsection;
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load: adrp ...@PAGE / add ...@PAGEOFF.
+    ;;; NB: backslashes are doubled because popc escape-processes .s text.
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+#_ELSE
     .arch armv8-a
+    ;;; ELF PC-relative address load: adrp ... / add ... :lo12:...
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+#_ENDIF
     .file   "amain.s"
 
 ;;; Wrapping in POP object
    .text
+#_IF DEF UNIX_MACHO
+   .quad   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+#_ELSE
    .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
+#_ENDIF
 Ltext_start:
 
 
@@ -53,13 +71,11 @@ EXTERN_NAME(main):
     mov x29, sp
 
     ;;; Save pointer to argument vector (argv)
-    adrp x3, I_LAB(Sys$- _init_args)
-    add  x3, x3, :lo12:I_LAB(Sys$- _init_args)
+    adr_l x3, I_LAB(Sys$- _init_args)
     str  x1, [x3]
 
     ;;; Clear __pop_in_user_extern
-    adrp x3, EXTERN_NAME(__pop_in_user_extern)
-    add  x3, x3, :lo12:EXTERN_NAME(__pop_in_user_extern)
+    adr_l x3, EXTERN_NAME(__pop_in_user_extern)
     str  xzr, [x3]
 
 #_IF DEF LINUX
@@ -71,8 +87,7 @@ EXTERN_NAME(main):
 #_ENDIF
 
     ;;; Set up a temporary user stack pointer
-    adrp USP, SAVED_USP
-    add  USP, USP, :lo12:SAVED_USP
+    adr_l USP, SAVED_USP
     ldr  USP, [USP]
 
     ;;; clear Pop registers
