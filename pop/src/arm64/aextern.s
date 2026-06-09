@@ -69,6 +69,7 @@ endif;
     .file   "aextern.s"
 #_IF DEF UNIX_MACHO
 	.section	__DATA,__popseed
+	.p2align	3
 #_ELSE
 	.text
 #_ENDIF
@@ -76,6 +77,7 @@ endif;
 ;;; Wrapping in POP object
 #_IF DEF UNIX_MACHO
 	.section	__DATA,__popseed
+	.p2align	3
 #_ELSE
 	.text
 #_ENDIF
@@ -341,6 +343,7 @@ DEF_C_LAB(Sys$- _external_callback_func)
 ;;; End wrapper: set size
 #_IF DEF UNIX_MACHO
 	.section	__DATA,__popseed
+	.p2align	3
 #_ELSE
 	.text
 #_ENDIF

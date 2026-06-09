@@ -179,7 +179,17 @@ define setseg(structure, dalign);
     else
         start_nonwriteable()
     endif;
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O: dyld rebasing requires every absolute pointer field to be
+    ;;; 8-byte aligned, so 8-align every structure atom (not just dalign ones).
+    ;;; This is no-op padding -- all structures are word multiples -- and the
+    ;;; seed is NON_POP/CONSTANT (never GC-swept), so it cannot disturb a
+    ;;; contiguous heap walk. Without it the linker places a record at a
+    ;;; 4-mod-8 address and rejects the rebase ("pointer not aligned").
+    out_double_align()
+#_ELSE
     if dalign then out_double_align() endif
+#_ENDIF
 enddefine;
 
 define lconstant output_lex_idents();

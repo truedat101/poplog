@@ -51,6 +51,7 @@ lconstant macro (
     .file "alisp.s"
 #_IF DEF UNIX_MACHO
 	.section	__DATA,__popseed
+	.p2align	3
 #_ELSE
 	.text
 #_ENDIF
@@ -58,6 +59,7 @@ lconstant macro (
 ;;; Wrapping in POP object
 #_IF DEF UNIX_MACHO
 	.section	__DATA,__popseed
+	.p2align	3
 #_ELSE
 	.text
 #_ENDIF
@@ -109,6 +111,7 @@ str.loop:
 ;;; End wrapper: set size
 #_IF DEF UNIX_MACHO
 	.section	__DATA,__popseed
+	.p2align	3
 #_ELSE
 	.text
 #_ENDIF

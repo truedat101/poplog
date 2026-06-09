@@ -125,11 +125,22 @@ global constant macro (
 ;;; For AArch64 64-bit: .xword for Poplog words (8 bytes)
 
 global constant macro (
-    $- ASM_DATA_STR = '\t.data',
     $- ASM_BYTE_STR = '\t.byte\t',
     $- ASM_SHORT_STR= '\t.short\t',
     $- ASM_INT_STR  = '\t.word\t',
 );
+
+;;; The writable data section also holds rebasable .quad pointer fields, so it
+;;; needs the same forced 8-byte alignment as __popseed (see ASM_TEXT_STR).
+#_IF DEF UNIX_MACHO
+global constant macro (
+    $- ASM_DATA_STR = '\t.section\t__DATA,__data\n\t.p2align\t3',
+);
+#_ELSE
+global constant macro (
+    $- ASM_DATA_STR = '\t.data',
+);
+#_ENDIF
 
 ;;; 8-byte Poplog word: GNU as (AArch64 ELF) uses .xword; Mach-O/Clang uses .quad.
 ;;; A whole conditional block -- #_IF cannot appear INSIDE a single
@@ -153,8 +164,13 @@ global constant macro (
 ;;; relocates, and executes it there (PORTING-ARM64-M-SILICON-OSX.md Phase 3).
 ;;; ELF keeps `.text`.
 #_IF DEF UNIX_MACHO
+;;; The trailing .p2align 3 forces 8-byte alignment on every entry to the seed
+;;; section. setseg's out_double_align is a no-op right after a section switch
+;;; (offset 0), so without this the first structure after each switch keeps atom
+;;; alignment 1 and the linker can place its rebasable .quad pointers at a
+;;; 4-mod-8 address ("pointer not aligned"). No padding at a section boundary.
 global constant macro (
-    $- ASM_TEXT_STR = '\t.section\t__DATA,__popseed',
+    $- ASM_TEXT_STR = '\t.section\t__DATA,__popseed\n\t.p2align\t3',
 );
 #_ELSE
 global constant macro (
@@ -384,6 +400,12 @@ define asm_gen_poplink_code(outlabs, nfroz, jmplab);
     asmf_printf(l, ADDLO_X16_FMT);
     asmf_pr('\tldr x16, [x16]\n');
     asmf_pr('\tbr x16\n');
+    ;;; 8-align the jmplab pointer word. On Mach-O the frozval loop is 5 instrs
+    ;;; each (odd), so for odd nfroz the jmplab .quad lands at a 4-mod-8 offset
+    ;;; and dyld rejects the rebase ("pointer not aligned"). This just moves the
+    ;;; padding the asm_align_word() below would add anyway -- total size is
+    ;;; unchanged -- and is a no-op on ELF (4 instrs/frozval keeps it aligned).
+    asm_align_word();
     asm_outlab(l);
     asm_outword(jmplab, 1);
     ;;; Return the number of xwords planted
