@@ -233,6 +233,26 @@ State of each as a rule to **preserve**, not a bug to rediscover.
 
 ## 6. Bootstrap & build hygiene (PORTING.txt §2–3)
 
+> **The seed corepop — the chicken-and-egg you hit *first*, before any of the
+> below.** Pop-11 is compiled *by Poplog*, so the build needs a working Poplog to
+> begin: a `corepop` saved image at `target/pop/corepop`, or `configure` aborts
+> with *"corepop is missing in target tree."* A corepop is **native machine code,
+> hence architecture-specific** — an x86-64 corepop won't run on AArch64, and a
+> 32-bit `corepop.arm` (armhf) is **not** an AArch64 corepop (a common trap). You
+> do **not** build it from nothing: PORTING.txt §0 is explicit — *"porting involves
+> cross-compilation; one needs running Poplog on some machine (the **host**)."*
+> - **Established arch** (x86-64, i386, 32-bit ARM, FreeBSD…): download one from
+>   `poplog.fricas.org/corepops/` and drop it at `target/pop/corepop`.
+> - **New arch** (AArch64, Apple Silicon): there is **no download**. You
+>   **cross-produce** the first corepop from a host Poplog's `popc` (the pipeline
+>   below), then copy it to `target/pop/corepop` on the target. This is a
+>   **one-time, per-architecture "compiler-compiler" seed** — once a target owns
+>   *one* good corepop it self-hosts forever after; you never repeat it for that
+>   arch.
+>
+> `target/` is gitignored, so a corepop is **never** in a fresh clone — placing it
+> is always a manual first step. If `configure` dies on line one, this is why.
+
 Pipeline: **`mk_cross`** (cross-popc) → recompile `pop/src` with the new popc →
 **cross-poplink** → corepop on the **target** (`mklibpop` compiles the C, final
 link uses target system libraries) → `basepop11`.

@@ -99,7 +99,10 @@ corepop (existing binary)
         -> linker -> new corepop
 ```
 
-No macOS `corepop` exists, so we cross-compile the first one.
+No macOS `corepop` exists, so we cross-compile the first one. This is the same
+one-time, per-architecture seed step every new platform hits — there is no
+`arm64-darwin` corepop to download, exactly as there was none for AArch64 Linux.
+See the **seed corepop** box in [`PORTING-POPLOG.md`](PORTING-POPLOG.md) §6.
 
 ### The solution: cross-compile from RPi5
 

@@ -346,6 +346,15 @@ AArch64 instruction translation as `ass.p`.
 
 ### Stage 6: Build and Bootstrap
 
+> **Prerequisite — the seed corepop.** The cross-build below begins with
+> `make stamp_popc`, which needs a working **host** (x86_64) Poplog — i.e. an
+> x86_64 `corepop` at `target/pop/corepop` (download from
+> `poplog.fricas.org/corepops/`). There is **no AArch64 corepop to download**;
+> this stage *produces* the first one, a one-time per-arch seed. The built arm64
+> corepop then lives on the target (`~/poplog/target/pop/corepop` on the Pi) — it
+> is **not** a 32-bit `corepop.arm`. See the "seed corepop" box in
+> [`PORTING-POPLOG.md`](PORTING-POPLOG.md) §6.
+
 #### Cross-compilation (on host x86_64 machine)
 
 ```bash
