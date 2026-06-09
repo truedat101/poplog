@@ -41,7 +41,37 @@ lconstant macro (
 );
 
 >_#
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "afloat.s"
     .text
 
@@ -170,8 +200,8 @@ DEF_C_LAB (_pf_cvt_to_dec)
     ret
 3:
     /* Overflow: return false */
-    adrp  x9, L.false
-    ldr   x2, [x9, #:lo12:L.false]
+    adr_l  x9, L.false
+    ldr   x2, [x9]
     str   x2, [USP]
     ret
 
@@ -217,8 +247,8 @@ DEF_C_LAB(_pf_check_d)
     cmp   w9, w10
 L.ret_false:
     b.ne  1f
-    adrp  x9, L.false
-    ldr   x3, [x9, #:lo12:L.false]
+    adr_l  x9, L.false
+    ldr   x3, [x9]
     str   x3, [USP]
 1:
     ret
@@ -228,23 +258,23 @@ L.ret_false:
 DEF_C_LAB (_pf_intof)
     ldr   x3, [USP]
     ldr   d7, [x3]
-    adrp  x9, L.maxint
-    ldr   d6, [x9, #:lo12:L.maxint]
+    adr_l  x9, L.maxint
+    ldr   d6, [x9]
     fcmp  d7, d6
     b.pl  L.out_of_range
-    adrp  x9, L.minint
-    ldr   d6, [x9, #:lo12:L.minint]
+    adr_l  x9, L.minint
+    ldr   d6, [x9]
     fcmp  d7, d6
     b.le  L.out_of_range
     fcvtzs x9, d7                  /* double to signed 64-bit int */
     str   x9, [USP]
-    adrp  x10, L.true
-    ldr   x0, [x10, #:lo12:L.true]
+    adr_l  x10, L.true
+    ldr   x0, [x10]
     str   x0, [USP, #-8]!         /* push true */
     ret
 L.out_of_range:
-    adrp  x9, L.false
-    ldr   x0, [x9, #:lo12:L.false]
+    adr_l  x9, L.false
+    ldr   x0, [x9]
     str   x0, [USP]
     ret
 
@@ -263,16 +293,16 @@ L.maxuint:
 DEF_C_LAB (_pf_uintof)
     ldr   x3, [USP]
     ldr   d7, [x3]
-    adrp  x9, L.maxuint
-    ldr   d6, [x9, #:lo12:L.maxuint]
+    adr_l  x9, L.maxuint
+    ldr   d6, [x9]
     fcmp  d7, d6
     b.pl  L.out_of_range
     fcmp  d7, #0.0
     b.mi  L.out_of_range
     fcvtzu x9, d7                  /* double to unsigned 64-bit int */
     str   x9, [USP]
-    adrp  x10, L.true
-    ldr   x0, [x10, #:lo12:L.true]
+    adr_l  x10, L.true
+    ldr   x0, [x10]
     str   x0, [USP, #-8]!         /* push true */
     ret
 
@@ -303,13 +333,13 @@ DEF_C_LAB(-> _pf_expof)
     orr     x9, x9, x1            /* set new exponent */
     fmov    d7, x9
     str     d7, [x0]
-    adrp    x9, L.true
-    ldr     x3, [x9, #:lo12:L.true]
+    adr_l    x9, L.true
+    ldr     x3, [x9]
     str     x3, [USP]
     ret
 L.exp_too_big:
-    adrp    x9, L.false
-    ldr     x3, [x9, #:lo12:L.false]
+    adr_l    x9, L.false
+    ldr     x3, [x9]
     str     x3, [USP]
     ret
 
@@ -358,10 +388,10 @@ DEF_C_LAB (_pfzero)
     ldr   x3, [USP]
     ldr   d7, [x3]
     fcmp  d7, #0.0
-    adrp  x9, L.false
-    ldr   x0, [x9, #:lo12:L.false]
-    adrp  x9, L.true
-    ldr   x1, [x9, #:lo12:L.true]
+    adr_l  x9, L.false
+    ldr   x0, [x9]
+    adr_l  x9, L.true
+    ldr   x1, [x9]
     csel  x0, x1, x0, eq
     str   x0, [USP]
     ret
@@ -370,10 +400,10 @@ DEF_C_LAB (_pfneg)
     ldr   x3, [USP]
     ldr   d7, [x3]
     fcmp  d7, #0.0
-    adrp  x9, L.false
-    ldr   x0, [x9, #:lo12:L.false]
-    adrp  x9, L.true
-    ldr   x1, [x9, #:lo12:L.true]
+    adr_l  x9, L.false
+    ldr   x0, [x9]
+    adr_l  x9, L.true
+    ldr   x1, [x9]
     csel  x0, x1, x0, mi
     str   x0, [USP]
     ret
@@ -384,10 +414,10 @@ DEF_C_LAB (_pfeq)
     ldr   d7, [x3]
     ldr   d6, [x2]
     fcmp  d6, d7
-    adrp  x9, L.false
-    ldr   x0, [x9, #:lo12:L.false]
-    adrp  x9, L.true
-    ldr   x1, [x9, #:lo12:L.true]
+    adr_l  x9, L.false
+    ldr   x0, [x9]
+    adr_l  x9, L.true
+    ldr   x1, [x9]
     csel  x0, x1, x0, eq
     str   x0, [USP]
     ret
@@ -399,10 +429,10 @@ DEF_C_LAB (_pfsgreq)
     ldr   d6, [x2]
     ;;; d6 <= d7 ?
     fcmp  d6, d7
-    adrp  x9, L.false
-    ldr   x0, [x9, #:lo12:L.false]
-    adrp  x9, L.true
-    ldr   x1, [x9, #:lo12:L.true]
+    adr_l  x9, L.false
+    ldr   x0, [x9]
+    adr_l  x9, L.true
+    ldr   x1, [x9]
     csel  x0, x1, x0, ls          /* ls = unsigned lower or same (C clear or Z set) */
     str   x0, [USP]
     ret
@@ -414,10 +444,10 @@ DEF_C_LAB (_pfsgr)
     ldr   d6, [x2]
     ;;; d6 < d7 ?
     fcmp  d6, d7
-    adrp  x9, L.false
-    ldr   x0, [x9, #:lo12:L.false]
-    adrp  x9, L.true
-    ldr   x1, [x9, #:lo12:L.true]
+    adr_l  x9, L.false
+    ldr   x0, [x9]
+    adr_l  x9, L.true
+    ldr   x1, [x9]
     csel  x0, x1, x0, mi          /* mi = negative (less than) */
     str   x0, [USP]
     ret

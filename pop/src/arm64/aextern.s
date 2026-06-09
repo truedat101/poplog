@@ -35,7 +35,37 @@ endif;
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "aextern.s"
     .text
 

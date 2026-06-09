@@ -37,7 +37,37 @@ lconstant macro (
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "aprolog.s"
     .text
 
@@ -201,7 +231,7 @@ DEF_C_LAB (_prolog_assign_pair)
     ldr  x1, free_pairs.lab
     ldr  x0, [x1]
     tst  x0, #1
-    b.ne XC_LAB(Sys$-Plog$-Assign_pair)
+    bne_x XC_LAB(Sys$-Plog$-Assign_pair)
     ldr  x2, [x0, #_P_BACK]
     str  x2, [x1]
     ldr  x2, [USP, #16]
@@ -249,7 +279,7 @@ DEF_C_LAB (_prolog_newvar)
     ldr  x2, ref_key.lab
     ldr  x3, [x0, #_KEY]
     cmp  x2, x3
-    b.eq XC_LAB(Sys$-Plog$-New_var)
+    beq_x XC_LAB(Sys$-Plog$-New_var)
     str  x0, [x0, #_PGV_CONT]
     str  x0, [USP, #-8]!
     add  x0, x0, #_PGV_SIZE

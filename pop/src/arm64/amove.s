@@ -17,7 +17,37 @@ lconstant macro (
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "amove.s"
 ;;; Wrapping in POP object
    .text
@@ -50,12 +80,10 @@ DEF_C_LAB (_icmp)
     ;;; value the compiler/VM use), NOT its contents -- the cell holds the C int
     ;;; 0.  So load the address (adrp+add), never deref it.  cf. amisc.s/afloat.s
     ;;; which spell the same value `.xword C_LAB(false)`.
-    adrp x0, C_LAB(false)
-    add  x0, x0, :lo12:C_LAB(false)
+    adr_l x0, C_LAB(false)
     b .Lcmp_done
 .Lcmp_true:
-    adrp x0, C_LAB(true)
-    add  x0, x0, :lo12:C_LAB(true)
+    adr_l x0, C_LAB(true)
 .Lcmp_done:
     str x0, [USP]
     ldp x29, x30, [sp], #16
@@ -128,8 +156,7 @@ DEF_C_LAB (_fill)
 
 DEF_C_LAB (_move_userstack)
     ldr x0, [USP], #8          ;;; byte offset
-    adrp x3, I_LAB(_userhi)
-    add  x3, x3, :lo12:I_LAB(_userhi)
+    adr_l x3, I_LAB(_userhi)
     ldr  x2, [x3]              ;;; old _userhi
     add  x1, x2, x0            ;;; new _userhi
     str  x1, [x3]              ;;; store new _userhi

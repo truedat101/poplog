@@ -17,7 +17,37 @@ lconstant macro (
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file "alisp.s"
     .text
 
@@ -44,8 +74,7 @@ DEF_C_LAB (_setstklen)
     ;;; misaligning the user stack by 4 and underflowing -- the "Ste: stack
     ;;; empty" that blocked all Lisp eval (lisp_apply's nresults protocol).
     add   x2, x2, x2
-    adrp  x3, L0._userhi
-    add   x3, x3, :lo12:L0._userhi
+    adr_l  x3, L0._userhi
     ldr   x3, [x3]
     ldr   x3, [x3]
     sub   x2, x3, x2
@@ -61,8 +90,7 @@ DEF_C_LAB (_setstklen_diff)
     mov   USP, x2
     ret
 2:
-    adrp  x3, nil.lab
-    add   x3, x3, :lo12:nil.lab
+    adr_l  x3, nil.lab
     ldr   x3, [x3]
 str.loop:
     str   x3, [USP, #-8]!
