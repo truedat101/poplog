@@ -222,9 +222,11 @@ real bootstrap work and exits cleanly** — 187 syscalls incl. `mmap`/`mprotect`
 
 Build command (host x86_64, cross toolchain):
 ```
-POP__cc="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed" \
-  POP__as=/usr/bin/aarch64-linux-gnu-as POP__ar=/usr/bin/aarch64-linux-gnu-ar \
-  make CC=aarch64-linux-gnu-gcc stamp_new_corepop
+POP__as=/usr/bin/aarch64-linux-gnu-as \
+  make CC="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed" \
+  stamp_new_corepop
+# NB: stamp_new_corepop sets POP__cc="${CC} ${HASH_STYLE_OPT}", so put the link
+# flags (esp. -no-pie) on CC -- a separately-exported POP__cc is overridden.
 ```
 
 Next: build the full `basepop11` image (needs `libncurses6:arm64` +
@@ -581,10 +583,12 @@ Useful for whoever picks this up:
 - `make stamp_srclib` is where the cross-assembler enters. Failures from this
   point on are split between popc Pop-11 mishaps (genproc.p bugs) and
   aarch64-as rejections (asmout.p / instruction-encoding bugs).
-- `make stamp_new_corepop` (not yet reached) will additionally need
-  `CC=aarch64-linux-gnu-gcc` and `POP__cc="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed"`,
-  plus `libncurses-dev:arm64` and `libtinfo-dev:arm64` multi-arch installed
-  on the host. None of that has been exercised yet.
+- `make stamp_new_corepop` needs the link flags on **`CC`**:
+  `make CC="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed" stamp_new_corepop`
+  — the rule sets `POP__cc="${CC} ${HASH_STYLE_OPT}"`, so a separately-set
+  `POP__cc` is **overridden** (an early mistake here dropped `-no-pie`). Plus
+  `libncurses-dev:arm64` / `libtinfo-dev:arm64` multi-arch on the host. Now
+  automated and exercised: `tools/bootstrap-corepop-x86-64-to-aarch64.sh`.
 
 ---
 
