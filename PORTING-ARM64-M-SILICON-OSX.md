@@ -134,6 +134,45 @@ RPi5 (AArch64 Linux, WORKING Poplog — the reuse baseline)
 The instruction encodings are **identical**; only assembly syntax, object format,
 and the C runtime differ.
 
+### The verified cross-link recipe (captured from RPi5, 2026-06)
+
+The cross seam is **`poplink`**, not `popc`. `popc` compiles `.p → .w` (Mach-O
+codegen, bundled into `src.wlb`); `pglink -core` then runs `poplink`, which turns
+the library + system tables into assembler and *would* assemble + link — except
+the Pi has no Mach-O toolchain. Pointing `POP__as` / `POP__cc` at capture wrappers
+makes poplink emit the artifacts **without** assembling, so the Mac finishes.
+
+What `pglink -core` (i.e. `poplink -p … $popobjlib/src.wlb -ex ( )`) produces —
+all **Mach-O**, verified by markers (`@PAGE`/`@PAGEOFF` present; no
+`:lo12:`/`.arch`/`.xword`) and by `clang -c -arch arm64` (5/5 + 292 modules):
+
+| Unit | Role |
+|------|------|
+| `poplink_1.a … poplink_4.a` | linked library code + glue (`poplink_3.a` ≈ 515 KB of `adrp …@PAGE` code) |
+| `poplink_dat.a` | data / symbol tables (image date, idents) |
+| `poplink_cmnd` | the generated, location-independent link script (below) |
+| `src.olb` | bulk library object archive — built separately by `poplibr -c <name>.olb` (the `POP__ar` step), **not** by `poplink`; any stale **ELF** `src.olb` must be regenerated as Mach-O on the Mac |
+
+`poplink_cmnd` as captured — the hardcoded flags are the only OS delta:
+
+```sh
+$POP__cc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed -o $IM \
+    poplink_1.o poplink_2.o poplink_3.o $popobjlib/src.olb \
+    poplink_4.o poplink_dat.o -L$popexternlib/ -lpop -lm -lc
+```
+
+**Darwin swap:** drop `-no-pie` (PIE is mandatory), drop the GNU-ld
+`-export-dynamic` / `--no-as-needed`; add `-lSystem -syslibroot $(xcrun
+--show-sdk-path)`; then `codesign -s - corepop`.
+
+Mac finish (steps 1 verified; 2–4 pending the C runtime):
+1. `clang -c -arch arm64` every `.a` → Mach-O `.o`  — **done, 5 tables + 292 modules, 0 fail**
+2. build `libpop.a` from the C runtime (`c_core.c` etc. with the Darwin branches)
+3. link per the swapped `poplink_cmnd`; settle whether a `-core` image even needs
+   `src.olb` (poplink already folds the library into `poplink_1..4`) from the
+   undefined-symbol set
+4. `codesign -s - corepop`
+
 ---
 
 ## 3. Critical differences: Linux AArch64 vs macOS AArch64
