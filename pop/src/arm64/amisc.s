@@ -91,6 +91,9 @@ endsection;
 Ltext_start:
 
 ;;; _popenter: calling (applying) Pop object
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L1.p_key:
     .xword C_LAB(procedure_key)
 .L1.i_key:
@@ -165,6 +168,9 @@ DEF_C_LAB (_popuncenter)
     adr_l x16, .L3.nonpd
     ldr  x16, [x16]
     br   x16
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L3.nonpd:
     .xword XC_LAB(-> Sys$-Exec_nonpd)
     ;;; simple object
@@ -460,6 +466,9 @@ DEF_C_LAB 6 (_slt)
     str  W0, [USP]
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L.false:
     .xword C_LAB(false)
 .L.true:
@@ -513,6 +522,9 @@ DEF_C_LAB (_haskey)
     str  x0, [USP]
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L7.1:
     .xword C_LAB(integer_key)
 .L7.2:
@@ -537,6 +549,9 @@ DEF_C_LAB (_datakey)
     str  x0, [USP, #-8]!
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L8.1:
     .xword I_LAB(Sys$- _free_pairs)
 DEF_C_LAB (_conspair)
@@ -669,6 +684,9 @@ DEF_C_LAB (_checkinterrupt)
 .L12.ret:
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L11.dummy_procedure_helper:
     .xword XC_LAB(Sys$-dummy_procedure_callback_helper)
 

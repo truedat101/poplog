@@ -66,6 +66,9 @@ lconstant macro (
    .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 L0._userhi:
     .xword I_LAB(_userhi)
 nil.lab:

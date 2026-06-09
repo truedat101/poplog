@@ -289,6 +289,9 @@ L.out_of_range:
     ret
 
     .align  3
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 L.maxint:
     ;;; 2^63 = 9223372036854775808.0 = 0x43E0000000000000
     .xword  0x43E0000000000000
@@ -515,6 +518,9 @@ DEF_C_LAB (_pfdiv)
     ret
 
     .align  3
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 L.true:
     .xword C_LAB(true)
 L.false:

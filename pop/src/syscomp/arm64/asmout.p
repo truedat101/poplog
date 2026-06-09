@@ -438,6 +438,13 @@ define asm_gen_exfunc_clos_code(action_lab);
     asmf_printf('\tnop\n');
     ;;; 4 instructions = 16 bytes + 8 byte literal + 8 byte pad = 32
     asmf_printf('\tnop\n');
+#_IF DEF UNIX_MACHO
+    ;;; One more nop: the 5 instrs above are odd, so the rebasable action
+    ;;; literal below would land at a 4-mod-8 offset and dyld rejects it. With
+    ;;; 6 instrs (24 B) + the 8 B literal the closure is exactly 4 xwords (32 B,
+    ;;; as documented above) and the literal is 8-aligned.
+    asmf_printf('\tnop\n');
+#_ENDIF
     asm_outlab(l);
     asm_outword(action_lab, 1);
 enddefine;

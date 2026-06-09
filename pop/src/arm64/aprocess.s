@@ -350,6 +350,9 @@ DEF_C_LAB (_swap_in_continue)
     b     si_test_finished
 
     .align 3
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 usrhi_lab:
     .xword I_LAB(_userhi)
 DEF_C_LAB (_ussave)

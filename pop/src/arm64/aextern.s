@@ -85,6 +85,9 @@ endif;
 Ltext_start:
 
 ;;; Literal pool entries (pointer-sized)
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 saved_sp.lab:
     .xword I_LAB(Sys$-Extern$- _saved_sp)
 

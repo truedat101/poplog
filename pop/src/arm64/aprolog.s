@@ -86,6 +86,9 @@ lconstant macro (
    .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L11.special:
     .xword C_LAB(_special_var_block)
 
@@ -154,6 +157,9 @@ notvar.ret:
     cmp  x0, x1
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 plog.pair_key:
     .xword C_LAB(pair_key)
 
@@ -180,6 +186,9 @@ deref.notvar2:
     b.ne fail.ret
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 plog.term_key:
     .xword C_LAB(prologterm_key)
 
@@ -220,6 +229,9 @@ fail.ret:
     cmp  x3, #1
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 plog_trail_sp.lab:
     .xword I_LAB(_plog_trail_sp)
 
@@ -234,6 +246,9 @@ DEF_C_LAB (_prolog_assign)
     str  x3, [x2]
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 free_pairs.lab:
     .xword I_LAB(Sys$- _free_pairs)
 
@@ -257,6 +272,9 @@ DEF_C_LAB (_prolog_assign_pair)
     str  x3, [x0]
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 plog.var_key:
     .xword C_LAB(prologvar_key)
 
@@ -277,6 +295,9 @@ deref.ret:
     str  x0, [USP]
     ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 ref_key.lab:
     .xword C_LAB(ref_key)
 
