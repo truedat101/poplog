@@ -1719,6 +1719,66 @@ char * _pop_sbrk(int nbytes) {
 #endif  /* AIX */
 
 
+#if defined(__APPLE__)
+
+/****************************************************************************
+ * macOS: no usable sbrk/brk.  Emulate a contiguous, growable break over a
+ * reserved address range so GET_REAL_BREAK / SET_REAL_BREAK (sysdefs_darwin.p)
+ * work.  Pages are committed READ|WRITE only -- macOS forbids W^X heap pages;
+ * runtime-generated code is allocated separately via MAP_JIT (pop_jit.c).
+ * Beyond the break the range stays PROT_NONE, preserving the "access past the
+ * break faults" property the break exists to provide.
+ *
+ * FIRST DRAFT (Phase 1) -- the reservation size, the kernel-chosen base vs
+ * PIE/ASLR, and the interaction with the MAP_FIXED saved-image load are
+ * UNVERIFIED and must be settled during bring-up.  See
+ * PORTING-ARM64-M-SILICON-OSX.md Phase 3.
+ ****************************************************************************/
+
+#include <sys/types.h>
+#include <sys/mman.h>
+
+#define POP_BREAK_RESERVE ((size_t) 8 << 30)    /* 8 GiB of virtual headroom */
+
+static char *break_base    = (char *) 0;    /* start of the reserved range */
+static char *break_limit   = (char *) 0;    /* end of the reserved range   */
+static char *current_break = (char *) 0;    /* committed top == the break  */
+
+static int pop_break_init(void) {
+    void *p = mmap((void *) 0, POP_BREAK_RESERVE, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (p == MAP_FAILED) return -1;
+    break_base = current_break = (char *) p;
+    break_limit = break_base + POP_BREAK_RESERVE;
+    return 0;
+}
+
+int _pop_brk(char *new_break) {
+    if (current_break == (char *) 0 && pop_break_init() == -1) return -1;
+    if (new_break < break_base || new_break > break_limit) return -1;
+    if (new_break > current_break) {
+        /* commit: make the new pages readable+writable (never executable) */
+        if (mprotect(current_break, (size_t)(new_break - current_break),
+                     PROT_READ | PROT_WRITE) == -1) return -1;
+    } else if (new_break < current_break) {
+        /* decommit: back to PROT_NONE so accesses past the break fault */
+        if (mprotect(new_break, (size_t)(current_break - new_break),
+                     PROT_NONE) == -1) return -1;
+    }
+    current_break = new_break;
+    return 0;
+}
+
+char * _pop_sbrk(int nbytes) {
+    if (current_break == (char *) 0 && pop_break_init() == -1) return (char *) -1;
+    char *new_break = current_break + nbytes;
+    if (nbytes != 0 && _pop_brk(new_break) == -1) return (char *) -1;
+    return new_break;
+}
+
+#endif  /* __APPLE__ */
+
+
 
 /**************************************************************************
  *                  Calling Math Library Functions                        *

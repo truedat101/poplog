@@ -22,9 +22,10 @@ vars _image_handle = _0;    ;;; for SunOS
 
 
     /*  dummy external load to force linking against the dynamic linker
-        library (not needed for IRIX 5/OSF1 -- everything's in libc.so)
+        library (not needed for IRIX 5/OSF1/Darwin -- everything's in
+        libc.so / libSystem)
     */
-#_IF DEF UNIX and not(DEFV IRIX >= 5.0 or DEF OSF1)
+#_IF DEF UNIX and not(DEFV IRIX >= 5.0 or DEF OSF1 or DEF DARWIN)
 exload dl [^DL_LIB]
     lconstant exload_dummy;     ;;; anything will do
 endexload;
