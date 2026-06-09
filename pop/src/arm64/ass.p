@@ -1862,6 +1862,15 @@ define I_CREATE_SF();
         load_literal(_WK, _po);
         drop_sub_reg(_PB, _PB, _WK);     ;;; PB(x20) is not sp, so reg form is OK
     endif;
+#_IF DEF DARWIN
+    ;;; Dual-mapped heap (c_core.c): execution runs in an RX alias of the RW
+    ;;; heap at canonical + 2**36, so the `adr` above yields a VIEW address.
+    ;;; Canonicalise PB by clearing bit 36 -- otherwise SF_OWNER and all
+    ;;; PB-relative structure access use the (non-writable) view, and the
+    ;;; callstack walkers (exitfrom/caller/GC) fail to match procedures.
+    ;;;     and x20, x20, #0xffffffefffffffff   (encoding verified vs clang)
+    drop_w(_16:925BFA94);
+#_ENDIF
 
     ;;; --- Allocate the whole frame in one step on the hardware sp. ---
     ;;; (frame is 16-byte multiples via the VM's STACK_ALIGN padding, so a

@@ -1779,9 +1779,23 @@ char * _pop_sbrk(int nbytes) {
 
 #define POP_BREAK_BASE ((mach_vm_address_t) 0x8000000000ULL)
 
+/* Execution view: macOS forbids RWX pages, and Poplog interleaves runtime-
+ * generated code with data (a store can target the very page executing it,
+ * which per-page protection flipping can never satisfy -- observed as a
+ * ~1M-fault ping-pong).  Instead the SAME physical pages are mapped twice:
+ * the canonical view stays RW for all Pop data access, and an RX alias at
+ * canonical+POP_VIEW_OFFSET carries all execution.  The signal handler
+ * redirects any attempt to execute a canonical heap address into the view
+ * (pc += POP_VIEW_OFFSET); code is position-independent within a procedure
+ * and cross-procedure jumps go through absolute (canonical) literals, which
+ * fault and redirect again.  Verified on Apple Silicon: an RX vm_remap
+ * alias of RW anon memory is permitted (no MAP_JIT needed). */
+#define POP_VIEW_OFFSET ((mach_vm_address_t) 1 << 36)   /* view at 0x9000000000 */
+
 static char *break_base    = (char *) 0;    /* start of the reserved range */
 static char *break_limit   = (char *) 0;    /* end of the reserved range   */
 static char *current_break = (char *) 0;    /* committed top == the break  */
+static char *view_base     = (char *) 0;    /* RX alias of the reserve     */
 
 static int pop_break_init(void) {
     mach_vm_address_t addr = POP_BREAK_BASE;
@@ -1805,6 +1819,20 @@ static int pop_break_init(void) {
     }
     break_base = current_break = (char *) addr;
     break_limit = break_base + POP_BREAK_RESERVE;
+
+    /* the execution view: one shared remap of the whole reserve, RX */
+    {
+        mach_vm_address_t view = addr + POP_VIEW_OFFSET;
+        vm_prot_t cur, max;
+        if (mach_vm_remap(mach_task_self(), &view, POP_BREAK_RESERVE, 0,
+                          VM_FLAGS_FIXED, mach_task_self(), addr,
+                          FALSE, &cur, &max, VM_INHERIT_NONE) == KERN_SUCCESS
+            && mprotect((void *) view, POP_BREAK_RESERVE,
+                        PROT_READ | PROT_EXEC) == 0)
+            view_base = (char *) view;
+        /* on failure view_base stays 0 and the handler falls back to
+           per-page flipping (slow, and same-page stores will wedge) */
+    }
     return 0;
 }
 
@@ -1850,10 +1878,13 @@ char * _pop_sbrk(int nbytes) {
 #include <libkern/OSCacheControl.h>
 #include <unistd.h>
 
-int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
-    static char *last_page = (char *) 0;
-    static int   last_exec = -1;
+/* no-progress guard state; reset by _pop_wx_make_writable below, whose
+   direct mprotects would otherwise make a legitimate re-flip look like a
+   repeat of the previous one */
+static char *wx_last_page = (char *) 0;
+static int   wx_last_exec = -1;
 
+int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
     char *addr = (char *) info->si_addr;
     char *pc   = (char *) context->uc_mcontext->__ss.__pc;
     int exec_fault = (addr == pc);
@@ -1871,17 +1902,55 @@ int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
 
     /* No-progress guard: flipping the same page to the same mode twice in a
        row means the fault is not W^X -- let the error machinery have it. */
-    if (page == last_page && exec_fault == last_exec) return 0;
+    if (page == wx_last_page && exec_fault == wx_last_exec) return 0;
 
+    if (exec_fault && view_base != (char *) 0) {
+        /* dual-mapping: continue this execution in the RX view of the same
+           physical page.  Flush the icache for the view page on its first
+           use (one bit per 16K page of the reserve); later code rewrites
+           are covered by the code generator's normal cache flushing. */
+        unsigned long off = (unsigned long) (page - break_base);
+        unsigned long pgno = off / (unsigned long) pagesz;
+        static unsigned char flushed[ (size_t) (((size_t)8 << 30) / 16384 / 8) ];
+        if (!(flushed[pgno >> 3] & (1u << (pgno & 7)))) {
+            sys_icache_invalidate(view_base + off, (size_t) pagesz);
+            flushed[pgno >> 3] |= (unsigned char) (1u << (pgno & 7));
+        }
+        context->uc_mcontext->__ss.__pc =
+            (unsigned long) (pc + ((unsigned long) view_base - (unsigned long) break_base));
+        return 1;
+    }
     if (exec_fault) {
         if (mprotect(page, (size_t) pagesz, PROT_READ | PROT_EXEC) == -1) return 0;
         sys_icache_invalidate(page, (size_t) pagesz);
     } else {
         if (mprotect(page, (size_t) pagesz, PROT_READ | PROT_WRITE) == -1) return 0;
     }
-    last_page = page;
-    last_exec = exec_fault;
+    wx_last_page = page;
+    wx_last_exec = exec_fault;
     return 1;
+}
+
+/* Make a heap buffer writable before a SYSCALL writes into it: the kernel
+ * does not take the user fault-and-retry path -- read(2) into a page the
+ * lazy W^X flipped to RX just fails with EFAULT ("ERROR READING DEVICE
+ * (Bad address)").  Called by the pop_w_* syscall wrappers
+ * (pop_vararg_fix.c) for any buffer inside the Pop heap reserve. */
+void _pop_wx_make_writable(void *buf, unsigned long n) {
+    char *p = (char *) buf;
+    if (break_base == (char *) 0 || p < break_base || p >= break_limit || n == 0)
+        return;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    char *page = (char *) ((unsigned long) p & ~((unsigned long) pagesz - 1));
+    char *end  = p + n;
+    /* clamp to the reserve, not the break: image restore read()s segments
+       into regions before raising the break over them */
+    if (end > break_limit) end = break_limit;
+    if (end > page) {
+        mprotect(page, (size_t) (end - page), PROT_READ | PROT_WRITE);
+        wx_last_page = (char *) 0;      /* protections changed: reset guard */
+        wx_last_exec = -1;
+    }
 }
 
 #endif  /* __APPLE__ */

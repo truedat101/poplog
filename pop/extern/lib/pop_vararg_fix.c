@@ -38,4 +38,14 @@ int pop_w_printf(const char *fmt, long a, long b, long c, long d) {
     return printf(fmt, a, b, c, d);
 }
 
+/* Not variadic, but needs the same routing: read(2) into a Pop heap page the
+ * lazy W^X handler flipped to RX fails with EFAULT (the kernel does not take
+ * the user fault-and-retry path), so pre-flip the buffer pages writable. */
+extern void _pop_wx_make_writable(void *buf, unsigned long n);
+
+long pop_w_read(int fd, void *buf, unsigned long n) {
+    _pop_wx_make_writable(buf, n);
+    return read(fd, buf, n);
+}
+
 #endif /* __APPLE__ */
