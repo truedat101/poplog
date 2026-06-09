@@ -153,7 +153,7 @@ enddefine;
     /*  Get the current directory pathname
     */
 
-#_IF DEF LINUX or DEF FREEBSD or DEF NETBSD
+#_IF DEF LINUX or DEF FREEBSD or DEF NETBSD or DEF DARWIN
 
 /* New version for Linux by Waldek Hebisch, installed by A.Sloman 28 Sep 2007
     uses external C utility
@@ -166,7 +166,15 @@ define lconstant Get_curr_dir() -> path;
     ;;; not sure this is needed [AS]
     ;;; _CLAWBACK_SAVE;
 
+#_IF DEF DARWIN
+    ;;; macOS has no get_current_dir_name; POSIX getcwd(NULL,0) mallocs a
+    ;;; buffer of the right size with the same contract (caller frees).
+    ;;; (The #_ELSE fallback below read()s the `..` directory, which macOS
+    ;;; refuses: "READ ERROR: premature eof on directory ..".)
+    _extern getcwd(_NULL, _0) -> _n0;
+#_ELSE
     _extern get_current_dir_name() -> _n0;
+#_ENDIF
 
     if _nonzero(_n0) then
         0 -> k;
