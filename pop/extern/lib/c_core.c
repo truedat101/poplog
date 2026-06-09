@@ -618,12 +618,26 @@ int set_libc_errno(int x) {
 #endif
 
 
+#if defined(__APPLE__)
+/* defined below, next to the break emulation whose bounds it needs */
+extern int _pop_wx_fixup(siginfo_t *info, ucontext_t *context);
+#endif
+
 void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
 
     extern void __pop_errsig();
 
     int code = 0;
     caddr_t addr = NULL;
+
+#if defined(__APPLE__)
+    /* Lazy W^X: a fetch/write fault on a Pop heap page may just need that
+       page's protection flipped (heap holds runtime-generated code). If the
+       fixup repairs it, retry the faulting instruction. */
+    if ((sig == SIGBUS || sig == SIGSEGV) && info != NULL && context != NULL
+        && _pop_wx_fixup(info, context))
+        return;
+#endif
 
     if (__pop_in_user_extern == -1) _exit(1);   /* outside Pop */
 
@@ -1784,6 +1798,54 @@ char * _pop_sbrk(int nbytes) {
     char *new_break = current_break + nbytes;
     if (nbytes != 0 && _pop_brk(new_break) == -1) return (char *) -1;
     return new_break;
+}
+
+/****************************************************************************
+ * Lazy per-page W^X for the Pop heap (called from _pop_errsig_handler).
+ *
+ * Poplog keeps runtime-generated code (closures, compiled procedures, and
+ * code the GC moves) interleaved with data in ONE heap.  macOS arm64 forbids
+ * writable+executable pages, so heap pages are committed RW and flipped
+ * per-page on demand: an instruction-fetch fault (PC == fault address)
+ * inside the committed break flips that page to RX (+ icache flush); a
+ * later write fault on such a page flips it back to RW.  The faulting
+ * instruction is then retried.  Correct, if potentially flippy -- a
+ * staging-buffer or split-allocation scheme can come later (Phase 4).
+ *
+ * Returns 1 if the fault was repaired (handler should just return), 0 if
+ * this is not a heap W^X fault (normal Pop error handling proceeds).
+ ****************************************************************************/
+
+#include <libkern/OSCacheControl.h>
+#include <unistd.h>
+
+int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
+    static char *last_page = (char *) 0;
+    static int   last_exec = -1;
+
+    char *addr = (char *) info->si_addr;
+    char *pc   = (char *) context->uc_mcontext->__ss.__pc;
+
+    if (break_base == (char *) 0 || addr < break_base || addr >= current_break)
+        return 0;                               /* not a committed-heap access */
+
+    long pagesz = sysconf(_SC_PAGESIZE);
+    char *page = (char *) ((unsigned long) addr & ~((unsigned long) pagesz - 1));
+    int exec_fault = (addr == pc);
+
+    /* No-progress guard: flipping the same page to the same mode twice in a
+       row means the fault is not W^X -- let the error machinery have it. */
+    if (page == last_page && exec_fault == last_exec) return 0;
+
+    if (exec_fault) {
+        if (mprotect(page, (size_t) pagesz, PROT_READ | PROT_EXEC) == -1) return 0;
+        sys_icache_invalidate(page, (size_t) pagesz);
+    } else {
+        if (mprotect(page, (size_t) pagesz, PROT_READ | PROT_WRITE) == -1) return 0;
+    }
+    last_page = page;
+    last_exec = exec_fault;
+    return 1;
 }
 
 #endif  /* __APPLE__ */
