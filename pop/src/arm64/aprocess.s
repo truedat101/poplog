@@ -71,7 +71,7 @@ lconstant macro MOVFL   = "ldrb";
 #_ENDIF
     .file   "aprocess.s"
 #_IF DEF UNIX_MACHO
-	.section	__DATA,__popseed
+	.section	__POPSEED,__popseed
 	.p2align	3
 #_ELSE
 	.text

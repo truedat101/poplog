@@ -82,7 +82,7 @@ endsection;
 
 ;;; Wrapping in POP object
 #_IF DEF UNIX_MACHO
-	.section	__DATA,__popseed
+	.section	__POPSEED,__popseed
 	.p2align	3
 #_ELSE
 	.text
@@ -712,7 +712,7 @@ EXTERN_NAME(pop_print):
 
 ;;; End wrapper: set size
 #_IF DEF UNIX_MACHO
-	.section	__DATA,__popseed
+	.section	__POPSEED,__popseed
 	.p2align	3
 #_ELSE
 	.text

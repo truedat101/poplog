@@ -164,13 +164,20 @@ global constant macro (
 ;;; relocates, and executes it there (PORTING-ARM64-M-SILICON-OSX.md Phase 3).
 ;;; ELF keeps `.text`.
 #_IF DEF UNIX_MACHO
+;;; The seed lives in its OWN segment (__POPSEED) so it gets exclusive pages:
+;;; at startup the loader (pop_seed_loader.c) replaces those pages in place
+;;; with an anonymous RW mapping, copies the seed back, and mprotects RX --
+;;; same address, so nothing needs relocating (intra-seed pointers are
+;;; dyld-rebased; seed<->C PC-relative refs stay valid). A shared __DATA
+;;; section would put other data on the seed's boundary pages and the remap
+;;; would clobber it.
 ;;; The trailing .p2align 3 forces 8-byte alignment on every entry to the seed
 ;;; section. setseg's out_double_align is a no-op right after a section switch
 ;;; (offset 0), so without this the first structure after each switch keeps atom
 ;;; alignment 1 and the linker can place its rebasable .quad pointers at a
 ;;; 4-mod-8 address ("pointer not aligned"). No padding at a section boundary.
 global constant macro (
-    $- ASM_TEXT_STR = '\t.section\t__DATA,__popseed\n\t.p2align\t3',
+    $- ASM_TEXT_STR = '\t.section\t__POPSEED,__popseed\n\t.p2align\t3',
 );
 #_ELSE
 global constant macro (

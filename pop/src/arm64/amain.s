@@ -45,7 +45,7 @@ endsection;
 
 ;;; Wrapping in POP object
 #_IF DEF UNIX_MACHO
-	.section	__DATA,__popseed
+	.section	__POPSEED,__popseed
 	.p2align	3
 #_ELSE
 	.text
@@ -65,8 +65,18 @@ Ltext_start:
 ;;; main(argc, argv, envp)
 
 DEF_C_LAB (Sys$- _entry_point)
+#_IF DEF UNIX_MACHO
+    ;;; On Mach-O this code sits in the non-executable __POPSEED segment, so it
+    ;;; cannot be the process entry. The real `main` is the C loader
+    ;;; (pop_seed_loader.c, in __TEXT): it remaps __POPSEED's pages in place as
+    ;;; executable anon memory (same address -- nothing relocates), then calls
+    ;;; in here.
+    .globl _pop_seed_main
+_pop_seed_main:
+#_ELSE
     .globl  EXTERN_NAME(main)
 EXTERN_NAME(main):
+#_ENDIF
     ;;; Save callee-saved registers and link register.
     ;;; We save x19 (USP), x20 (PB), x21, x22 (Pop temp regs),
     ;;; x29 (FP), x30 (LR).  stp pairs keep 16-byte alignment.
@@ -110,7 +120,7 @@ EXTERN_NAME(main):
 
 ;;; End wrapper: set sizes
 #_IF DEF UNIX_MACHO
-	.section	__DATA,__popseed
+	.section	__POPSEED,__popseed
 	.p2align	3
 #_ELSE
 	.text
