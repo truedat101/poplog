@@ -153,7 +153,7 @@ do_args:
                             ;;; x2 already has stack arg pointer -> arg3
     mov x1, USP            ;;; user stack pointer -> arg2
                             ;;; x0 already has nargs -> arg1
-    bl copy_external_arguments
+    bl EXTERN_NAME(copy_external_arguments)
 
     ;;; Advance USP past the arguments (each Pop word is 8 bytes)
     add USP, USP, x25, lsl #3

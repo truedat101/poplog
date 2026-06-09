@@ -73,7 +73,7 @@ DEF_C_LAB (_icmp)
     ldr x0, [USP], #8          ;;; x0 = src1   (top of stack) = memcmp s1
     ldr x1, [USP], #8          ;;; x1 = src2                    = memcmp s2
     ldr x2, [USP]              ;;; x2 = byte_count (peek; result slot) = memcmp n
-    bl memcmp
+    bl EXTERN_NAME(memcmp)
     cmp x0, #0
     b.eq .Lcmp_true
     ;;; Pop `false` is the ADDRESS of C_LAB(false) (that address is the boolean
@@ -112,7 +112,7 @@ DEF_C_LAB (_move)
     add x3, x0, x2             ;;; dst + byte_count
     str x3, [USP]              ;;; update result on stack to dst + byte_count
     ;;; x0=dst, x1=src, x2=byte_count already = memmove(dst, src, n)
-    b memmove
+    b EXTERN_NAME(memmove)
 
 ;;; _bfill
 ;;; Byte fill using memset.  Three Pop arguments on USP:
@@ -127,7 +127,7 @@ DEF_C_LAB (_bfill)
     ldr x2, [USP], #8          ;;; x2 = byte_count
     ldr x1, [USP], #8          ;;; x1 = fill_value
     ;;; x0=dst, x1=value, x2=n already = memset(dst, value, n)
-    b memset
+    b EXTERN_NAME(memset)
 
 ;;; _ifill, _fill
 ;;; Word fill.  Three Pop arguments on USP:
@@ -169,7 +169,7 @@ DEF_C_LAB (_move_userstack)
     ;;; Actually: dst = new USP (x0 already set), src = old USP (x1), n = x2
     mov  x0, USP               ;;; dst = new USP base
     ;;; x1 = old USP (src), x2 = byte count (n)
-    b memmove
+    b EXTERN_NAME(memmove)
 
 ;;; _move_callstack
 ;;; Move the call stack up or down.

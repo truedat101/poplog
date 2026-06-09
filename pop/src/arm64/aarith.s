@@ -258,7 +258,7 @@ DEF_C_LAB (_bgi_add)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #40        /* pop 5 args */
-    bl do_bgi_add
+    bl EXTERN_NAME(do_bgi_add)
     ;;; Clean control stack and return
     ldp x29, x30, [sp], #16
     ret
@@ -275,7 +275,7 @@ DEF_C_LAB (_bgi_sub)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #40        /* pop 5 args */
-    bl do_bgi_sub
+    bl EXTERN_NAME(do_bgi_sub)
     ;;; Clean control stack and return
     ldp x29, x30, [sp], #16
     ret
@@ -287,7 +287,7 @@ DEF_C_LAB (_bgi_negate)
     ldr x2, [USP, #16]
     add USP, USP, #24        /* pop 3 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_negate
+    b EXTERN_NAME(do_bgi_negate)
 
 DEF_C_LAB (_bgi_negate_no_ov)
     ;;; Load arguments to registers (3 args)
@@ -296,7 +296,7 @@ DEF_C_LAB (_bgi_negate_no_ov)
     ldr x2, [USP, #16]
     add USP, USP, #24        /* pop 3 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_negate_no_ov
+    b EXTERN_NAME(do_bgi_negate_no_ov)
 
 ;;; left shift
 ;;; Arguments (4 on USP, top to bottom):
@@ -313,7 +313,7 @@ DEF_C_LAB (_bgi_lshift)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #24        /* pop 3, keep 1 slot for result */
-    bl do_bgi_lshift
+    bl EXTERN_NAME(do_bgi_lshift)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -326,7 +326,7 @@ DEF_C_LAB (_bgi_rshiftl)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
-    b do_bgi_rshiftl
+    b EXTERN_NAME(do_bgi_rshiftl)
 
 ;;; Multiply unsigned bigint by unsigned machine integer (slice)
 ;;; Arguments (4 on USP, top to bottom):
@@ -342,7 +342,7 @@ DEF_C_LAB (_bgi_mult)
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_mult
+    b EXTERN_NAME(do_bgi_mult)
 
 DEF_C_LAB (_bgi_mult_add)
     ;;; Load arguments to registers
@@ -352,7 +352,7 @@ DEF_C_LAB (_bgi_mult_add)
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_mult_add
+    b EXTERN_NAME(do_bgi_mult_add)
 
 ;;; Subtract product from destination (4 args, tail call)
 DEF_C_LAB (_bgi_sub_mult)
@@ -363,7 +363,7 @@ DEF_C_LAB (_bgi_sub_mult)
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_sub_mult
+    b EXTERN_NAME(do_bgi_sub_mult)
 
 DEF_C_LAB (_bgi_div)
     stp x29, x30, [sp, #-16]!
@@ -375,7 +375,7 @@ DEF_C_LAB (_bgi_div)
     ldr x3, [USP, #24]
     add USP, USP, #24        /* pop 3, keep 1 slot for result */
     ;;; call C code
-    bl do_bgi_div
+    bl EXTERN_NAME(do_bgi_div)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -388,7 +388,7 @@ DEF_C_LAB (_quotient_estimate_init)
     ldr x2, [USP, #16]
     add USP, USP, #16        /* pop 2, keep 1 slot for result */
     ;;; call C code
-    bl do_quotient_estimate_init
+    bl EXTERN_NAME(do_quotient_estimate_init)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -401,7 +401,7 @@ DEF_C_LAB (_quotient_estimate)
     ldr x2, [USP, #16]
     add USP, USP, #16        /* pop 2, keep 1 slot for result */
     ;;; call C code
-    bl do_quotient_estimate
+    bl EXTERN_NAME(do_quotient_estimate)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
