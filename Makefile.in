@@ -67,6 +67,15 @@ gfx-smoke:
 	    ${GFX_FRAMEWORKS} -o gfx-smoke
 	@echo "Built ./gfx-smoke -- run it to open the window."
 
+# W^X JIT smoke test (PORTING-ARM64-M-SILICON-OSX.md Phase 4): JIT a tiny AArch64
+# function into MAP_JIT memory and call it -- proves the Apple-Silicon write->
+# execute cycle (pop/extern/lib/pop_jit.c) without a Poplog build.
+.PHONY: jit-smoke
+jit-smoke:
+	clang -O2 -Wall -Ipop/extern/lib \
+	    pop/extern/lib/pop_jit.c pop/extern/lib/pop_jit_smoke.c -o jit-smoke
+	@echo "Built ./jit-smoke -- run it to verify the W^X JIT cycle."
+
 PACK_CONF = @@PACK_CONF@@
 
 ifeq (${PACK_CONF},yes)

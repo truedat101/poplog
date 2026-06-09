@@ -268,14 +268,22 @@ memory then executes it (`ass.p`, `array_cons.p`, `closure_cons.p`,
 `pdr_compose.p`, and the **GC**, which *moves* code). macOS forbids
 writable+executable pages.
 
-- [ ] JIT allocator: `mmap(..., PROT_READ|PROT_WRITE|PROT_EXEC,
-      MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0)`.
-- [ ] Write-protect toggle wrappers around **every** emit:
-      `pthread_jit_write_protect_np(false)` before writing,
-      `pthread_jit_write_protect_np(true)` after, then
-      `sys_icache_invalidate(addr,size)` (or `__clear_cache`).
-- [ ] Bracket all code-write sites in the four runtime generators **and the GC
-      code-movement paths**.
+> **Mechanism PROVEN on Apple Silicon** (`pop/extern/lib/pop_jit.{c,h}`,
+> `make jit-smoke`): `MAP_JIT` alloc → `pthread_jit_write_protect_np` write/execute
+> toggle → `sys_icache_invalidate` → execute the JIT'd code (`jit ok: f(1) = 42`).
+> So the open question is no longer *whether* W^X works but *bracketing every emit
+> site*.
+
+- [x] JIT allocator + write/execute + flush helpers — `pop_jit_alloc` /
+      `pop_jit_write_enable` / `pop_jit_write_disable` / `pop_jit_flush`
+      (`pop/extern/lib/pop_jit.c`: `MAP_JIT`, thread-local toggle, icache flush).
+      Verified end-to-end on arm64 (`make jit-smoke`).
+- [ ] Bracket **every** code-write site in the four runtime generators **and the
+      GC code-movement paths** with `write_enable … write_disable + flush`. The
+      toggle is thread-local, so all codegen + GC must run on one thread (Poplog
+      is cooperatively single-threaded — holds).
+- [ ] Route the code-segment allocation through `pop_jit_alloc`, gated by a
+      `W_XOR_X` flag in `sysdefs_darwin.p` (Phase 1).
 - [ ] Gates: process/coroutine machinery (rung 3) and the language images
       `clisp.psv`/`prolog.psv`/`pml.psv` (rung 5), which all use runtime codegen.
 
