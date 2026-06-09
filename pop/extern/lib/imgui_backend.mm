@@ -3,10 +3,14 @@
  * Compile as ObjC++ with ARC: clang++ -ObjC++ -fobjc-arc.  Links against
  * Metal, MetalKit, Cocoa, QuartzCore, GameController, Carbon.
  *
- * This drives Dear ImGui imperatively (the example in examples/example_apple_metal
+ * Drives Dear ImGui imperatively (the example in examples/example_apple_metal
  * is delegate-driven; here Poplog owns the loop) using an MTKView in manual
  * (paused) mode -- we fetch a render-pass descriptor + drawable per frame and
  * present it ourselves from pop_gfx_frame_end().
+ *
+ * The CANVAS is a retained display list (g_canvas): pop_gfx_draw_* append to it,
+ * frame_begin replays it onto the background draw list every frame, and
+ * pop_gfx_clear() wipes it -- so drawing persists like Xpw/rc_graphic.
  */
 #import <Foundation/Foundation.h>
 #import <Cocoa/Cocoa.h>
@@ -14,10 +18,46 @@
 #import <MetalKit/MetalKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <vector>
+#include <string>
+#include <cmath>
+
 #include "imgui.h"
 #include "imgui_impl_metal.h"
 #include "imgui_impl_osx.h"
 #include "imgui_backend.h"
+
+/* --- retained canvas --------------------------------------------------- */
+enum GfxKind { GK_POINT, GK_LINE, GK_RECT, GK_FILLRECT,
+               GK_CIRCLE, GK_FILLCIRCLE, GK_ARC, GK_TEXT };
+struct GfxCmd {
+    GfxKind     kind;
+    float       a, b, c, d, e, f;   /* geometry (meaning per kind)        */
+    ImU32       col;
+    std::string text;
+};
+static std::vector<GfxCmd> g_canvas;
+
+static void canvas_replay()
+{
+    ImDrawList *dl = ImGui::GetBackgroundDrawList();
+    for (const GfxCmd &g : g_canvas) {
+        switch (g.kind) {
+        case GK_POINT:      dl->AddCircleFilled(ImVec2(g.a, g.b), 1.5f, g.col, 8); break;
+        case GK_LINE:       dl->AddLine(ImVec2(g.a, g.b), ImVec2(g.c, g.d), g.col, g.e); break;
+        case GK_RECT:       dl->AddRect(ImVec2(g.a, g.b), ImVec2(g.c, g.d), g.col, 0.0f, 0, g.e); break;
+        case GK_FILLRECT:   dl->AddRectFilled(ImVec2(g.a, g.b), ImVec2(g.c, g.d), g.col); break;
+        case GK_CIRCLE:     dl->AddCircle(ImVec2(g.a, g.b), g.c, g.col, 0, g.e); break;
+        case GK_FILLCIRCLE: dl->AddCircleFilled(ImVec2(g.a, g.b), g.c, g.col, 0); break;
+        case GK_ARC:
+            dl->PathArcTo(ImVec2(g.a, g.b), g.c,
+                          g.d * (float)M_PI / 180.0f, g.e * (float)M_PI / 180.0f, 0);
+            dl->PathStroke(g.col, 0, g.f);
+            break;
+        case GK_TEXT:       dl->AddText(ImVec2(g.a, g.b), g.col, g.text.c_str()); break;
+        }
+    }
+}
 
 /* --- window-close delegate -------------------------------------------- */
 static bool g_closed = false;
@@ -34,7 +74,7 @@ static id<MTLCommandQueue>      g_queue    = nil;
 static NSWindow                *g_window   = nil;
 static MTKView                 *g_view     = nil;
 static PopGfxWindowDelegate    *g_delegate = nil;
-static MTLRenderPassDescriptor *g_rpd      = nil;  /* current frame's pass desc */
+static MTLRenderPassDescriptor *g_rpd      = nil;
 static bool                     g_frame_active = false;
 
 int pop_gfx_init(const char *title, int width, int height)
@@ -114,6 +154,7 @@ int pop_gfx_frame_begin(void)
     ImGui_ImplMetal_NewFrame(rpd);
     ImGui_ImplOSX_NewFrame(g_view);
     ImGui::NewFrame();
+    canvas_replay();                                   /* retained drawing      */
     g_frame_active = true;
     return 1;
 }
@@ -150,23 +191,46 @@ void pop_gfx_shutdown(void)
         g_window.delegate = nil;
         g_window = nil; g_view = nil; g_delegate = nil;
         g_queue = nil; g_device = nil;
+        g_canvas.clear();
     }
 }
 
-/* --- immediate canvas drawing ----------------------------------------- */
+/* --- retained canvas drawing ------------------------------------------ */
+void pop_gfx_clear(void) { g_canvas.clear(); }
+
 uint32_t pop_gfx_rgba(int r, int g, int b, int a) { return IM_COL32(r, g, b, a); }
 
+static void push(GfxKind k, float a, float b, float c, float d, float e, float f,
+                 ImU32 col, const char *t)
+{
+    GfxCmd g; g.kind = k; g.a = a; g.b = b; g.c = c; g.d = d; g.e = e; g.f = f;
+    g.col = col; if (t) g.text = t;
+    g_canvas.push_back(g);
+}
+
+void pop_gfx_draw_point(float x, float y, uint32_t c)
+{ push(GK_POINT, x, y, 0, 0, 0, 0, c, NULL); }
+
 void pop_gfx_draw_line(float x0, float y0, float x1, float y1, uint32_t c, float t)
-{ ImGui::GetBackgroundDrawList()->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), c, t); }
+{ push(GK_LINE, x0, y0, x1, y1, t, 0, c, NULL); }
 
 void pop_gfx_draw_rect(float x0, float y0, float x1, float y1, uint32_t c, float t)
-{ ImGui::GetBackgroundDrawList()->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), c, 0.0f, 0, t); }
+{ push(GK_RECT, x0, y0, x1, y1, t, 0, c, NULL); }
 
 void pop_gfx_fill_rect(float x0, float y0, float x1, float y1, uint32_t c)
-{ ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), c); }
+{ push(GK_FILLRECT, x0, y0, x1, y1, 0, 0, c, NULL); }
+
+void pop_gfx_draw_circle(float cx, float cy, float r, uint32_t c, float t)
+{ push(GK_CIRCLE, cx, cy, r, 0, t, 0, c, NULL); }
+
+void pop_gfx_fill_circle(float cx, float cy, float r, uint32_t c)
+{ push(GK_FILLCIRCLE, cx, cy, r, 0, 0, 0, c, NULL); }
+
+void pop_gfx_draw_arc(float cx, float cy, float r, float a0, float a1, uint32_t c, float t)
+{ push(GK_ARC, cx, cy, r, a0, a1, t, c, NULL); }
 
 void pop_gfx_draw_text(float x, float y, uint32_t c, const char *s)
-{ if (s) ImGui::GetBackgroundDrawList()->AddText(ImVec2(x, y), c, s); }
+{ if (s) push(GK_TEXT, x, y, 0, 0, 0, 0, c, s); }
 
 /* --- immediate panels -------------------------------------------------- */
 int  pop_gfx_begin(const char *title) { return ImGui::Begin(title ? title : "##win") ? 1 : 0; }
@@ -176,3 +240,9 @@ int  pop_gfx_button(const char *label){ return ImGui::Button(label ? label : "##
 
 int  pop_gfx_checkbox(const char *label, int v)
 { bool b = (v != 0); ImGui::Checkbox(label ? label : "##chk", &b); return b ? 1 : 0; }
+
+/* --- input ------------------------------------------------------------- */
+float pop_gfx_mouse_x(void) { return ImGui::GetIO().MousePos.x; }
+float pop_gfx_mouse_y(void) { return ImGui::GetIO().MousePos.y; }
+int   pop_gfx_mouse_down(int button)
+{ return (button >= 0 && button < 5 && ImGui::GetIO().MouseDown[button]) ? 1 : 0; }
