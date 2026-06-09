@@ -275,30 +275,119 @@ is red.
 
 ### Phase 1 — Object format & toolchain *(Part 4.1)*
 
-- [ ] Create `syscomp/arm64/sysdefs_darwin.p` (§4).
-- [ ] Add Darwin output to `asmout.p` (`@PAGE`/`@PAGEOFF`, `_` prefix, `.quad`,
-      drop `.arch`); adapt `extern_name_translate`.
-- [ ] Cross-compile all Pop-11 sources on RPi5 with the Darwin config → `.s`.
-- [ ] Apply the mechanical syntax edits to `src/arm64/*.s`.
-- [ ] Transfer to the Mac; `clang -c` each `.s`; iterate on syntax until clean.
+- [x] Create `syscomp/arm64/sysdefs_darwin.p` (§4).
+- [x] Add Darwin output to `asmout.p` (`@PAGE`/`@PAGEOFF`, `_` prefix, `.quad`,
+      drop `.arch`); adapt `extern_name_translate`. Also: numeric `PD_LENGTH`
+      (clang can't evaluate forward shifted label-diffs), poplink-stub `sub`
+      instead of `(l-offs)@PAGE` addend.
+- [x] Cross-compile all Pop-11 sources on RPi5 with the Darwin config → `.s`
+      (292 modules, 0 mishaps; all assemble with `clang -c -arch arm64`).
+- [x] Apply the mechanical syntax edits to `src/arm64/*.s` (all 10 runtime
+      files; `tools/port-arm64-s-*.py`). ELF path byte-identical via macros.
+- [x] Transfer to the Mac; `clang -c` each `.s` — clean (306/306).
+- [x] **ELF regression 12/12** — the `UNIX_MACHO`/`DARWIN` gating left Linux intact.
 
 ### Phase 2 — C support layer *(Part 4.2)* → ladder rung 1 (`basepop11` starts)
 
-- [ ] `c_core.c` Darwin branches: `mcontext` signal PC, `mmap` break, skip
-      `personality()`.
-- [ ] `ext_arm.c` Darwin variadic guards.
-- [ ] `configure`/`Makefile.in` `darwin` case; clang link line; codesign step.
-- [ ] Link the first macOS `corepop`; `codesign -s - corepop`; confirm it
-      **starts** (banner / clean exit).
+- [x] `c_core.c` Darwin branches: `mcontext` signal PC (`uc_mcontext->__ss.__pc`),
+      `mmap` break, skip `personality()`/`linux_setper`, `<siginfo.h>`/`ucontext`.
+- [x] `c_core.h` Darwin: detect `__APPLE__` as UNIX, `#undef bool`.
+- [x] Build `libpop.a` on macOS — all 9 C files compile (`clang -c -arch arm64`).
+- [x] Build a Mach-O `src.olb`; **the corepop link resolves 0 undefined symbols**
+      (was 128 → fixed by the `.s` port + `EXTERN_NAME()` for bare C calls).
+- [ ] **BLOCKED on Phase 3:** the link fails on *illegal text-relocations*, not
+      symbols (see Phase 3). `configure`/`Makefile.in` darwin case + codesign
+      still to wire once the link completes.
 
 ### Phase 3 — Image save/load *(Part 4.3)* → ladder rungs 2 (REPL) & 4 (image save/load)
 
-- [ ] **Design risk — mandatory PIE vs `MAP_FIXED` fixed-address image.** Saved
-      images are `mmap`'d `MAP_FIXED` to a *fixed* virtual address (non-PIE), but
-      macOS mandates PIE. This is the recipe's explicit 4.3 warning and must be
-      designed, not patched: reconcile the fixed-address image load with ASLR/PIE
-      (e.g. a reserved fixed region requested at load, or relocation of the image
-      base). Page alignment itself is already fine (`VPAGE_OFFS=16384`).
+**The PIE / text-relocation wall — CONFIRMED, and it blocks the corepop link
+itself (not just `.psv` load).** With 0 undefined symbols, the corepop link dies on:
+
+```
+ld: Found illegal text-relocations   (4098 in poplink_3.o, 98 in src.olb, …)
+  text-relocation in '…' to 'c_nil', 'c_procedure__key', 'c_lisp_Ssymbol__string' …
+```
+
+*Root cause.* A Poplog procedure is one contiguous GC object `[record][code]`.
+The **record** holds absolute pointer fields (`.quad <symbol>` → keys, idents,
+other procedures); the **code** is now PC-relative (the `.s` port fixed that).
+Under arm64 Mach-O, **PIE is unconditionally mandatory** (`-no_pie` is *"ignored
+for arm64*"*, `-read_only_relocs,suppress` *"cannot be used in this
+configuration"*), so every absolute pointer needs a load-time rebase — which
+Mach-O forbids in read-only `__TEXT`. The record can't move to `__DATA` (where
+dyld *would* rebase it) without splitting it from the executable code it must
+stay contiguous with for the GC.
+
+*What Poplog has (investigated):* **no general relocation machinery.** Only the
+*callstack* is relocated on `.psv` restore (`sr_sys.p:1001-1014`, via
+`@(w){_callstack_reloc}`); the heap/image is `mmap`'d `MAP_FIXED` to a fixed VA
+(`sr_sys.p:312`) assuming ASLR is off. `objmod_pad_key` is a GC boundary marker,
+not a reloc record. Codegen (`asmout.p` `outdatum`/`asm_outword`,
+`genstruct.p:154`) emits absolute symbols only — no PIC/offset mode, no flag.
+
+*Options (least→most invasive):*
+- **A. Reserve a fixed region** (`mmap MAP_FIXED_NOREPLACE` at a chosen high VA;
+  abort if denied). Doesn't help the *executable's* own `__TEXT` relocs — the
+  corepop binary still won't link. Only relevant to later `.psv` loads. **Insufficient alone.**
+- **B. Relocation table + self-relocate at load** (the agent's pick, ~3-5 days).
+  Emit a reloc table (offsets of every absolute pointer) at image-save; at load,
+  if `base != expected`, add the slide to each. Reuses Poplog's key-driven GC
+  traversal. But the corepop *binary* still needs its `__TEXT` pointers legal —
+  so this needs pairing with putting those pointers somewhere writable/rebasable.
+- **C. Split the procedure layout on Mach-O** — record's pointer fields in a
+  rebasable `__DATA`/`__DATA_CONST` section, code in `__TEXT`, PD_EXECUTE linking
+  them. dyld then rebases the records for free and the link succeeds. **Open
+  feasibility question:** does the GC require `[record][code]` *memory*
+  contiguity (it walks `start + PD_LENGTH` to the next object), or only the
+  record→code *pointer*? Since the ported code carries no embedded pointers, the
+  GC need only scan records and skip code — if static seed procedures aren't
+  walked by contiguous `PD_LENGTH` traversal, C is the cleanest path to *first
+  light*. **Verify this next** (`getstore.p`/`gcmain.p` seed-procedure handling).
+
+*Feasibility of C — ANSWERED (GC investigation):* the **seed/corepop procedures
+are registered NON_POP + CONSTANT and are never GC-swept** (`gcmain.p:500-509`
+skips CONSTANT/NON_POP segments; the loaded image is registered NON_POP at
+`unixextern.p:1571`), and GC scans only the *record*, never the code
+(`gccopy.p:131` `SCAN_PD_TABLE` stops at `PD_EXECUTE`). **So the GC linear sweep
+does *not* force `record↔code` contiguity for the seed.** BUT two other things
+do: (i) the linear sweep of the *moving heap* uses `next = current + PD_LENGTH`
+(`gcmain.p:333`, `gcncopy.p:462`, `gccopy.p:253`), and (ii) **runtime
+procedure-copy** allocates one `PD_LENGTH`-word block and `_moveq`s record+code
+together (`procedure.p:216`, `closure_cons.p:66-69`). Plus the code must stay
+executable (`__TEXT`/RX), which `__DATA`/`__DATA_CONST` is not. So a split layout
+is **not viable for first light** — record and code must stay contiguous and the
+code stays in an executable segment.
+
+*Recommended — Option B, a startup relocation pass over the seed image.* Keep
+`[record][code]` contiguous in an executable segment; rebase the record pointer
+fields in place at startup, before first Pop execution:
+1. **Reloc table:** have popc/poplink emit, alongside the image, the list of
+   word offsets of every absolute `.quad <symbol>` pointer field (asmout
+   `outdatum`/`asm_outword` already centralise pointer emission — tag them).
+2. **Writable-then-exec seed → MAP_JIT (tested).** The seed can't live in dyld's
+   RO `__TEXT` (it rejects the relocs at *link* time), and `mprotect(RW→RX)` on a
+   plain linked segment is **refused on Apple Silicon** — verified: a custom
+   `__DATA,__poptext` section with code + `mprotect(PROT_READ|PROT_EXEC)` gives
+   `EACCES` ("Permission denied"). **So the seed code must run from a `MAP_JIT`
+   region.** Shape: link the seed as a *data blob* (e.g. `__DATA`, so dyld even
+   rebases the intra-blob pointers, or just raw offsets); at startup copy it into
+   a `MAP_JIT` mapping, relocate pointers to that base, toggle RX via
+   `pthread_jit_write_protect_np` (the proven Phase-4 helper), and enter. This is
+   effectively making the corepop load its own image the way a `.psv` should load
+   on macOS — so Phase 3's machinery is shared with image save/load.
+3. **Apply slide:** `delta = actual_base − linked_base`; add `delta` to each
+   tagged pointer (mirrors the existing callstack reloc `@(w){_callstack_reloc}`,
+   `sr_sys.p:1011`); `sys_icache_invalidate`; protect RX. Empty/zero table on
+   Linux (base matches) ⇒ no-op, ELF path unaffected.
+
+This is the agent-estimated ~3-5 day core of Phase 3 and also unblocks general
+`.psv` portability (same machinery). Page alignment is already fine
+(`VPAGE_OFFS=16384`). **Next concrete step:** decide the writable-seed mechanism
+(can the main binary `mprotect` its own seg RW→RX under ad-hoc signing, vs. a
+`MAP_JIT` image load) — that gates the table format. Artifacts staged at
+`~/poplog-mac-build` (poplink_*.o, src.olb, libpop.a); only the relocation
+strategy is missing.
 - [ ] Build, load, and **run** `startup.psv`.
 - [ ] Pop-11 REPL: literals, lists/vectors/floats, operator precedence,
       `define`s, records, stack constructs.
