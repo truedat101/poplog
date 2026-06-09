@@ -44,7 +44,11 @@ endsection;
     .file   "amain.s"
 
 ;;; Wrapping in POP object
-   .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
 #_IF DEF UNIX_MACHO
    .quad   Ltext_size, C_LAB(Sys$-objmod_pad_key)
 #_ELSE
@@ -104,6 +108,10 @@ EXTERN_NAME(main):
     .align  3
 
 ;;; End wrapper: set sizes
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start

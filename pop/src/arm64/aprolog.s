@@ -69,10 +69,18 @@ lconstant macro (
     .endm
 #_ENDIF
     .file   "aprolog.s"
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
 
 ;;; Wrapping in POP object
-   .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
    .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
@@ -289,6 +297,10 @@ DEF_C_LAB (_prolog_newvar)
     .align  3
 
 ;;; End wrapper: set size
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start

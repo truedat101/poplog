@@ -70,7 +70,11 @@ lconstant macro MOVFL   = "ldrb";
     .endm
 #_ENDIF
     .file   "aprocess.s"
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
 
     /* --- Swap out (suspend) the live call stack into the process record ---
 

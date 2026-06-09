@@ -67,7 +67,11 @@ lconstant macro (
 #_ENDIF
 
 ;;; Wrapping in POP object
-        .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
         .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
@@ -281,6 +285,10 @@ L1se.2:
     ret
 
 ;;; End wrapper: set size
-        .text
+#_IF DEF UNIX_MACHO
+	.section	__DATA,__popseed
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
         .set Ltext_size, Ltext_end-Ltext_start
