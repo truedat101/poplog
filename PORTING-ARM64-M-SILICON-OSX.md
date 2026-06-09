@@ -383,11 +383,25 @@ fields in place at startup, before first Pop execution:
 
 This is the agent-estimated ~3-5 day core of Phase 3 and also unblocks general
 `.psv` portability (same machinery). Page alignment is already fine
-(`VPAGE_OFFS=16384`). **Next concrete step:** decide the writable-seed mechanism
-(can the main binary `mprotect` its own seg RW→RX under ad-hoc signing, vs. a
-`MAP_JIT` image load) — that gates the table format. Artifacts staged at
-`~/poplog-mac-build` (poplink_*.o, src.olb, libpop.a); only the relocation
-strategy is missing.
+(`VPAGE_OFFS=16384`). The writable-seed mechanism is **settled: MAP_JIT**, since
+`mprotect(RW→RX)` is refused even on a custom segment with `maxprot=rwx` (EACCES,
+tested). MAP_JIT also needs the `com.apple.security.cs.allow-jit` entitlement at
+codesign and an `mmap` with `PROT_READ|PROT_WRITE|PROT_EXEC`
+(`tools/corepop-jit.entitlements`).
+
+**The loader mechanism is PROVEN** (`tools/phase3-jit-reloc-loader-poc.c`): a
+blob whose pointer fields are stored as blob-relative *offsets* + a reloc table
+of those field offsets → `mmap(MAP_JIT)` → `pthread_jit_write_protect_np(0)` →
+copy + add the JIT base to each tagged field → `pthread_jit_write_protect_np(1)`
+→ `sys_icache_invalidate` → execute. Verified: entry code runs from MAP_JIT and
+the relocated pointer resolves to the JIT base. **Remaining build:** (1) codegen
+— emit pointer fields as blob-relative offsets + collect the reloc table
+(`asmout.p` `outdatum`/`asm_outword`; delimit the seed with start/end symbols);
+(2) wire the loader into `c_sysinit.c`/startup (locate the seed segment, run the
+proven sequence, hand off to `Sys$-Poplog_Main`); (3) handle pointers that target
+*outside* the blob (C runtime / real `__DATA`) — leave those absolute. Artifacts
+staged at `~/poplog-mac-build` (poplink_*.o, src.olb, libpop.a); the corepop link
+is 0-undefined — only this relocation layer remains.
 - [ ] Build, load, and **run** `startup.psv`.
 - [ ] Pop-11 REPL: literals, lists/vectors/floats, operator precedence,
       `define`s, records, stack constructs.
