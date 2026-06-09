@@ -130,13 +130,22 @@ global constant macro (
     $- ASM_BYTE_STR = '\t.byte\t',
     $- ASM_SHORT_STR= '\t.short\t',
     $- ASM_INT_STR  = '\t.word\t',
-#_IF DEF UNIX_MACHO
-    $- ASM_DOUBLE_STR = '\t.quad\t',    ;;; Mach-O / Clang: .quad for 8-byte words
-#_ELSE
-    $- ASM_DOUBLE_STR = '\t.xword\t',   ;;; GNU as (AArch64 ELF): .xword
-#_ENDIF
-    $- ASM_WORD_STR = ASM_DOUBLE_STR,
 );
+
+;;; 8-byte Poplog word: GNU as (AArch64 ELF) uses .xword; Mach-O/Clang uses .quad.
+;;; A whole conditional block -- #_IF cannot appear INSIDE a single
+;;; `constant macro ( ... )` declaration list.
+#_IF DEF UNIX_MACHO
+global constant macro (
+    $- ASM_DOUBLE_STR = '\t.quad\t',
+    $- ASM_WORD_STR   = '\t.quad\t',
+);
+#_ELSE
+global constant macro (
+    $- ASM_DOUBLE_STR = '\t.xword\t',
+    $- ASM_WORD_STR   = '\t.xword\t',
+);
+#_ENDIF
 
 ;;; Starting and ending an assembly code file
 
