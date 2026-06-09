@@ -125,7 +125,6 @@ global constant macro (
 ;;; For AArch64 64-bit: .xword for Poplog words (8 bytes)
 
 global constant macro (
-    $- ASM_TEXT_STR = '\t.text',
     $- ASM_DATA_STR = '\t.data',
     $- ASM_BYTE_STR = '\t.byte\t',
     $- ASM_SHORT_STR= '\t.short\t',
@@ -144,6 +143,22 @@ global constant macro (
 global constant macro (
     $- ASM_DOUBLE_STR = '\t.xword\t',
     $- ASM_WORD_STR   = '\t.xword\t',
+);
+#_ENDIF
+
+;;; Procedure/code section. On Mach-O the Pop seed image must be dyld-rebasable:
+;;; under mandatory PIE the absolute `.quad` pointer fields in procedure records
+;;; cannot live in read-only __TEXT, so route the code section into a writable
+;;; __DATA section. The startup loader copies __popseed into a MAP_JIT region,
+;;; relocates, and executes it there (PORTING-ARM64-M-SILICON-OSX.md Phase 3).
+;;; ELF keeps `.text`.
+#_IF DEF UNIX_MACHO
+global constant macro (
+    $- ASM_TEXT_STR = '\t.section\t__DATA,__popseed',
+);
+#_ELSE
+global constant macro (
+    $- ASM_TEXT_STR = '\t.text',
 );
 #_ENDIF
 
