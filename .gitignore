@@ -25,3 +25,10 @@ pop/**/teach/*index
 # ci-watch.sh runtime logs
 tools/ci-watch.build.log
 tools/ci-watch.log
+
+# Vendored third-party source (fetched by tools/fetch-imgui.sh, not committed)
+/pop/extern/imgui/
+
+# Standalone smoke-test binaries (make gfx-smoke / make jit-smoke)
+/gfx-smoke
+/jit-smoke

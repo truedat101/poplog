@@ -233,24 +233,36 @@ State of each as a rule to **preserve**, not a bug to rediscover.
 
 ## 6. Bootstrap & build hygiene (PORTING.txt §2–3)
 
+> **The seed corepop — the chicken-and-egg you hit *first*, before the pipeline
+> below.** Pop-11 is compiled *by Poplog*, so the build is *driven* by a `corepop`
+> saved image (`popc`/`poplink`/`poplibr` are symlinks to it) at
+> `target/pop/corepop` — without it `configure` aborts: *"corepop is missing in
+> target tree."* It is **gitignored, never committed** (so **never** in a fresh
+> clone — placing it is always a manual first step) and is **native machine code,
+> hence architecture-specific**: an x86-64 corepop won't run on AArch64, and a
+> 32-bit `corepop.arm` (armhf) is **not** an AArch64 corepop (a common trap).
+> - **Established arch** (x86-64, i386, 32-bit ARM, FreeBSD…): download one from
+>   `poplog.fricas.org/corepops/` → `target/pop/corepop`.
+> - **New arch** (AArch64, Apple Silicon): there is **no download**, and you can't
+>   mint the first one *natively* (the target's `popc`/`poplink` are still the
+>   host's corepop — PORTING.txt §0: *"porting involves cross-compilation; one needs
+>   running Poplog on some machine (the host)"*). **Cross-build it on the host:**
+>   `make stamp_new_corepop` with the cross `CC`/`as` produces
+>   `target/pop/new_corepop` for the target arch — the same cross-link that builds
+>   `basepop11`, since `popc` is architecture-neutral Pop and the host corepop
+>   happily emits the target's code. Seed it onto the target as
+>   `target/pop/corepop` to make it **self-hosting** (a one-time, per-architecture
+>   "compiler-compiler" seed), and **publish a `corepop.<arch>`** so others
+>   bootstrap without a host.
+>
+> `basepop11` is the same species — the *full* core — so it's easy to overlook you
+> still need a `corepop` once the images build. Worked example + script:
+> [`PORTING-ARM64-LINUX-RPI5.md`](PORTING-ARM64-LINUX-RPI5.md) "Bootstrapping the
+> arm64 `corepop`" / `tools/bootstrap-corepop-x86-64-to-aarch64.sh`.
+
 Pipeline: **`mk_cross`** (cross-popc) → recompile `pop/src` with the new popc →
 **cross-poplink** → corepop on the **target** (`mklibpop` compiles the C, final
 link uses target system libraries) → `basepop11`.
-
-> **Mint the target's `corepop` — and don't forget it exists.** `corepop` is the
-> minimal core that *drives* the build (`popc`/`poplink`/`poplibr` symlink to it).
-> It is **gitignored, never committed** — the host fetches an x86_64 one to start.
-> A new target has **no `corepop` until you mint one**, and you can't mint the
-> first one *natively* (the target's `popc`/`poplink` are still the host's
-> corepop) — so cross-build it on the host: `make stamp_new_corepop` with the
-> cross `CC`/`as` produces `target/pop/new_corepop` for the target arch (the same
-> cross-link that builds `basepop11`; `popc` is architecture-neutral Pop, so the
-> host corepop happily emits the target's code). Seed it onto the target as
-> `target/pop/corepop` to make the target **self-hosting**, and **publish a
-> `corepop.<arch>`** so others bootstrap without a host. `basepop11` is the same
-> species (the full core) — easy to overlook that you still need a `corepop` once
-> the images build. (Worked example + script: `PORTING-ARM64-LINUX-RPI5.md`
-> "Bootstrapping the arm64 `corepop`" / `tools/bootstrap-corepop-x86-64-to-aarch64.sh`.)
 
 > **Build hygiene — the rule that hides more bugs than any other:** popc and the
 > compiled libraries are stamped. A stale stamp means your "rebuild" silently uses

@@ -346,6 +346,13 @@ AArch64 instruction translation as `ass.p`.
 
 ### Stage 6: Build and Bootstrap
 
+> **Prerequisite — the seed corepop** (the chicken-and-egg): the cross-build below
+> needs a working **host** x86_64 Poplog — an x86_64 `corepop` at
+> `target/pop/corepop`, downloaded from `poplog.fricas.org/corepops/`. There is
+> **no AArch64 corepop to download**; this Stage *mints* the first one (full recipe:
+> "Bootstrapping the arm64 `corepop`" below; concept: the seed-corepop box in
+> [`PORTING-POPLOG.md`](PORTING-POPLOG.md) §6).
+
 #### Cross-compilation (on host x86_64 machine)
 
 ```bash
