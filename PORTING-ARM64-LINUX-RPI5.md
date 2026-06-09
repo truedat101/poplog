@@ -378,17 +378,47 @@ cd ~/poplog
 # (may need to edit poplink_cmd for correct paths)
 ```
 
-#### Native rebuild on RPi5
+#### Bootstrapping the arm64 `corepop` (the working recipe)
 
-Once a working `corepop` binary exists on the RPi5:
+`corepop` is the minimal Poplog core that *drives* the build — `popc`, `poplink`
+and `poplibr` are symlinks to it. It is **gitignored, never committed**
+(`.gitignore` excludes `/corepop`, `/corepop.amd64`); the x86_64 bootstrap is
+fetched from `poplog.fricas.org/corepops`. There is **no arm64 `corepop` until
+you mint one**, and you *cannot* mint the first one natively on the Pi — its
+`popc`/`poplink` are still the x86_64 `corepop`, a chicken-and-egg. So the
+bootstrap is **cross-built on the host**, exactly the way `basepop11` is: `popc`
+is architecture-neutral Pop code, so an x86_64 `corepop` happily *generates*
+aarch64, and the cross `CC`/`as` make the linked output arm64.
+
+The whole thing is `tools/bootstrap-corepop-x86-64-to-aarch64.sh`, run **on the
+host**:
+
 ```bash
-# Place corepop in target tree
-cp corepop target/pop/corepop
-
-# Configure and build
-./configure
-make
+export POP__as=/usr/bin/aarch64-linux-gnu-as
+make CC="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed" \
+     stamp_new_corepop                                # -> target/pop/new_corepop (AArch64)
+cp target/pop/new_corepop target/pop/corepop.arm64
 ```
+
+Then **seed it onto the Pi** so the Pi becomes self-hosting (its `popc`/`poplink`/
+`poplibr` symlinks now resolve to an arm64 core, and it can rebuild itself with no
+host):
+
+```bash
+rsync -az target/pop/new_corepop raspi5:~/poplog/target/pop/corepop
+ssh raspi5 'readelf -h ~/poplog/target/pop/corepop | grep Machine'   # -> AArch64
+```
+
+Notes:
+- **`basepop11` is the same species** — the *full* arm64 core; `corepop` is just
+  the minimal bootstrap. Both are AArch64. If you only ever built `basepop11`, the
+  Pi has a working core but **no `corepop`** until you mint one as above (this is
+  easy to overlook, because the images build fine without it).
+- `new_corepop` / `corepop.arm64` are gitignored build artifacts. **Publish
+  `corepop.arm64`** (the way fricas.org publishes the x86_64 one) so others can
+  bootstrap the arm64 port *without* an x86_64 host.
+- Validate end-to-end with `tools/validate-raspi5.sh` on the Pi (the 12-gate
+  ladder).
 
 ### Stage 7: QEMU Host Validation (gate before touching hardware)
 
