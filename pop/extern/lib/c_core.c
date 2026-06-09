@@ -1764,15 +1764,46 @@ char * _pop_sbrk(int nbytes) {
 
 #define POP_BREAK_RESERVE ((size_t) 8 << 30)    /* 8 GiB of virtual headroom */
 
+/* Fixed placement: saved images (.psv) embed absolute heap addresses, so the
+ * reserve must land at the SAME base in every run (the loader also re-execs
+ * with ASLR disabled -- pop_seed_loader.c).  mmap address hints are ignored
+ * for large anon mappings on macOS, so take the address with
+ * mach_vm_allocate(VM_FLAGS_FIXED), which claims it exactly or fails cleanly
+ * if occupied (no clobbering, unlike mmap MAP_FIXED).  0x8000000000 (512 GiB)
+ * is reliably clear of the slide-0 image, the dyld cache, and the malloc
+ * zones (0x700000000 is malloc territory -- probed).  If even that is taken,
+ * fall back to a kernel-chosen base: corepop still works, but cross-run
+ * image restore will fail with "mapped at wrong address". */
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+
+#define POP_BREAK_BASE ((mach_vm_address_t) 0x8000000000ULL)
+
 static char *break_base    = (char *) 0;    /* start of the reserved range */
 static char *break_limit   = (char *) 0;    /* end of the reserved range   */
 static char *current_break = (char *) 0;    /* committed top == the break  */
 
 static int pop_break_init(void) {
-    void *p = mmap((void *) 0, POP_BREAK_RESERVE, PROT_NONE,
-                   MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) return -1;
-    break_base = current_break = (char *) p;
+    mach_vm_address_t addr = POP_BREAK_BASE;
+    if (mach_vm_allocate(mach_task_self(), &addr, POP_BREAK_RESERVE,
+                         VM_FLAGS_FIXED) == KERN_SUCCESS) {
+        /* zero-fill RW by default; demote to PROT_NONE so accesses past the
+           break fault, as the break contract requires */
+        if (mach_vm_protect(mach_task_self(), addr, POP_BREAK_RESERVE,
+                            0, VM_PROT_NONE) != KERN_SUCCESS) {
+            mach_vm_deallocate(mach_task_self(), addr, POP_BREAK_RESERVE);
+            addr = 0;
+        }
+    } else
+        addr = 0;
+
+    if (addr == 0) {
+        void *p = mmap((void *) 0, POP_BREAK_RESERVE, PROT_NONE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (p == MAP_FAILED) return -1;
+        addr = (mach_vm_address_t) p;
+    }
+    break_base = current_break = (char *) addr;
     break_limit = break_base + POP_BREAK_RESERVE;
     return 0;
 }
@@ -1825,13 +1856,18 @@ int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
 
     char *addr = (char *) info->si_addr;
     char *pc   = (char *) context->uc_mcontext->__ss.__pc;
+    int exec_fault = (addr == pc);
 
-    if (break_base == (char *) 0 || addr < break_base || addr >= current_break)
-        return 0;                               /* not a committed-heap access */
+    /* Exec faults are repaired anywhere in the reserve (a restored .psv maps
+       segments at their saved addresses, possibly beyond the current break);
+       write faults only below the break, preserving the fault-past-the-break
+       property. */
+    char *wx_limit = exec_fault ? break_limit : current_break;
+    if (break_base == (char *) 0 || addr < break_base || addr >= wx_limit)
+        return 0;                               /* not a Pop heap access */
 
     long pagesz = sysconf(_SC_PAGESIZE);
     char *page = (char *) ((unsigned long) addr & ~((unsigned long) pagesz - 1));
-    int exec_fault = (addr == pc);
 
     /* No-progress guard: flipping the same page to the same mode twice in a
        row means the fault is not W^X -- let the error machinery have it. */

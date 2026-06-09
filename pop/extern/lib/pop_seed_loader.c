@@ -26,15 +26,50 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <spawn.h>
 #include <sys/mman.h>
 #include <mach-o/getsect.h>
+#include <mach-o/dyld.h>
 #include <mach-o/ldsyms.h>
 #include <libkern/OSCacheControl.h>
 
 extern int pop_seed_main(int argc, char **argv, char **envp)
     __asm__("_pop_seed_main");
 
+/* private but long-stable (it is how debuggers run ASLR-free targets) */
+#ifndef _POSIX_SPAWN_DISABLE_ASLR
+#define _POSIX_SPAWN_DISABLE_ASLR 0x0100
+#endif
+
+/* Saved images (.psv) embed absolute addresses of seed procedures and heap
+ * structures, so the process layout must repeat across runs.  This is the
+ * Darwin analogue of linux_setper()'s ADDR_NO_RANDOMIZE re-exec on Linux:
+ * if we are running with a nonzero PIE slide, re-exec ourselves with ASLR
+ * disabled (slide 0; mmap layout then repeats too).  If the re-exec is not
+ * permitted, continue -- everything works except cross-run image restore. */
+static void disable_aslr_reexec(char **argv) {
+    if (_dyld_get_image_vmaddr_slide(0) == 0) return;      /* already fixed */
+    if (getenv("POP_ASLR_REEXEC") != NULL) return;         /* loop guard */
+
+    char path[4096];
+    uint32_t pathsz = sizeof path;
+    if (_NSGetExecutablePath(path, &pathsz) != 0) return;
+
+    posix_spawnattr_t attr;
+    if (posix_spawnattr_init(&attr) != 0) return;
+    /* SETEXEC = replace this image, exec-style */
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC
+                                    | _POSIX_SPAWN_DISABLE_ASLR);
+    setenv("POP_ASLR_REEXEC", "1", 1);
+    extern char **environ;
+    posix_spawn(NULL, path, NULL, &attr, argv, environ);   /* no return on success */
+    posix_spawnattr_destroy(&attr);
+    unsetenv("POP_ASLR_REEXEC");                           /* failed: carry on */
+}
+
 int main(int argc, char **argv, char **envp) {
+    disable_aslr_reexec(argv);
+
     unsigned long segsize;
     uint8_t *seg = getsegmentdata(&_mh_execute_header, "__POPSEED", &segsize);
     if (seg == NULL) {

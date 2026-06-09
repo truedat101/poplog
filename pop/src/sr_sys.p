@@ -307,6 +307,19 @@ define lconstant Map_or_read(_paddr, _poffs, _fileoffs, _const, _share);
     #_ENDIF
 
     ;;; use mmap
+#_IF DEF DARWIN
+    ;;; Apple Silicon refuses PROT_EXEC on (unsigned) file-backed mappings
+    ;;; (EPERM), so map the image read-write / read-only; executing restored
+    ;;; code faults and the lazy W^X handler (_pop_wx_fixup, c_core.c) flips
+    ;;; those pages to RX on demand.  Always MAP_PRIVATE: a later write-fault
+    ;;; flip on a MAP_SHARED page would need the image file open read-write.
+    ;;; (Side effect: writes to const segments flip the page RW instead of
+    ;;; mishapping -- acceptable for bring-up, tighten in Phase 4.)
+    lvars _prot = if _const then _2:001 else _2:011 endif;
+
+    _extern mmap(_baddr, _blen, _prot, _MAP_PRIVATE _biset _MAP_FIXED,
+                    _sr_channel, _fileoffs) -> _res;
+#_ELSE
     lvars _prot = if _const then _M_PROT_NOWRITE else _M_PROT_ALL endif;
 
     _extern mmap(_baddr, _blen, _prot,  if _const and _share then
@@ -315,6 +328,7 @@ define lconstant Map_or_read(_paddr, _poffs, _fileoffs, _const, _share);
                                             _MAP_PRIVATE
                                         endif _biset _MAP_FIXED,
                     _sr_channel, _fileoffs) -> _res;
+#_ENDIF
 
     if _res _eq _-1 then
         Syserr_mishap(_sr_device, 1, 'ERROR MAPPING SAVED IMAGE')
