@@ -38,7 +38,7 @@ lconstant msvec = writeable {0 0 1};        ;;; for sys_pr_message
 define lconstant shlib_error() -> msg;
     lvars msg = false;
     ;;; NB: Linux ELF dlerror() is unreliable, so we don't use it
-#_IF DEFV SYSTEM_V >= 4.0 or DEF OSF1 or DEF AIX
+#_IF DEFV SYSTEM_V >= 4.0 or DEF OSF1 or DEF AIX or DEF DARWIN
     lvars _msg = _extern dlerror();
     _nonzero(_msg) and Consstring_bptr(_msg, _-1, CSB_FIXED) -> msg;
 #_ENDIF
@@ -58,6 +58,8 @@ lconstant macro DLOPEN_FLAGS = 16:003;  ;;; RTLD_LAZY_GLOBAL
 lconstant macro DLOPEN_FLAGS = 16:001;  ;;; RTLD_LAZY
 #_ELSEIF DEFV IRIX >= 5.0
 lconstant macro DLOPEN_FLAGS = 16:001;  ;;; RTLD_LAZY
+#_ELSEIF DEF DARWIN
+lconstant macro DLOPEN_FLAGS = 16:9;    ;;; macOS: RTLD_LAZY(0x1) | RTLD_GLOBAL(0x8)
 #_ENDIF
 
     /* open a shared library, allowing for unresolved references
