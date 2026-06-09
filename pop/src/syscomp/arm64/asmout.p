@@ -347,8 +347,19 @@ define asm_gen_poplink_code(outlabs, nfroz, jmplab);
     ;;; x19 is the user stack pointer
     asm_outlab(nextlab() ->> l);
     fast_for offs from nfroz*8 by -8 to 8 do
+#_IF DEF UNIX_MACHO
+        ;;; Mach-O's ld rejects the (l - offs)@PAGE addend relocation
+        ;;; (ARM64_RELOC_ADDEND + PAGE21), so materialise l with no addend and
+        ;;; subtract offs as a real instruction. This is 5 instrs/frozval --
+        ;;; exactly the size reserved by the (nfroz*5+6) result below (the ELF
+        ;;; path emits 4 and leaves the 5th slot as slack).
+        asmf_printf(l, ADRP_X16_FMT);
+        asmf_printf(l, ADDLO_X16_FMT);
+        asmf_printf(offs, '\tsub x16, x16, #%p\n');
+#_ELSE
         asmf_printf(asm_expr(l, "-", offs), ADRP_X16_FMT);
         asmf_printf(asm_expr(l, "-", offs), ADDLO_X16_FMT);
+#_ENDIF
         asmf_pr('\tldr x17, [x16]\n');
         asmf_pr('\tstr x17, [x19, #-8]!\n');
     endfast_for;
