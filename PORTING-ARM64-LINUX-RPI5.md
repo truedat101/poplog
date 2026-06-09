@@ -403,9 +403,18 @@ host**:
 ```bash
 export POP__as=/usr/bin/aarch64-linux-gnu-as
 make CC="aarch64-linux-gnu-gcc -no-pie -Wl,-export-dynamic -Wl,--no-as-needed" \
-     stamp_new_corepop                                # -> target/pop/new_corepop (AArch64)
+     stamp_new_corepop                                # -> target/pop/new_corepop
 cp target/pop/new_corepop target/pop/corepop.arm64
+readelf -h target/pop/new_corepop | grep Machine     # VERIFY: -> AArch64
 ```
+
+The script does that `readelf` check itself and fails if the result is not
+AArch64 — never trust the build silently (a wrong cross toolchain yields an
+x86_64 binary that looks fine until it won't run on the target). It also takes a
+`CROSS=` override for non-Debian toolchain layouts, and **does no deployment** —
+installing the core onto a target is yours to do (the destination differs per
+machine / CI), so just copy `target/pop/corepop.arm64` to the target as
+`target/pop/corepop`.
 
 Then **seed it onto the Pi** so the Pi becomes self-hosting (its `popc`/`poplink`/
 `poplibr` symlinks now resolve to an arm64 core, and it can rebuild itself with no
