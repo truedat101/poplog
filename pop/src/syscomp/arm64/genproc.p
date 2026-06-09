@@ -2024,6 +2024,34 @@ enddefine;
 ;;;         [alignment padding]
 ;;;         [end_label]
 
+#_IF DEF UNIX_MACHO
+;;; Mach-O: clang's assembler cannot evaluate a FORWARD shifted label-difference
+;;; in a data directive, so popc must emit PD_LENGTH as a literal number rather
+;;; than the `.set _LF, ((endlab - exec) >> 3) + hdr` the ELF path uses.  popc
+;;; emits the whole exec..endlab span itself (no assembler-managed literal pools
+;;; on this backend), so its byte size is the sum over the final codelist:
+;;;     "label" / "#"  -> 0 bytes
+;;;     "align"        -> pad up to an 8-byte boundary
+;;;     "long"         -> (datalength-1) * 8   (xword data, via asm_outword)
+;;;     anything else  -> 4   (one fixed-width AArch64 instruction)
+define lconstant codelist_nbytes(codelist) -> nbytes;
+    lvars instr, opcode;
+    0 -> nbytes;
+    fast_for instr in codelist do
+        f_subv(1, instr) -> opcode;
+        if opcode == "label" or opcode == "#" then
+            ;;; emits no bytes
+        elseif opcode == "align" then
+            ((nbytes + 7) >> 3) << 3 -> nbytes      ;;; pad to 8-byte boundary
+        elseif opcode == "long" then
+            nbytes + (datalength(instr) - 1) * 8 -> nbytes
+        else
+            nbytes + 4 -> nbytes
+        endif
+    endfor
+enddefine;
+#_ENDIF
+
 define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
     lconstant procedure gencode;
     lvars codelist, hdr_len, pdr_len, new_lits,
@@ -2058,8 +2086,14 @@ define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
         ;;; Plant an end label
         outlab(genlab() ->> endlab);
         ;;; Define pdr_len as the size in words of the procedure
+#_IF DEF UNIX_MACHO
+        ;;; Mach-O: literal length (see codelist_nbytes above). exec..endlab is
+        ;;; the codelist rounded up to 8 by the final align, /8 words, + header.
+        outlabset(pdr_len, ((codelist_nbytes(codelist) + 7) >> 3) + hdr_len);
+#_ELSE
         outlabset(pdr_len,
                   asm_pdr_len(hdr_len, current_pdr_exec_label, endlab));
+#_ENDIF
     enddefine;
 enddefine;
 
