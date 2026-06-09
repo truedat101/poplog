@@ -15,6 +15,7 @@ usage() {
   echo "  --with_motif      fail if no Motif"
   echo "  --with_xt         use X toolkit instead of Motif"
   echo "  --with_no_x       do not use X"
+  echo "  --experimental-gfx   experimental native ImGui+Metal graphics (macOS); implies no X"
   echo "  --with_packages   fail if package tree is missing"
 }
 
@@ -35,6 +36,10 @@ while [ "$*" != "" ] ; do
            X_CONF=xt
              ;;
         --with_no_x)
+           X_CONF=no
+             ;;
+        --experimental-gfx)
+           GFX_CONF=imgui
            X_CONF=no
              ;;
         --with_packages)
@@ -258,7 +263,7 @@ POPEXTERNLIB=$USEPOP/$POP_target/exlib
 POPOBJLIB=$USEPOP/$POP_target/obj
 
 SUBSTS="s,@@USEPOP@@,$USEPOP,"
-for A in POPSYS POPEXTERNLIB POPOBJLIB X_CONF X_INCLUDES \
+for A in POPSYS POPEXTERNLIB POPOBJLIB X_CONF GFX_CONF X_INCLUDES \
     ABS_BUILD  POP_BIN_DIR POP_arch CC POP_target PACK_CONF ;
 do
     VAL=`eval echo '$'"$A"`

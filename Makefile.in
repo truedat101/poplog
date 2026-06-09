@@ -16,8 +16,19 @@ HASH_STYLE_OPT = @@HASH_STYLE_OPT@@
 
 X_INCLUDES = @@X_INCLUDES@@
 X_CONF = @@X_CONF@@
+GFX_CONF = @@GFX_CONF@@
 POP_arch = @@POP_arch@@
 
+ifeq (${GFX_CONF},imgui)
+# Experimental native graphics backend (Dear ImGui + Metal, macOS); no X linked.
+# TODO: first vendor ImGui -> ./tools/fetch-imgui.sh (pop/extern/imgui/, gitignored).
+# Then define GFX_OBJECT=${popexlib}/imgui_backend.o, add rules to build
+# pop/extern/lib/imgui_backend.mm + ImGui core (imgui*.cpp) + the native backends
+# (backends/imgui_impl_metal.mm, backends/imgui_impl_osx.mm) with clang++ -ObjC++,
+# and link the frameworks (-framework Metal -framework MetalKit -framework AppKit
+# -framework QuartzCore). Until then this just builds -nox.
+XL_FLAG=-nox
+else
 ifeq (${X_CONF},no)
 XL_FLAG=-nox
 else
@@ -28,6 +39,7 @@ ifeq (${X_CONF},xt)
 XL_FLAG=-xt
 else
 XL_FLAG=-xm
+endif
 endif
 endif
 
@@ -129,7 +141,7 @@ LIBPOP_CSRC = c_bignum c_callback c_core c_sysinit ext_arm \
 LIBPOP_OBJS0 = $(addprefix ${popexlib}/, $(addsuffix .o, \
                 $(basename $(notdir ${LIBPOP_CSRC}))))
 
-LIBPOP_OBJS = ${LIBPOP_OBJS0} ${XT_OBJECT}
+LIBPOP_OBJS = ${LIBPOP_OBJS0} ${XT_OBJECT} ${GFX_OBJECT}
 
 ${LIBPOP_OBJS0}: ${popexlib}/%.o: pop/extern/lib/%.c stamp_dirs_and_symlinks
 	$(CC) -c -g -Wall -O $< -o $@
