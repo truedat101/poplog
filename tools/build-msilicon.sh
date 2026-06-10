@@ -19,6 +19,13 @@
 # also installed into <repo>/target/pop/corepop (the configure seed slot).
 
 set -eu
+
+# Apple Silicon only: the Darwin port lives in the arm64 backend.
+if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+    echo "ERROR: this tool targets macOS on Apple Silicon (Darwin/arm64) only."
+    echo "       Host is $(uname -s)/$(uname -m). See PORTING-ARM64-M-SILICON-OSX.md."
+    exit 2
+fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$HOME/poplog-mac-build"
 SYNC=""; IMAGES=0; VALIDATE=0

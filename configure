@@ -79,6 +79,19 @@ HOST_OS=`uname -s`
 
 CC_LINK_OPTIONS="-Wl,-export-dynamic"
 if [ "$HOST_OS" = Darwin ]; then
+    # macOS is supported on Apple Silicon (arm64) ONLY.  The Darwin port
+    # lives in the arm64 backend (Mach-O output in syscomp/arm64, the
+    # __POPSEED seed segment, the dual-mapped heap); the x86_64 backend
+    # still emits ELF/GNU-as and none of the OS-layer work exists there.
+    # Note Intel-Darwin would actually be EASIER in OS policy (no hard
+    # W^X, -no_pie works on x86_64 Mach-O) but needs the object-format
+    # work redone in syscomp/x86_64 -- see PORTING-ARM64-M-SILICON-OSX.md.
+    if [ "$HOST_ARCH" != arm64 ] && [ "$HOST_ARCH" != aarch64 ]; then
+        echo "ERROR: Poplog on macOS is only supported on Apple Silicon (arm64)."
+        echo "       Darwin/$HOST_ARCH is not ported (the $HOST_ARCH backend emits ELF)."
+        echo "       See PORTING-ARM64-M-SILICON-OSX.md for what a port would entail."
+        exit 1
+    fi
     # macOS arm64 (Apple M-silicon). PIE is mandatory (-no-pie is ignored on
     # arm64), ld64 has none of the GNU-ld options probed below, and the
     # bootstrap flow differs (see PORTING-ARM64-M-SILICON-OSX.md and

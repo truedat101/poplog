@@ -19,6 +19,13 @@
 
 set -u
 
+# Apple Silicon only: the Darwin port lives in the arm64 backend.
+if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+    echo "ERROR: this tool targets macOS on Apple Silicon (Darwin/arm64) only."
+    echo "       Host is $(uname -s)/$(uname -m). See PORTING-ARM64-M-SILICON-OSX.md."
+    exit 2
+fi
+
 BUILD="$HOME/poplog-mac-build"; REBUILD=0
 for a in "$@"; do
     case "$a" in
