@@ -181,9 +181,14 @@ enddefine;
 define Flush_procedure(p);
     lvars p;
 #_IF DEF CACHEFLUSH
-    CACHEFLUSH(
-        p!PD_EXECUTE,
-        @@(w)[p!PD_LENGTH] _add p _add @@POPBASE _sub p!PD_EXECUTE);
+    lvars _exec = p!PD_EXECUTE,
+          _end  = p _add @@(w)[p!PD_LENGTH] _add @@POPBASE;
+    ;;; a closure may execute shared code outside its own record (e.g.
+    ;;; protected-closure templates): that code was flushed when it was
+    ;;; created, and the length computed from this record would be wild
+    if _exec >=@(w) p and _exec <@(w) _end then
+        CACHEFLUSH(_exec, _end _sub _exec);
+    endif;
 #_ENDIF
 enddefine;
 

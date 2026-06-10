@@ -48,6 +48,28 @@ if [ -n "$SYNC" ]; then
 fi
 [ -n "$(ls libasm 2>/dev/null)" ] || { echo "no library .s in $BUILD/libasm -- run with --sync HOST"; exit 2; }
 
+# The Pi cycle recompiles a few flaky modules (Copyscan workaround), so the
+# capture dir can hold two generations of the same module under different
+# popc temp names.  Duplicate definitions in src.olb make ld pick an
+# arbitrary (possibly stale) one -- keep only the newest per symbol set.
+python3 - <<'DEDUP'
+import os, re, collections
+groups = collections.defaultdict(list)
+for f in os.listdir('libasm'):
+    p = os.path.join('libasm', f)
+    syms = []
+    with open(p, errors='replace') as fh:
+        for line in fh:
+            m = re.match(r'\s*\.globa?l\s+(\S+)', line)
+            if m: syms.append(m.group(1))
+    groups[tuple(sorted(syms)) or ('<none>', f)].append((os.path.getmtime(p), p))
+for files in groups.values():
+    files.sort()
+    for _, p in files[:-1]:
+        print('   dropping stale duplicate', p)
+        os.remove(p)
+DEDUP
+
 echo "-- assembling $(ls libasm | wc -l | tr -d ' ') library modules + $(ls asm/poplink_*.a | wc -l | tr -d ' ') poplink units --"
 rm -f libobj/*.o
 ls libasm | sed 's/\.[^.]*$//' | sort -u | xargs -P 8 -I{} sh -c \
