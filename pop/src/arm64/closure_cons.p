@@ -90,8 +90,15 @@ define Cons_closure(_nfroz) -> _clos;
             -> _clos!PD_CLOS_FROZVALS[_nfroz];
 
         ;;; PD_EXECUTE points to the first instruction, after the data word
-        _clos@PD_CLOS_FROZVALS[_nfroz _add _1] ->> _drop_ptr
-            -> _clos!PD_EXECUTE;
+        _clos@PD_CLOS_FROZVALS[_nfroz _add _1] -> _drop_ptr;
+#_IF DEF DARWIN
+        ;;; Phase 4: bias PD_EXECUTE into the RX view (+2**36) so calls
+        ;;; need no exec-fault redirect; code is PLANTED at the canonical
+        ;;; _drop_ptr.
+        _drop_ptr _add _16:1000000000 -> _clos!PD_EXECUTE;
+#_ELSE
+        _drop_ptr -> _clos!PD_EXECUTE;
+#_ENDIF
 
         ;;; Compute byte distance from adr instruction back to closure base.
         ;;; _drop_ptr is where we are now (the adr instruction).
@@ -128,8 +135,13 @@ define Cons_closure(_nfroz) -> _clos;
         _16:D61F0200 -> INSTR;
     else
         ;;; Small closure: inline frozval push + pdpart chain
-        _clos@PD_CLOS_FROZVALS[_nfroz] ->> _drop_ptr
-            -> _clos!PD_EXECUTE;
+        _clos@PD_CLOS_FROZVALS[_nfroz] -> _drop_ptr;
+#_IF DEF DARWIN
+        ;;; Phase 4 view bias (see above)
+        _drop_ptr _add _16:1000000000 -> _clos!PD_EXECUTE;
+#_ELSE
+        _drop_ptr -> _clos!PD_EXECUTE;
+#_ENDIF
 
         ;;; Compute byte distance from adr instruction back to closure base.
         _clos _sub _drop_ptr -> _offs;

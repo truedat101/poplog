@@ -1981,15 +1981,29 @@ int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
        write faults only below the break, preserving the fault-past-the-break
        property. */
     char *wx_limit = exec_fault ? break_limit : current_break;
-    if (break_base == (char *) 0 || addr < break_base || addr >= wx_limit)
+    if (break_base == (char *) 0 || addr < break_base || addr >= wx_limit) {
+        /* TEMP: why was this fault not repaired? */
+        char db[160];
+        int dn = snprintf(db, sizeof db,
+            "[wx-decline] addr=%lx base=%lx brk=%lx exec=%d\n",
+            (unsigned long) addr, (unsigned long) break_base,
+            (unsigned long) current_break, exec_fault);
+        write(2, db, dn);
         return 0;                               /* not a Pop heap access */
+    }
 
     long pagesz = sysconf(_SC_PAGESIZE);
     char *page = (char *) ((unsigned long) addr & ~((unsigned long) pagesz - 1));
 
     /* No-progress guard: flipping the same page to the same mode twice in a
        row means the fault is not W^X -- let the error machinery have it. */
-    if (page == wx_last_page && exec_fault == wx_last_exec) return 0;
+    if (page == wx_last_page && exec_fault == wx_last_exec) {
+        char db[120];
+        int dn = snprintf(db, sizeof db,
+            "[wx-noprogress] page=%lx exec=%d\n", (unsigned long) page, exec_fault);
+        write(2, db, dn);
+        return 0;
+    }
 
     if (exec_fault && view_base != (char *) 0) {
         /* dual-mapping: continue this execution in the RX view of the same

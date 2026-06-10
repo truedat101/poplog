@@ -183,6 +183,11 @@ define Flush_procedure(p);
 #_IF DEF CACHEFLUSH
     lvars _exec = p!PD_EXECUTE,
           _end  = p _add @@(w)[p!PD_LENGTH] _add @@POPBASE;
+#_IF DEF DARWIN
+    ;;; Phase 4: heap PD_EXECUTE is biased into the RX view (+2**36);
+    ;;; flush the canonical alias (the icache flush covers both views)
+    _exec _biclear _16:1000000000 -> _exec;
+#_ENDIF
     ;;; a closure may execute shared code outside its own record (e.g.
     ;;; protected-closure templates): that code was flushed when it was
     ;;; created, and the length computed from this record would be wild

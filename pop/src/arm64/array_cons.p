@@ -69,7 +69,13 @@ define Array$-Cons(_tabsize) -> _arrayp;
 
     ;;; Start of code
     @@PD_ARRAY_TABLE{_tabsize} -> _drop_ptr;
+#_IF DEF DARWIN
+    ;;; Phase 4: bias PD_EXECUTE into the RX view (+2**36); code is
+    ;;; planted at the canonical _drop_ptr offsets.
+    _arrayp@(w){_drop_ptr} _add _16:1000000000 -> _arrayp!PD_EXECUTE;
+#_ELSE
     _arrayp@(w){_drop_ptr} -> _arrayp!PD_EXECUTE;
+#_ENDIF
 
     ;;; ---------------------------------------------------------------
     ;;; Instruction 0: adr x20, .-offset

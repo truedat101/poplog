@@ -199,7 +199,14 @@ define lconstant App_restored_area(_rec, _lim);
         PROCEDURE:
             Reloc(_rec@PD_PROPS);
             Reloc(_rec@PD_UPDATER);
+#_IF DEF DARWIN
+            ;;; Phase 4: relocate the canonical execute address; the
+            ;;; delta fed to Adjust_pdr_exec then preserves the bias
+            Reloc_ptr((_rec!PD_EXECUTE@(code->w) _biclear _16:1000000000)
+                                                ->> _ptr) -> _work;
+#_ELSE
             Reloc_ptr(_rec!PD_EXECUTE@(code->w) ->> _ptr) -> _work;
+#_ENDIF
             Adjust_pdr_exec(@@(w){_work, _ptr}, _rec);
             if _rec!PD_FLAGS _bitst _:M_PD_CLOSURE then
                 Reloc(_rec@PD_CLOS_PDPART);

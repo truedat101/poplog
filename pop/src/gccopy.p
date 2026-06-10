@@ -130,6 +130,11 @@ enddefine;
     */
 define :inline lconstant SCAN_PD_TABLE(_new, _ptr, _exec);
     _new!PD_EXECUTE@(code->w){_curr_gcseg_reloc} -> _exec;
+#_IF DEF DARWIN
+    ;;; Phase 4: heap PD_EXECUTE is biased into the RX view (+2**36);
+    ;;; strip the bias so _exec is comparable with table pointers
+    _exec _biclear _68719476736 -> _exec;      ;;; 2**36 (no radix colon in :inline)
+#_ENDIF
     if _new!PD_FLAGS _bitst _:M_PD_CLOSURE then
         Copyscan(_new@PD_CLOS_PDPART);
         _new@PD_CLOS_FROZVALS -> _ptr

@@ -86,7 +86,13 @@ define Cons_pcomposite() -> _comp;
     ;;; Plant the executable code.
     ;;; _drop_ptr tracks the byte offset from the record base into the code area.
     @@PD_COMPOSITE_TABLE -> _drop_ptr;
+#_IF DEF DARWIN
+    ;;; Phase 4: bias PD_EXECUTE/PD_EXIT into the RX view (+2**36); the
+    ;;; code itself is planted at the canonical _drop_ptr offsets.
+    _comp@(w){_drop_ptr} _add _16:1000000000 -> _comp!PD_EXECUTE;
+#_ELSE
     _comp@(w){_drop_ptr} -> _comp!PD_EXECUTE;
+#_ENDIF
 
     ;;; ---------------------------------------------------------------
     ;;; Instruction 1: adr x20, .
@@ -165,7 +171,11 @@ define Cons_pcomposite() -> _comp;
 
     ;;; ---------------------------------------------------------------
     ;;; PD_EXIT: mark the start of the exit sequence.
+#_IF DEF DARWIN
+    _comp@(w){_drop_ptr} _add _16:1000000000 -> _comp!PD_EXIT;
+#_ELSE
     _comp@(w){_drop_ptr} -> _comp!PD_EXIT;
+#_ENDIF
 
     ;;; Instruction 10: ldp x20, x30, [sp], #16
     ;;; Pop our saved PB and LR from the call stack (post-index).

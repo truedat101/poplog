@@ -917,7 +917,15 @@ define Get_procedure(_size, _reg_spec) -> pdr;
         Drop_word($-Sys$-Gc$-pd_table_noscan_region)
     endif;
 
+#_IF DEF DARWIN
+    ;;; Phase 4: runtime code executes via the RX heap view at +2**36;
+    ;;; bias the execute address so indirect calls branch straight into
+    ;;; the view instead of taking an exec-fault redirect (~9us/call).
+    ;;; (PD_EXIT, computed from PD_EXECUTE by the caller, rides the bias.)
+    _asm_drop_ptr _add _16:1000000000 -> pdr!PD_EXECUTE
+#_ELSE
     _asm_drop_ptr -> pdr!PD_EXECUTE         ;;; start of instructions
+#_ENDIF
 enddefine;
 
     /*  Allocate lvars to registers or stack frame cells, setting the
