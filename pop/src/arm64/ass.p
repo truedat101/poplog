@@ -208,7 +208,8 @@ lconstant
     _STR_POST   = _16:F8000400,
 
     ;;; LDR Xt, [Xn, Xm]:  1111 1000 011 Xm 011 0 10 Xn Xt
-    ;;; (register offset, LSL #3)
+    ;;; (register offset, UNSCALED -- S=0: plain [Xn + Xm], byte offset.
+    ;;; Verified against clang: scaled LSL#3 would be F8607800.)
     _LDR_REG    = _16:F8606800,
 
     ;;; STR Xt, [Xn, Xm]:  1111 1000 001 Xm 011 0 10 Xn Xt
@@ -640,7 +641,7 @@ define drop_str_imm(_rt, _rn, _off);
 enddefine;
 
 ;;; drop_ldr_reg:
-;;;     LDR Xt, [Xn, Xm, LSL #3]
+;;;     LDR Xt, [Xn, Xm]   (UNSCALED register offset -- Xm is a BYTE offset)
 define drop_ldr_reg(_rt, _rn, _rm);
     lvars _rt, _rn, _rm;
     drop_w(_LDR_REG _biset _shift(_rm, _16) _biset _shift(_rn, _5)
