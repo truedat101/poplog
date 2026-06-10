@@ -134,6 +134,11 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
         asmf_pr('POP__cc=${POP__cc:-cc}\n');
         asmf_pr(cc_link_command_header);
         for f in link_flags do asmf_printf(f, '-Wl,%p \\\n') endfor;
+#_IF DEF DARWIN
+        ;;; the Mach-O loader shim is the real main: it remaps __POPSEED
+        ;;; RX in place and tail-calls _pop_seed_main (amain.s)
+        nl_printf('$popexternlib/pop_seed_loader.o');
+#_ENDIF
                 out_obj_files(wobj_files);
 #_ELSE
         ;;; link command header string (defined in asmout.p)
@@ -186,6 +191,11 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
 
     unless exlink then
         asmf_pr('ST=$?\n');
+#_IF DEF DARWIN
+        ;;; ad-hoc sign with the JIT entitlement (required for the
+        ;;; MAP_JIT/W^X machinery; re-sign replaces the linker's signature)
+        asmf_pr('if [ $ST = 0 ]; then codesign -s - --entitlements "$usepop/tools/corepop-jit.entitlements" -f $IM || ST=$?; fi\n');
+#_ENDIF
 
         if cleanup_command then asmf_printf(cleanup_command, '%p\n') endif;
         if makebase then

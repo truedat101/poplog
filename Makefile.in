@@ -107,7 +107,7 @@ stamp_popc: ${popsys}/corepop stamp_dirs_and_symlinks ${SYSCOMP_SRC}
 	   -d -a=${POP_arch} popc poplibr poplink)
 	touch stamp_popc
 
-stamp_new_corepop: stamp_popc stamp_srclib ${popexlib}/libpop.a
+stamp_new_corepop: stamp_popc stamp_srclib ${popexlib}/libpop.a ${popexlib}/pop_seed_loader.o
 	(cd ${popsys} && POP__cc="${CC} ${HASH_STYLE_OPT}"; \
 	    export POP__cc && \
 	    ${DO_COMMAND} ${PGLINK} -core && \
@@ -169,7 +169,7 @@ stamp_newpop: stamp_popc
 	touch stamp_newpop
 
 LIBPOP_CSRC = c_bignum c_callback c_core c_sysinit ext_arm \
-              pop_encoding pop_poll pop_stat pop_timer
+              pop_encoding pop_poll pop_stat pop_timer pop_vararg_fix
 
 LIBPOP_OBJS0 = $(addprefix ${popexlib}/, $(addsuffix .o, \
                 $(basename $(notdir ${LIBPOP_CSRC}))))
@@ -181,6 +181,9 @@ ${LIBPOP_OBJS0}: ${popexlib}/%.o: pop/extern/lib/%.c stamp_dirs_and_symlinks
 
 ${popexlib}/XtPoplog.o: pop/extern/lib/XtPoplog.c stamp_dirs_and_symlinks
 	$(CC) -c -g -Wall -O $(X_INCLUDES) $< -o $@
+
+${popexlib}/pop_seed_loader.o: pop/extern/lib/pop_seed_loader.c stamp_dirs_and_symlinks
+	$(CC) -c -g -Wall -O $< -o $@
 
 ${popexlib}/libpop.a: ${LIBPOP_OBJS}
 	ar rc $@ $^
