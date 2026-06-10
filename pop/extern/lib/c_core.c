@@ -639,6 +639,26 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     if ((sig == SIGBUS || sig == SIGSEGV) && info != NULL && context != NULL
         && _pop_wx_fixup(info, context))
         return;
+    /* TEMP DIAGNOSTIC: every fatal signal reaching the Pop error machinery,
+       with the GC-in-progress flag (an exception raised while
+       _memory_is_corrupt is set is treated as fatal and can exit(1) without
+       managing to print anything -- errors.p Sys$-Raise_exception). */
+    if (context != NULL) {
+        extern unsigned long i_Sys_S_031memory__is__corrupt[]
+            __asm__("i_Sys_S_031memory__is__corrupt");
+        char fb[220];
+        int fn = snprintf(fb, sizeof fb,
+            "[fatal] sig=%d pc=%llx addr=%lx lr=%llx x0=%llx x16=%llx gcflag=%lx/%lx\n",
+            sig,
+            (unsigned long long) context->uc_mcontext->__ss.__pc,
+            (unsigned long) (info ? (unsigned long) info->si_addr : 0),
+            (unsigned long long) context->uc_mcontext->__ss.__lr,
+            (unsigned long long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long long) context->uc_mcontext->__ss.__x[16],
+            i_Sys_S_031memory__is__corrupt[1],
+            i_Sys_S_031memory__is__corrupt[2]);
+        write(2, fb, fn);
+    }
     /* TEMP DIAGNOSTIC: SIGBUS with PC in the shared cache (libc) -- e.g.
        IC IVAU faulting inside sys_icache_invalidate: show the failing
        address and the call chain registers. */
@@ -789,7 +809,23 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     }
 #endif
 
-    if (__pop_in_user_extern == -1) _exit(1);   /* outside Pop */
+    if (__pop_in_user_extern == -1) {
+#if defined(__APPLE__) && defined(__aarch64__)
+        /* TEMP: never die silently -- dump the fatal-signal context */
+        char ob[200];
+        int on = snprintf(ob, sizeof ob,
+            "[outside-pop] sig=%d pc=%lx addr=%lx lr=%lx x0=%lx x16=%lx sp=%lx\n",
+            sig,
+            (unsigned long) context->uc_mcontext->__ss.__pc,
+            (unsigned long) info->si_addr,
+            (unsigned long) context->uc_mcontext->__ss.__lr,
+            (unsigned long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long) context->uc_mcontext->__ss.__x[16],
+            (unsigned long) context->uc_mcontext->__ss.__sp);
+        write(2, ob, on);
+#endif
+        _exit(1);   /* outside Pop */
+    }
 
 #if defined(i386)||defined(__x86_64__)
     if (sig == SIGFPE) {
@@ -2169,6 +2205,14 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
         write(2, b, n);
         return;
     }
+    /* TEMP EXPERIMENT (staleness bisect): on top of the targeted flush
+       below, always invalidate the WHOLE committed heap via the execution
+       view (uniformly mapped RX, so this cannot fault).  If GC-enabled
+       image builds go green with this, some targeted flush misses
+       coverage. */
+    if (break_base != (char *) 0 && view_base != (char *) 0
+        && current_break > break_base)
+        sys_icache_invalidate(view_base, (size_t) (current_break - break_base));
     while (ptr < end) {
         mach_vm_address_t addr = (mach_vm_address_t) ptr;
         mach_vm_size_t size = 0;
