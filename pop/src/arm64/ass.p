@@ -474,10 +474,20 @@ enddefine;
 ;;;     and the LDR (literal) instruction has a +/-1MB range (19-bit signed
 ;;;     offset * 4).  We dump when we get close to the limit.
 
+#_IF DEF DARWIN
+lvars _pool_diag = false;       ;;; TEMP: per-procedure pool tracing (big procs)
+#_ENDIF
+
 define lconstant dump_literals();
     if _asm_pass then
         conspair(_pint(_asm_code_offset), literal_pools)
             -> literal_pools;
+#_IF DEF DARWIN
+        if _pool_diag then
+            _extern printf('[pd] pass0 record dump at %lx (lits %lx)\n',
+                           _asm_code_offset, _lit_count) -> ;
+        endif;
+#_ENDIF
     endif;
     lvars _n = _0;
     while _n _lt _lit_count do
@@ -498,6 +508,10 @@ define lconstant dump_literals();
         if _current_literal_pool /== _asm_code_offset then
             _extern printf('[pool-diverge] recorded=%lx actual=%lx\n',
                             _current_literal_pool, _asm_code_offset) -> ;
+        endif;
+        if _pool_diag then
+            _extern printf('[pd] pass2 dump at %lx, next pool rec %lx (lits %lx)\n',
+                           _asm_code_offset, _current_literal_pool, _lit_count) -> ;
         endif;
 #_ENDIF
     endif;
@@ -2127,6 +2141,13 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     _0 ->>  _pdr_offset -> _strsize;
     Code_pass(0, codelist) -> _code_offset;
     @@(w)[_int(listlength(asm_struct_list))] -> _strsize;
+#_IF DEF DARWIN
+    (_code_offset _gr _16:1800) -> _pool_diag;   ;;; TEMP: trace big procs only
+    if _pool_diag then
+        _extern printf('[pd] === proc pass0a end=%lx pools=%lx\n',
+                       _code_offset, _int(listlength(literal_pools))) -> ;
+    endif;
+#_ENDIF
 
 #_IF DEF DARWIN
     ;;; Pass 0b -- re-measure with the REAL _pdr_offset and _strsize.
@@ -2148,6 +2169,10 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     _0 -> _current_literal_zone;
     _16:80000 -> _current_literal_pool;
     Code_pass(0, codelist) -> _code_offset;
+    if _pool_diag then
+        _extern printf('[pd] === pass0b end=%lx pools=%lx trailing_lits=%lx\n',
+                       _code_offset, _int(listlength(literal_pools)), _lit_count) -> ;
+    endif;
 #_ENDIF
 
     ;;; Now calculate total size of procedure and allocate store for it.
@@ -2174,6 +2199,11 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     if _code_offset /== _asm_code_offset then
         _extern printf('[ass-diverge] measured=%lx planted=%lx\n',
                         _code_offset, _asm_code_offset) -> ;
+    endif;
+    if _pool_diag then
+        _extern printf('[pd] === pass2 end=%lx leftover_pools=%lx lits=%lx\n',
+                       _asm_code_offset, _int(listlength(literal_pools)),
+                       _lit_count) -> ;
     endif;
 #_ENDIF
     _asm_drop_ptr _sub _buff -> _cnt;

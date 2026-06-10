@@ -68,6 +68,10 @@ static void disable_aslr_reexec(char **argv) {
 }
 
 int main(int argc, char **argv, char **envp) {
+    /* C-side diagnostics (printf via the pop_w_printf wrapper) must not be
+       lost when Pop exits abnormally: unbuffer stdout. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     disable_aslr_reexec(argv);
 
     unsigned long segsize;

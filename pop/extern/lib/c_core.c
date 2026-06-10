@@ -639,6 +639,23 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     if ((sig == SIGBUS || sig == SIGSEGV) && info != NULL && context != NULL
         && _pop_wx_fixup(info, context))
         return;
+    /* TEMP DIAGNOSTIC: SIGBUS with PC in the shared cache (libc) -- e.g.
+       IC IVAU faulting inside sys_icache_invalidate: show the failing
+       address and the call chain registers. */
+    if (sig == SIGBUS && context != NULL
+        && context->uc_mcontext->__ss.__pc > 0x180000000UL
+        && context->uc_mcontext->__ss.__pc < 0x300000000UL) {
+        char b2[220];
+        int n2 = snprintf(b2, sizeof b2,
+            "[busc] pc=%llx addr=%lx lr=%llx x0=%llx x1=%llx x9=%llx\n",
+            (unsigned long long) context->uc_mcontext->__ss.__pc,
+            (unsigned long) (info ? (unsigned long) info->si_addr : 0),
+            (unsigned long long) context->uc_mcontext->__ss.__lr,
+            (unsigned long long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long long) context->uc_mcontext->__ss.__x[1],
+            (unsigned long long) context->uc_mcontext->__ss.__x[9]);
+        write(2, b2, n2);
+    }
     /* TEMP DIAGNOSTIC: dump the jump source on illegal-instruction faults */
     if (sig == SIGILL && context != NULL) {
         char b[200];
@@ -664,6 +681,18 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
                     "[lit] insn=%08x addr=%lx slots[-2..3]= %lx %lx | %lx | %lx %lx %lx\n",
                     insn, lit, L[-2], L[-1], L[0], L[1], L[2], L[3]);
                 write(2, b, m);
+                {   /* canonical vs view coherence check */
+                    unsigned long V = (unsigned long) 1 << 36;
+                    unsigned int ic = *(unsigned int *) ldr_pc;
+                    unsigned int iv = *(unsigned int *) (ldr_pc + V);
+                    unsigned long sc = *(unsigned long *) lit;
+                    unsigned long sv = *(unsigned long *) (lit + V);
+                    m = snprintf(b, sizeof b,
+                        "[alias] insn canon=%08x view=%08x %s | slot canon=%lx view=%lx %s\n",
+                        ic, iv, ic == iv ? "SAME" : "DIFFER!",
+                        sc, sv, sc == sv ? "SAME" : "DIFFER!");
+                    write(2, b, m);
+                }
                 {   /* owning procedure extent: PB=x20, PD_LENGTH 32-bit @+16 */
                     unsigned long pb = context->uc_mcontext->__ss.__x[20];
                     unsigned int plen = *(unsigned int *) (pb + 16);
@@ -2118,6 +2147,28 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
        Poplog PROT_NONEs guard regions inside the break, and the break
        reserve beyond the committed top is PROT_NONE too. */
     char *end = ptr + nbytes;
+
+    /* TEMP: trace flushes near the known crash victim page */
+    if ((unsigned long) ptr >= 0x8000020000UL && (unsigned long) ptr < 0x8000028000UL) {
+        char tb[120];
+        int tn = snprintf(tb, sizeof tb, "[flush] ptr=%lx n=%lx\n",
+                          (unsigned long) ptr, nbytes);
+        write(2, tb, tn);
+    }
+    /* TEMP DEFENSIVE + DIAGNOSTIC: some caller passes a wild range (seen:
+       start=0x180000000 len=1.8GB -- the dyld shared cache; and the
+       original prolog.psv restore fault). Log and skip instead of letting
+       IC IVAU fault; the logged values identify the corrupt PD fields. */
+    if (nbytes > (64UL << 20) || ((unsigned long) ptr >> 32) == 0
+        || ((unsigned long) ptr < 0x8000000000UL
+            && (unsigned long) ptr > 0x200000000UL)) {
+        char b[160];
+        int n = snprintf(b, sizeof b,
+            "[flush-wild] ptr=%lx nbytes=%lx (skipped)\n",
+            (unsigned long) ptr, nbytes);
+        write(2, b, n);
+        return;
+    }
     while (ptr < end) {
         mach_vm_address_t addr = (mach_vm_address_t) ptr;
         mach_vm_size_t size = 0;
@@ -2133,8 +2184,16 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
             char *rs = (char *) addr > ptr ? (char *) addr : ptr;
             char *re = (char *) (addr + size);
             if (re > end) re = end;
-            if ((info.protection & VM_PROT_READ) && rs < re)
+            if ((info.protection & VM_PROT_READ) && rs < re) {
                 sys_icache_invalidate(rs, (size_t) (re - rs));
+                /* TEMP EXPERIMENT: also invalidate via the execution-view
+                   alias -- if lines cached under the view VA are not
+                   covered by canonical-VA maintenance, this is the fix. */
+                if ((unsigned long) rs >= 0x8000000000UL
+                    && (unsigned long) rs < 0x9000000000UL)
+                    sys_icache_invalidate(rs + ((unsigned long) 1 << 36),
+                                          (size_t) (re - rs));
+            }
             ptr = re;
         }
     }
