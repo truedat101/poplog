@@ -23,6 +23,8 @@ exload popgfx []
         pop_gfx_frame_end(),
         pop_gfx_poll(),
         pop_gfx_clear(),
+        pop_gfx_mark()                              :int,
+        pop_gfx_rewind(m),
         pop_gfx_rgba(r, g, b, a)                    :uint,
         pop_gfx_draw_point(x, y, c),
         pop_gfx_draw_line(x0, y0, x1, y1, c, t),
@@ -81,6 +83,14 @@ enddefine;
 define gfx_mouse() /* -> (x, y) */;
     exacc pop_gfx_mouse_x(), exacc pop_gfx_mouse_y()
 enddefine;
+
+define gfx_mouse_down(b);
+    exacc pop_gfx_mouse_down(b) /== 0
+enddefine;
+
+;;; canvas mark/rewind: undo drawing added since the mark
+define gfx_mark();        exacc pop_gfx_mark()    enddefine;
+define gfx_rewind(m);     exacc pop_gfx_rewind(m) enddefine;
 
 ;;; one frame: pump + draw; false once the window has been closed
 define gfx_step();

@@ -1,0 +1,118 @@
+HELP RC_GRAPHIC                        Apple M-silicon Poplog, Jun 2026
+                            (original by Aaron Sloman, see C.x version)
+
+Relative coordinate graphics: turtle drawing in a movable, scalable
+user coordinate frame.
+
+    uses rc_graphic
+    rc_start();
+
+This is the classic Poplog teaching graphics library.  On no-X builds
+(macOS native) it is implemented over LIB * POPGFX; the interface below
+matches the original X version, so programs written against either
+should run on both.  See TEACH * RC_GRAPHIC for a gentle introduction.
+
+After rc_start() the window is open with the ORIGIN AT THE CENTRE,
+x increasing rightward and y increasing UPWARD, and the turtle at the
+origin facing right (heading 0).
+
+
+-- Starting and clearing ----------------------------------------------
+
+rc_start()
+    Open the window if necessary (rc_window_xsize by rc_window_ysize,
+    default 500x500), otherwise clear it; reset the turtle to the
+    origin, heading 0.
+
+rc_clear_window()
+    Clear the drawing, leaving turtle state and frame alone.
+
+rc_new_window(WIDTH, HEIGHT, XLOC, YLOC, SETFRAME)
+    Open a fresh window of the given size.  XLOC/YLOC (screen
+    position) are accepted for compatibility but not used by the
+    native backend.  If SETFRAME is true, reset the coordinate frame
+    (origin centre, y up) and the turtle.
+
+rc_finish()
+    Close the window.  (Native-only addition.)
+
+
+-- The turtle ---------------------------------------------------------
+
+rc_jumpto(X, Y)            move without drawing (also takes a point)
+rc_jumpby(DX, DY)          relative move without drawing
+rc_jump(D)                 move D units along the current heading
+rc_drawto(X, Y)            draw a line to (X, Y) and move there
+rc_drawby(DX, DY)          relative draw
+rc_draw(D)                 draw D units along the current heading
+rc_turn(DEGREES)           rotate the heading (counter-clockwise when
+                           rc_yscale is negative, i.e. by default)
+rc_turnto(X, Y)            face towards a position
+rc_xposition rc_yposition  the turtle position (user coordinates)
+rc_heading                 the heading in degrees, 0 = rightward
+
+rc_thispoint() -> POINT    rc_conspoint(rc_xposition, rc_yposition)
+rc_save_state() -> V       save position/heading/frame in a vector
+rc_restore_state(V)        restore them
+
+
+-- Drawing without the turtle -----------------------------------------
+
+rc_drawline(X1, Y1, X2, Y2)
+    Draw a line, clipped against rc_xmin/rc_ymin/rc_xmax/rc_ymax
+    (window coordinates) when rc_clipping is true (the default).
+
+rc_drawpoint(X, Y),  rc_point_here()
+rc_draw_rectangle(WIDTH, HEIGHT)
+    Axis-aligned rectangle with top-left at the turtle position.
+rc_draw_oblong(WIDTH, HEIGHT, RADIUS)
+    Rectangle with rounded corners.
+rc_draw_arc(X, Y, WIDTH, HEIGHT, ANGLE1, ANGLEINC)
+    Elliptical arc in the bounding box with top-left (X, Y); angles
+    in 64ths of a degree counter-clockwise from three o'clock (the
+    X11 convention).  Drawn as a polyline on this backend.
+rc_arc_around(RADIUS, DEGREES)
+    Circular arc starting at the turtle position, curving left for
+    positive DEGREES; updates position and heading.  A full circle:
+    rc_arc_around(R, 360).
+rc_print_at(X, Y, STRING),  rc_print_here(STRING)
+
+
+-- The coordinate frame -----------------------------------------------
+
+rc_xorigin rc_yorigin rc_xscale rc_yscale
+    The user-to-window transform: WX = X*rc_xscale + rc_xorigin etc.
+    Defaults after rc_start: origin at the window centre, rc_xscale 1,
+    rc_yscale -1 (y up).
+
+rc_set_coordinates(XORIGIN, YORIGIN, XSCALE, YSCALE)
+rc_shift_frame_by(X, Y)
+rc_stretch_frame_by(SCALE)
+rc_transxyout(X, Y) -> (WX, WY)    user -> window (user redefinable)
+rc_transxyin(WX, WY) -> (X, Y)     window -> user
+
+
+-- Native backend notes -----------------------------------------------
+
+rc_window
+    True while the window is open (the X version stores a widget).
+
+rc_linewidth
+    Works (active variable, pixels).  rc_linestyle and
+    rc_linefunction are accepted but ignored: there are no GC
+    rasterops on this backend (LIB * RC_MOUSE rubber-bands with the
+    canvas mark/rewind facility instead of GXxor).
+
+rc_gfx_foreground
+    Native-only extension: the pop_gfx rgba colour used for all
+    drawing, default white.  E.g.
+        gfx_rgb(255, 120, 80) -> rc_gfx_foreground;
+
+rc_pump(HSECS)
+    Native-only: keep the window responsive for about HSECS
+    hundredths of a second after drawing has finished.
+
+
+-- See also -----------------------------------------------------------
+
+TEACH * RC_GRAPHIC, HELP * POPGFX, LIB * RC_MOUSE

@@ -198,6 +198,15 @@ void pop_gfx_shutdown(void)
 /* --- retained canvas drawing ------------------------------------------ */
 void pop_gfx_clear(void) { g_canvas.clear(); }
 
+/* mark/rewind: undo canvas additions (e.g. rubber-band lines) by
+   truncating the display list back to an earlier length */
+int  pop_gfx_mark(void) { return (int) g_canvas.size(); }
+void pop_gfx_rewind(int mark)
+{
+    if (mark >= 0 && (size_t) mark <= g_canvas.size())
+        g_canvas.resize((size_t) mark);
+}
+
 uint32_t pop_gfx_rgba(int r, int g, int b, int a) { return IM_COL32(r, g, b, a); }
 
 static void push(GfxKind k, float a, float b, float c, float d, float e, float f,

@@ -1,0 +1,84 @@
+HELP POPGFX                            Apple M-silicon Poplog, Jun 2026
+
+Native graphics for Poplog on macOS (Dear ImGui + Metal).
+
+    uses popgfx
+
+LIB * POPGFX is the Pop-11 binding for the experimental native graphics
+backend, available when Poplog is built with
+
+    ./configure --with_no_x --experimental-gfx && make all
+
+The C surface (pop_gfx_*, pop/extern/lib/imgui_backend.h) is linked
+into the Poplog executable; the binding resolves the symbols from the
+running image, so no external library is loaded.
+
+The backend keeps a RETAINED CANVAS: drawing calls append to a display
+list which is replayed every frame, so (as with Xpw) what you draw
+persists until cleared.  The window is rendered and its events pumped
+by gfx_step; call it (or gfx_run/rc_pump) regularly to keep the window
+responsive.  LIB * RC_GRAPHIC pumps a frame after every primitive, so
+ordinary turtle programs need no explicit pumping while they draw.
+
+
+-- The window ---------------------------------------------------------
+
+gfx_init(TITLE, WIDTH, HEIGHT) -> BOOL
+    Open the window.  Returns false if the window system is not
+    available (e.g. no GUI session).
+
+gfx_shutdown()
+    Close the window and release the backend.
+
+gfx_step() -> BOOL
+    Render one frame and pump pending OS events.  Returns false once
+    the user has closed the window.
+
+gfx_run(N)
+    Call gfx_step up to N times, sleeping ~2 centiseconds between
+    frames; stops early if the window is closed.
+
+gfx_clear()
+    Wipe the canvas (cf. XpwClearWindow).
+
+
+-- Drawing (window coordinates, y down from top-left) -----------------
+
+gfx_rgb(R, G, B) -> RGBA
+    Pack a colour (0-255 components, alpha 255).  All drawing
+    procedures take such a colour.
+
+gfx_point(X, Y, C)
+gfx_line(X0, Y0, X1, Y1, C, THICKNESS)
+gfx_rect(X0, Y0, X1, Y1, C, THICKNESS)
+gfx_fill_rect(X0, Y0, X1, Y1, C)
+gfx_circle(CX, CY, R, C, THICKNESS)
+gfx_fill_circle(CX, CY, R, C)
+gfx_text(X, Y, C, STRING)
+    Append a primitive to the canvas.  Coordinates may be any numbers;
+    they are passed to C as single floats.
+
+gfx_mark() -> MARK
+gfx_rewind(MARK)
+    Undo facility: gfx_mark returns the current canvas length, and
+    gfx_rewind truncates the canvas back to a previously returned
+    mark, removing everything drawn since.  Used by LIB * RC_MOUSE
+    for rubber-banding.
+
+
+-- Mouse --------------------------------------------------------------
+
+gfx_mouse() -> (X, Y)
+    Current mouse position in window coordinates.
+
+gfx_mouse_down(B) -> BOOL
+    Whether button B is pressed: 0 left, 1 right, 2 middle.
+    (Note: LIB * RC_MOUSE presents X-style numbering instead --
+    1 left, 2 middle, 3 right.)
+
+
+-- See also -----------------------------------------------------------
+
+HELP * RC_GRAPHIC   - the classic turtle graphics library on this backend
+TEACH * RC_GRAPHIC  - introductory walkthrough
+LIB * RC_MOUSE      - mouse tracking and rubber-band drawing
