@@ -1728,14 +1728,21 @@ define M_CREATE_SF();
         ix + 1 -> ix;
     endfast_for;
 
-    ;;; Store the dynamic-local save values into their slots (list order:
-    ;;; non-pop dlocals first, then pop, as the shared GC offsets assume).
-    ;;; Dlocal region starts at SF_LOCALS + Nstkvars.
-    SFL + Nstkvars -> ix;
+    ;;; Store the dynamic-local save values into their slots.  m_trans
+    ;;; lists POP dlocals FIRST and the canonical frame layout puts pop
+    ;;; dlocals at the TOP of the dlocal region (directly below the pop
+    ;;; register saves): PD_GC_OFFSET_LEN/PD_GC_SCAN_LEN and the runtime
+    ;;; Dlocal_frame_offset all map list index k to slot (Ndlocals-1-k).
+    ;;; So assign slots DESCENDING from the top of the dlocal region.
+    ;;; (Ascending assignment put the pop dlocals where the GC expects
+    ;;; the non-pop ones: the GC then never relocated saved pop values
+    ;;; -- stale cucharout etc. after any GC -- and Copyscan'd the
+    ;;; non-pop saves as if they were pop pointers.)
+    SFL + Nstkvars + Ndlocals - 1 -> ix;
     fast_for n in dlocal_labs do
         lvars dv = load_to_reg(n, R1);
         asm_emit("str", dv, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
-        ix + 1 -> ix;
+        ix - 1 -> ix;
     endfast_for;
 
     ;;; Clear the POP register-locals (the registers themselves) to popint 0 --
@@ -1799,11 +1806,12 @@ define M_UNWIND_SF();
     ;;; (e.g. pop_expr_prec) across a returning call.  It MUST run before PB is
     ;;; restored to the caller below, since a dlocal operand may be addressed
     ;;; PB-relative (literal pool of THIS procedure).
-    SFL + sf_Nstkvars -> ix;
+    ;;; (slots assigned DESCENDING -- see M_CREATE_SF)
+    SFL + sf_Nstkvars + sf_Ndlocals - 1 -> ix;
     fast_for n in sf_dlocal_labs do
         asm_emit("ldr", R1, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
         gen_reg_store(R1, n, R5);
-        ix + 1 -> ix;
+        ix - 1 -> ix;
     endfast_for;
 
     ;;; Restore PB to the caller's owner (its SF_OWNER one frame up, at
