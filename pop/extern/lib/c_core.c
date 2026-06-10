@@ -579,6 +579,7 @@ int set_libc_errno(int x) {
 #endif
 #if defined(__APPLE__)
 #include <sys/ucontext.h>   /* mcontext types only; <ucontext.h> gates on _XOPEN_SOURCE */
+#include <stdio.h>          /* TEMP: snprintf for the SIGILL diagnostic */
 #else
 #include <ucontext.h>
 #endif
@@ -637,6 +638,44 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     if ((sig == SIGBUS || sig == SIGSEGV) && info != NULL && context != NULL
         && _pop_wx_fixup(info, context))
         return;
+    /* TEMP DIAGNOSTIC: dump the jump source on illegal-instruction faults */
+    if (sig == SIGILL && context != NULL) {
+        char b[200];
+        int n = snprintf(b, sizeof b,
+            "[sigill] pc=%llx lr=%llx x0=%llx x16=%llx x20=%llx sp=%llx\n",
+            (unsigned long long) context->uc_mcontext->__ss.__pc,
+            (unsigned long long) context->uc_mcontext->__ss.__lr,
+            (unsigned long long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long long) context->uc_mcontext->__ss.__x[16],
+            (unsigned long long) context->uc_mcontext->__ss.__x[20],
+            (unsigned long long) context->uc_mcontext->__ss.__sp);
+        write(2, b, n);
+        {   /* decode the ldr-literal at lr-8 and dump the pool neighborhood */
+            unsigned long lr = context->uc_mcontext->__ss.__lr;
+            if (lr > ((unsigned long) 1 << 36)) {
+                unsigned long ldr_pc = lr - ((unsigned long) 1 << 36) - 8;
+                unsigned int insn = *(unsigned int *) ldr_pc;
+                long imm19 = (insn >> 5) & 0x7FFFF;
+                if (imm19 & 0x40000) imm19 -= 0x80000;   /* sign-extend */
+                unsigned long lit = ldr_pc + (imm19 << 2);
+                unsigned long *L = (unsigned long *) lit;
+                int m = snprintf(b, sizeof b,
+                    "[lit] insn=%08x addr=%lx slots[-2..3]= %lx %lx | %lx | %lx %lx %lx\n",
+                    insn, lit, L[-2], L[-1], L[0], L[1], L[2], L[3]);
+                write(2, b, m);
+                {   /* owning procedure extent: PB=x20, PD_LENGTH 32-bit @+16 */
+                    unsigned long pb = context->uc_mcontext->__ss.__x[20];
+                    unsigned int plen = *(unsigned int *) (pb + 16);
+                    unsigned long pend = pb + (unsigned long) plen * 8;
+                    m = snprintf(b, sizeof b,
+                        "[proc] pb=%lx len=%u(words) end=%lx target_%s ldr_at=%lx\n",
+                        pb, plen, pend, lit < pend ? "INSIDE" : "OUTSIDE",
+                        ldr_pc);
+                    write(2, b, m);
+                }
+            }
+        }
+    }
 #endif
 
     if (__pop_in_user_extern == -1) _exit(1);   /* outside Pop */
