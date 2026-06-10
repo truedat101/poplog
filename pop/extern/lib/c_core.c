@@ -1931,6 +1931,40 @@ int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
     return 1;
 }
 
+/* Instruction-cache flush for Poplog's CACHEFLUSH (sysdefs_darwin.p).
+ * IC IVAU faults on untranslatable pages, and Poplog flushes ranges that can
+ * cross uncommitted (PROT_NONE) parts of the break reserve -- observed: image
+ * restore faulting in sys_icache_invalidate at break_base+0x110000.  Clamp
+ * heap flushes to the committed break; invalidation is by physical line on
+ * Apple Silicon (verified), so flushing the canonical alias covers the
+ * execution view too. */
+void _pop_cache_flush(char *ptr, unsigned long nbytes) {
+    /* Walk the range region-by-region and flush only READABLE memory --
+       Poplog PROT_NONEs guard regions inside the break, and the break
+       reserve beyond the committed top is PROT_NONE too. */
+    char *end = ptr + nbytes;
+    while (ptr < end) {
+        mach_vm_address_t addr = (mach_vm_address_t) ptr;
+        mach_vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t objname;
+        if (mach_vm_region(mach_task_self(), &addr, &size,
+                           VM_REGION_BASIC_INFO_64, (vm_region_info_t) &info,
+                           &cnt, &objname) != KERN_SUCCESS)
+            break;
+        if ((char *) addr >= end) break;
+        {
+            char *rs = (char *) addr > ptr ? (char *) addr : ptr;
+            char *re = (char *) (addr + size);
+            if (re > end) re = end;
+            if ((info.protection & VM_PROT_READ) && rs < re)
+                sys_icache_invalidate(rs, (size_t) (re - rs));
+            ptr = re;
+        }
+    }
+}
+
 /* Make a heap buffer writable before a SYSCALL writes into it: the kernel
  * does not take the user fault-and-retry path -- read(2) into a page the
  * lazy W^X flipped to RX just fails with EFAULT ("ERROR READING DEVICE

@@ -117,12 +117,13 @@ global constant macro (
             endif
         endprocedure],
 
-    ;;; Flush the instruction cache.  __clear_cache is a compiler builtin and
-    ;;; works on Darwin; sys_icache_invalidate() is the native alternative.
+    ;;; Flush the instruction cache via the clamped C helper (c_core.c):
+    ;;; IC IVAU faults on uncommitted (PROT_NONE) reserve pages, and Poplog
+    ;;; flush ranges can cross them (e.g. during image restore).
     CACHEFLUSH = [
         procedure(_ptr, _nbytes);
             lvars _ptr, _nbytes;
-            _extern __clear_cache(_ptr, _ptr _add _nbytes) -> ;
+            _extern _pop_cache_flush(_ptr, _nbytes) -> ;
         endprocedure
     ],
 
