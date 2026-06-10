@@ -246,6 +246,13 @@ do_args:
 ;;; We must preserve argument registers x0-x7.
 
 DEF_C_LAB(Sys$- _exfunc_clos_action)
+#_IF DEF DARWIN
+    ;;; x16 = the exfunc-closure record address, computed PC-relatively
+    ;;; (adr) by the closure's copied template code: executed from the RX
+    ;;; view it is record+2**36, so canonicalise before using it as a
+    ;;; data pointer.
+    and x16, x16, #0xffffffefffffffff
+#_ENDIF
     ;;; Save argument registers we need to use as scratch
     stp x0, x1, [SP, #-16]!
 

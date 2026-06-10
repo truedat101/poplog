@@ -72,11 +72,15 @@ store_int(arg_state * as, void * sp, reg_buff * rp, uint64_t val) {
 #define ET_DDEC 2
 
 /* Must agree with offset in syscomp/symdefs.p
- * On 64-bit: key is at word offset -1 from the record start,
- * K_EXTERN_TYPE offset within the key structure.
- * This is 12 fields * 8 bytes + 2 = 98 on 64-bit.
+ * On 64-bit the key pointer points at K_FLAGS; K_EXTERN_TYPE is at
+ *   2 ints (K_FLAGS, K_GC_TYPE)            =  8 bytes
+ * + 10 fulls (K_GET_SIZE .. K_HASH)        = 80 bytes
+ * + 2 bytes (K_NUMBER_TYPE, K_PLOG_TYPE)   =  2 bytes  -> 90.
+ * (The old value 98 mis-counted the two ints as fulls: it read a byte
+ * of K_CONS_R instead, so every compound arg looked "dereference" --
+ * exfunc closures were passed by content and ET_DDEC never matched.)
  */
-#define ET_OFF (8*12+2)
+#define ET_OFF 90
 
 void
 copy_external_arguments(int n, uint64_t * ap, void * sp, reg_buff * rp,

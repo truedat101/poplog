@@ -135,6 +135,13 @@ enddefine;
 define Shlib_findsym(handles, try_previous_p, symbol, value) -> success;
     lvars handles, try_previous_p, symbol, value, msg, success = false;
     lconstant hvec = writeable initv(1);
+#_IF DEF DARWIN
+    ;;; Mach-O symbol names carry a leading underscore (extern_name_translate)
+    ;;; but dlsym() takes the plain C name
+    if datalength(symbol) fi_> 0 and fast_subscrs(1, symbol) == `_` then
+        allbutfirst(1, symbol) -> symbol
+    endif;
+#_ENDIF
     unless isvector(handles) then
         handles -> fast_subscrv(1, hvec);
         hvec -> handles
