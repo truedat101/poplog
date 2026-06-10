@@ -2205,14 +2205,6 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
         write(2, b, n);
         return;
     }
-    /* TEMP EXPERIMENT (staleness bisect): on top of the targeted flush
-       below, always invalidate the WHOLE committed heap via the execution
-       view (uniformly mapped RX, so this cannot fault).  If GC-enabled
-       image builds go green with this, some targeted flush misses
-       coverage. */
-    if (break_base != (char *) 0 && view_base != (char *) 0
-        && current_break > break_base)
-        sys_icache_invalidate(view_base, (size_t) (current_break - break_base));
     while (ptr < end) {
         mach_vm_address_t addr = (mach_vm_address_t) ptr;
         mach_vm_size_t size = 0;
@@ -2230,9 +2222,10 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
             if (re > end) re = end;
             if ((info.protection & VM_PROT_READ) && rs < re) {
                 sys_icache_invalidate(rs, (size_t) (re - rs));
-                /* TEMP EXPERIMENT: also invalidate via the execution-view
-                   alias -- if lines cached under the view VA are not
-                   covered by canonical-VA maintenance, this is the fix. */
+                /* also invalidate via the execution-view alias: code
+                   executes at canonical+2**36, so keep both VAs clean
+                   (cheap belt-and-braces; icache maintenance by either
+                   alias has been observed sufficient on M-series). */
                 if ((unsigned long) rs >= 0x8000000000UL
                     && (unsigned long) rs < 0x9000000000UL)
                     sys_icache_invalidate(rs + ((unsigned long) 1 << 36),

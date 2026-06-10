@@ -13,9 +13,6 @@
 #   * no `timeout` -- perl alarm shim
 #   * BSD stat/script syntax
 #   * the engine is corepop (not basepop11): no VED/X, console core only
-#   * image builds preload popminmemlim=100M ("bigmem") -- the bring-up
-#     workaround for the open GC-under-compile-load corruption; remove once
-#     the GC bug is fixed.
 
 set -u
 
@@ -38,8 +35,10 @@ cd "$BUILD" || { echo "cannot cd to $BUILD"; exit 2; }
 [ -x corepop ] || { echo "FATAL: $BUILD/corepop missing."; exit 2; }
 [ -x poplog ]  || { echo "FATAL: $BUILD/poplog wrapper missing."; exit 2; }
 mkdir -p psv
-BIGMEM=/tmp/validate_bigmem.p
-echo "100000000 -> popminmemlim;" > "$BIGMEM"
+# ("bigmem" popminmemlim preload removed: the GC-under-compile-load
+# corruption was the arm64 dlocal save-slot inversion, fixed in genproc)
+BIGMEM=/tmp/validate_noop.p
+: > "$BIGMEM"
 
 tmo() { perl -e 'alarm shift; exec @ARGV' "$@"; }   # macOS has no timeout(1)
 POP=(./poplog ./corepop)
