@@ -26,7 +26,7 @@ lconstant macro (
     AS_CMD  = '/usr/ccs/bin/as',
     AR_CMD  = '/usr/ccs/bin/ar',
 );
-#_ELSEIF DEF LINUX or DEF FREEBSD or DEF NETBSD
+#_ELSEIF DEF LINUX or DEF FREEBSD or DEF NETBSD or DEF DARWIN
 lconstant macro (
     ;;; AS_CMD  = '/sklad/kompi/poplog/pp4/asm',
     AS_CMD  = '/usr/bin/as',

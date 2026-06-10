@@ -1983,6 +1983,29 @@ static char *break_limit   = (char *) 0;    /* end of the reserved range   */
 static char *current_break = (char *) 0;    /* committed top == the break  */
 static char *view_base     = (char *) 0;    /* RX alias of the reserve     */
 
+#include <pthread.h>
+
+/* (re)create the RX execution view of the break reserve at +POP_VIEW_OFFSET */
+static int pop_make_view(mach_vm_address_t canon) {
+    mach_vm_address_t view = canon + POP_VIEW_OFFSET;
+    vm_prot_t cur, max;
+    if (mach_vm_remap(mach_task_self(), &view, POP_BREAK_RESERVE, 0,
+                      VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(),
+                      canon, FALSE, &cur, &max,
+                      VM_INHERIT_NONE) == KERN_SUCCESS
+        && mprotect((void *) view, POP_BREAK_RESERVE,
+                    PROT_READ | PROT_EXEC) == 0) {
+        view_base = (char *) view;
+        return 0;
+    }
+    return -1;
+}
+
+static void pop_refresh_view_in_child(void) {
+    if (break_base != (char *) 0)
+        (void) pop_make_view((mach_vm_address_t) break_base);
+}
+
 static int pop_break_init(void) {
     mach_vm_address_t addr = POP_BREAK_BASE;
     if (mach_vm_allocate(mach_task_self(), &addr, POP_BREAK_RESERVE,
@@ -2007,18 +2030,15 @@ static int pop_break_init(void) {
     break_limit = break_base + POP_BREAK_RESERVE;
 
     /* the execution view: one shared remap of the whole reserve, RX */
-    {
-        mach_vm_address_t view = addr + POP_VIEW_OFFSET;
-        vm_prot_t cur, max;
-        if (mach_vm_remap(mach_task_self(), &view, POP_BREAK_RESERVE, 0,
-                          VM_FLAGS_FIXED, mach_task_self(), addr,
-                          FALSE, &cur, &max, VM_INHERIT_NONE) == KERN_SUCCESS
-            && mprotect((void *) view, POP_BREAK_RESERVE,
-                        PROT_READ | PROT_EXEC) == 0)
-            view_base = (char *) view;
+    if (pop_make_view((mach_vm_address_t) addr) != 0) {
         /* on failure view_base stays 0 and the handler falls back to
            per-page flipping (slow, and same-page stores will wedge) */
     }
+    /* the remap does not survive fork (and any inheritance mode would
+       let the child's view and its COW canonical diverge): rebuild the
+       child's view over ITS OWN canonical pages after every fork --
+       sysobey/sysexecute run Pop code in the child before exec. */
+    pthread_atfork(NULL, NULL, pop_refresh_view_in_child);
     return 0;
 }
 
