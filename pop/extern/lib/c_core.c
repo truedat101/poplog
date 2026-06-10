@@ -724,6 +724,17 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
                         }
                     }
                     alog_report(pb, pend);
+                    {   /* dump the whole victim [props..end] for offline study */
+                        int fd = open("/tmp/victim.bin", 0x601 /*WRONLY|CREAT|TRUNC*/, 0644);
+                        if (fd >= 0) {
+                            write(fd, (void *) (pb - 16), (size_t) (pend - pb + 16));
+                            close(fd);
+                            m = snprintf(b, sizeof b,
+                                "[dump] /tmp/victim.bin = pb-16..end (%lu bytes), pb=%lx\n",
+                                pend - pb + 16, pb);
+                            write(2, b, m);
+                        }
+                    }
                     {   /* where does the REAL popenter literal sit nearby? */
                         extern char popenter_sym[] __asm__("c__031popenter");
                         unsigned long want = (unsigned long) popenter_sym;
