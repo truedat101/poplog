@@ -54,7 +54,7 @@ global constant
 
 constant
     procedure (
-        initintvec,
+        initlongvec,
     )
 ;
 
@@ -829,7 +829,7 @@ define load_literal(_reg, _val);
         if _lit_count == _0 then
             _asm_code_offset -> _current_literal_zone;
         endif;
-        if _lit_count _lt _512 then
+        if _lit_count _lt _2048 then
             ;;; Compute distance from current instruction to literal in pool.
             ;;; Each literal is 8 bytes. Pool starts at _current_literal_pool.
             lvars _lit_pos = _shift(_lit_count, _3) _add _current_literal_pool,
@@ -2124,7 +2124,7 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     lvars codelist, reg_locals, pdr, _code_offset, _size, _reg_spec;
     lvars reg, _buff, _cnt;
     dlocal _regmask, _asm_drop_ptr, _asm_pass, _strsize, _pdr_offset,
-           lit_buff = initintvec(512), _lit_count = _0,
+           lit_buff = initlongvec(2048), _lit_count = _0,
            _current_literal_zone = _0, _current_literal_pool = _16:80000,
            literal_pools = [];
 
