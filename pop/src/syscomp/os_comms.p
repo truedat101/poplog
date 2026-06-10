@@ -138,6 +138,9 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
         ;;; the Mach-O loader shim is the real main: it remaps __POPSEED
         ;;; RX in place and tail-calls _pop_seed_main (amain.s)
         nl_printf('$popexternlib/pop_seed_loader.o');
+        ;;; optional native graphics objects (empty unless the build
+        ;;; exports them -- see Makefile GFX_CONF=imgui)
+        nl_printf('$POP_GFX_OBJECTS');
 #_ENDIF
                 out_obj_files(wobj_files);
 #_ELSE
@@ -166,6 +169,10 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
     ;;; pop library (must come before link_other since that will contain
     ;;; any X libraries)
     nl_printf('-lpop');
+#_IF DEF DARWIN
+    ;;; frameworks etc. for the optional graphics objects (empty unless set)
+    nl_printf('$POP_GFX_LDFLAGS');
+#_ENDIF
 
     out_obj_files(link_other);
 
