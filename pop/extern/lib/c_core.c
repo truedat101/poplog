@@ -579,7 +579,7 @@ int set_libc_errno(int x) {
 #endif
 #if defined(__APPLE__)
 #include <sys/ucontext.h>   /* mcontext types only; <ucontext.h> gates on _XOPEN_SOURCE */
-#include <stdio.h>          /* TEMP: snprintf for the SIGILL diagnostic */
+#include <stdio.h>          /* snprintf for the signal diagnostics */
 #else
 #include <ucontext.h>
 #endif
@@ -622,7 +622,6 @@ int set_libc_errno(int x) {
 #if defined(__APPLE__)
 /* defined below, next to the break emulation whose bounds it needs */
 extern int _pop_wx_fixup(siginfo_t *info, ucontext_t *context);
-static void alog_report(unsigned long vlo, unsigned long vhi);  /* TEMP */
 #endif
 
 void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
@@ -639,7 +638,7 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     if ((sig == SIGBUS || sig == SIGSEGV) && info != NULL && context != NULL
         && _pop_wx_fixup(info, context))
         return;
-    /* TEMP DIAGNOSTIC: every fatal signal reaching the Pop error machinery,
+    /* diagnostic: every fatal signal reaching the Pop error machinery,
        with the GC-in-progress flag (an exception raised while
        _memory_is_corrupt is set is treated as fatal and can exit(1) without
        managing to print anything -- errors.p Sys$-Raise_exception). */
@@ -659,7 +658,7 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
             i_Sys_S_031memory__is__corrupt[2]);
         write(2, fb, fn);
     }
-    /* TEMP DIAGNOSTIC: SIGBUS with PC in the shared cache (libc) -- e.g.
+    /* diagnostic: SIGBUS with PC in the shared cache (libc) -- e.g.
        IC IVAU faulting inside sys_icache_invalidate: show the failing
        address and the call chain registers. */
     if (sig == SIGBUS && context != NULL
@@ -676,7 +675,7 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
             (unsigned long long) context->uc_mcontext->__ss.__x[9]);
         write(2, b2, n2);
     }
-    /* TEMP DIAGNOSTIC: dump the jump source on illegal-instruction faults */
+    /* diagnostic: register dump on illegal-instruction faults */
     if (sig == SIGILL && context != NULL) {
         char b[200];
         int n = snprintf(b, sizeof b,
@@ -688,130 +687,12 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
             (unsigned long long) context->uc_mcontext->__ss.__x[20],
             (unsigned long long) context->uc_mcontext->__ss.__sp);
         write(2, b, n);
-        {   /* decode the ldr-literal at lr-8 and dump the pool neighborhood */
-            unsigned long lr = context->uc_mcontext->__ss.__lr;
-            if (lr > ((unsigned long) 1 << 36)) {
-                unsigned long ldr_pc = lr - ((unsigned long) 1 << 36) - 8;
-                unsigned int insn = *(unsigned int *) ldr_pc;
-                long imm19 = (insn >> 5) & 0x7FFFF;
-                if (imm19 & 0x40000) imm19 -= 0x80000;   /* sign-extend */
-                unsigned long lit = ldr_pc + (imm19 << 2);
-                unsigned long *L = (unsigned long *) lit;
-                int m = snprintf(b, sizeof b,
-                    "[lit] insn=%08x addr=%lx slots[-2..3]= %lx %lx | %lx | %lx %lx %lx\n",
-                    insn, lit, L[-2], L[-1], L[0], L[1], L[2], L[3]);
-                write(2, b, m);
-                {   /* canonical vs view coherence check */
-                    unsigned long V = (unsigned long) 1 << 36;
-                    unsigned int ic = *(unsigned int *) ldr_pc;
-                    unsigned int iv = *(unsigned int *) (ldr_pc + V);
-                    unsigned long sc = *(unsigned long *) lit;
-                    unsigned long sv = *(unsigned long *) (lit + V);
-                    m = snprintf(b, sizeof b,
-                        "[alias] insn canon=%08x view=%08x %s | slot canon=%lx view=%lx %s\n",
-                        ic, iv, ic == iv ? "SAME" : "DIFFER!",
-                        sc, sv, sc == sv ? "SAME" : "DIFFER!");
-                    write(2, b, m);
-                }
-                {   /* owning procedure extent: PB=x20, PD_LENGTH 32-bit @+16 */
-                    unsigned long pb = context->uc_mcontext->__ss.__x[20];
-                    unsigned int plen = *(unsigned int *) (pb + 16);
-                    unsigned long pend = pb + (unsigned long) plen * 8;
-                    m = snprintf(b, sizeof b,
-                        "[proc] pb=%lx len=%u(words) end=%lx target_%s ldr_at=%lx\n",
-                        pb, plen, pend, lit < pend ? "INSIDE" : "OUTSIDE",
-                        ldr_pc);
-                    write(2, b, m);
-                    {   /* identify victim + callee: raw header words */
-                        unsigned long *P = (unsigned long *) pb;
-                        unsigned long x0v = context->uc_mcontext->__ss.__x[0];
-                        unsigned long *Q = (unsigned long *) x0v;
-                        m = snprintf(b, sizeof b,
-                            "[hdr] pb[-2..3]= %lx %lx | %lx %lx %lx %lx\n",
-                            P[-2], P[-1], P[0], P[1], P[2], P[3]);
-                        write(2, b, m);
-                        m = snprintf(b, sizeof b,
-                            "[x0obj] x0[-2..3]= %lx %lx | %lx %lx %lx %lx\n",
-                            Q[-2], Q[-1], Q[0], Q[1], Q[2], Q[3]);
-                        write(2, b, m);
-                    }
-                    {   /* follow PD_PROPS one level, hunting ASCII (the name) */
-                        unsigned long props = ((unsigned long *) pb)[-2];
-                        if (props > 0x100000000UL) {
-                            unsigned long *W = (unsigned long *) props;
-                            long k;
-                            for (k = -1; k < 6; k++) {
-                                unsigned long v = W[k];
-                                char asc[9]; int j, any = 0;
-                                for (j = 0; j < 8; j++) {
-                                    unsigned char c = (v >> (j*8)) & 0xFF;
-                                    asc[j] = (c >= 32 && c < 127) ? c : '.';
-                                    if (c >= 'a' && c <= 'z') any++;
-                                }
-                                asc[8] = 0;
-                                m = snprintf(b, sizeof b,
-                                    "[props] w[%+ld]=%lx '%s'%s\n", k, v, asc,
-                                    any >= 3 ? "  <-- texty" : "");
-                                write(2, b, m);
-                                /* follow texty-looking pointers one level */
-                                if (v > 0x100000000UL && v < 0x9000000000UL && k >= 0) {
-                                    unsigned long *S = (unsigned long *) v;
-                                    char a2[17]; int t = 0;
-                                    for (j = 0; j < 16; j++) {
-                                        unsigned char c = ((unsigned char *) (S + 1))[j];
-                                        a2[j] = (c >= 32 && c < 127) ? c : '.';
-                                        if (c >= 'a' && c <= 'z') t++;
-                                    }
-                                    a2[16] = 0;
-                                    if (t >= 4) {
-                                        m = snprintf(b, sizeof b,
-                                            "[props]   *w[%+ld]+8 = '%s'\n", k, a2);
-                                        write(2, b, m);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    alog_report(pb, pend);
-                    {   /* dump the whole victim [props..end] for offline study */
-                        int fd = open("/tmp/victim.bin", 0x601 /*WRONLY|CREAT|TRUNC*/, 0644);
-                        if (fd >= 0) {
-                            write(fd, (void *) (pb - 16), (size_t) (pend - pb + 16));
-                            close(fd);
-                            m = snprintf(b, sizeof b,
-                                "[dump] /tmp/victim.bin = pb-16..end (%lu bytes), pb=%lx\n",
-                                pend - pb + 16, pb);
-                            write(2, b, m);
-                        }
-                    }
-                    {   /* where does the REAL popenter literal sit nearby? */
-                        extern char popenter_sym[] __asm__("c__031popenter");
-                        unsigned long want = (unsigned long) popenter_sym;
-                        long k; int found = 0;
-                        unsigned long *base = (unsigned long *) lit;
-                        for (k = -512; k <= 512 && found < 6; k++) {
-                            if (base[k] == want) {
-                                m = snprintf(b, sizeof b,
-                                    "[pool] popenter(%lx) found at slot %+ld (addr %lx)\n",
-                                    want, k, (unsigned long) &base[k]);
-                                write(2, b, m); found++;
-                            }
-                        }
-                        if (!found) {
-                            m = snprintf(b, sizeof b,
-                                "[pool] popenter(%lx) NOT within +/-512 slots of target\n", want);
-                            write(2, b, m);
-                        }
-                    }
-                }
-            }
-        }
     }
 #endif
 
     if (__pop_in_user_extern == -1) {
 #if defined(__APPLE__) && defined(__aarch64__)
-        /* TEMP: never die silently -- dump the fatal-signal context */
+        /* never die silently -- dump the fatal-signal context */
         char ob[200];
         int on = snprintf(ob, sizeof ob,
             "[outside-pop] sig=%d pc=%lx addr=%lx lr=%lx x0=%lx x16=%lx sp=%lx\n",
@@ -2137,59 +2018,6 @@ int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
     return 1;
 }
 
-/* TEMP corruption-hunt: log EVERY allocation (and frontier rewind) so the
- * SIGILL handler can reconstruct, retroactively, which allocations overlap
- * the victim procedure (found from PB at fault time -- addresses move when
- * instrumentation changes code size, so nothing is hardcoded). */
-#include <stdio.h>
-#define ALOG_MAX (16u << 20)               /* 16M events x 16B = 256MB cap */
-#define ALOG_JUNK 0xFFFFFFFFFFFFFFFFUL
-static unsigned long (*alog)[2] = 0;       /* [addr, size-or-JUNK] */
-static unsigned long alog_n = 0;
-
-void _pop_alloc_diag(char *p, unsigned long size_bytes) {
-    if (alog == 0)
-        alog = (void *) mmap(0, (size_t) ALOG_MAX * 16, PROT_READ | PROT_WRITE,
-                             MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (alog != MAP_FAILED && alog_n < ALOG_MAX) {
-        alog[alog_n][0] = (unsigned long) p;
-        alog[alog_n][1] = size_bytes;
-        alog_n++;
-    }
-}
-
-void _pop_junk_diag(char *p) {
-    if (alog && alog != MAP_FAILED && alog_n < ALOG_MAX) {
-        alog[alog_n][0] = (unsigned long) p;
-        alog[alog_n][1] = ALOG_JUNK;
-        alog_n++;
-    }
-}
-
-/* called from the SIGILL diagnostic with the victim's bounds */
-static void alog_report(unsigned long vlo, unsigned long vhi) {
-    unsigned long i, vidx = (unsigned long) -1;
-    char b[200]; int n;
-    for (i = 0; i < alog_n; i++)
-        if (alog[i][1] != ALOG_JUNK && alog[i][0] == vlo) vidx = i;  /* last alloc at vlo */
-    n = snprintf(b, sizeof b, "[alog] %lu events; victim alloc idx=%ld\n",
-                 alog_n, (long) vidx);
-    write(2, b, n);
-    if (vidx == (unsigned long) -1) return;
-    for (i = vidx + 1; i < alog_n; i++) {
-        if (alog[i][1] == ALOG_JUNK) {
-            if (alog[i][0] <= vhi) {
-                n = snprintf(b, sizeof b, "[alog] idx=%lu JUNK rewind to %lx\n",
-                             i, alog[i][0]);
-                write(2, b, n);
-            }
-        } else if (alog[i][0] < vhi && alog[i][0] + alog[i][1] > vlo) {
-            n = snprintf(b, sizeof b, "[alog] idx=%lu OVERLAP p=%lx size=%lu\n",
-                         i, alog[i][0], alog[i][1]);
-            write(2, b, n);
-        }
-    }
-}
 
 /* Instruction-cache flush for Poplog's CACHEFLUSH (sysdefs_darwin.p).
  * IC IVAU faults on untranslatable pages, and Poplog flushes ranges that can
@@ -2204,14 +2032,7 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
        reserve beyond the committed top is PROT_NONE too. */
     char *end = ptr + nbytes;
 
-    /* TEMP: trace flushes near the known crash victim page */
-    if ((unsigned long) ptr >= 0x8000020000UL && (unsigned long) ptr < 0x8000028000UL) {
-        char tb[120];
-        int tn = snprintf(tb, sizeof tb, "[flush] ptr=%lx n=%lx\n",
-                          (unsigned long) ptr, nbytes);
-        write(2, tb, tn);
-    }
-    /* TEMP DEFENSIVE + DIAGNOSTIC: some caller passes a wild range (seen:
+    /* defensive backstop: skip + log wild flush ranges (seen historically:
        start=0x180000000 len=1.8GB -- the dyld shared cache; and the
        original prolog.psv restore fault). Log and skip instead of letting
        IC IVAU fault; the logged values identify the corrupt PD fields. */

@@ -8,6 +8,52 @@
 
 ---
 
+## ✅ STATUS (2026-06-10): PORT COMPLETE — self-hosting, all four languages, VED, callbacks, native graphics
+
+Everything below this section is the original porting plan, kept as the
+design record.  The port has landed on the `12-mac-os-x-m-silicon-port`
+branch; the actual state is:
+
+**Building on a Mac (Apple Silicon) is now the standard flow** — no
+cross-build host involved:
+
+```sh
+./configure --with_no_x                  # add --experimental-gfx for graphics
+make all                                 # popc → src → corepop → basepop11 → images
+./poplog ./target/pop/basepop11          # Pop-11; +target/psv/{clisp,prolog,pml}.psv
+```
+
+The only bootstrap input is a seed `corepop` in `target/pop/` (any prior
+Mac corepop works; generation-2 self-rebuild is verified).  Validation:
+`tools/validate-msilicon.sh` (12-gate, four languages, PTY VED) and
+`tools/validate-gfx.sh` (TEACH RC_GRAPHIC walkthrough) both pass; the
+RPi5 Linux ladder stays 12/12 with all shared-code changes.
+
+**What works:** the full `make all` system (basepop11 + terminal VED +
+startup/clisp/prolog/pml images), saved images, GC fully enabled,
+fork/exec (`sysobey`), dynamic loading (`exload` of `.dylib`s), C→Pop
+callbacks (`exfunc_export`), and native graphics (Dear ImGui + Metal:
+`HELP POPGFX`, `LIB RC_GRAPHIC`/`RC_MOUSE`, `TEACH RC_GRAPHIC`).
+
+**Mainline arm64 bugs found en route** (latent on Linux too; upstream
+candidates): genproc dlocal save-slot order vs the GC scan window (the
+"GC corruption" — every dlocal-saved pop value went unrelocated);
+`ext_arm.c` `ET_OFF` 98→90 (every compound external arg dereferenced;
+ddecimal args broken); `external.ph` `EFC_CODE_SIZE` 16→32 on aarch64
+(exfunc record fields inside the code); `ass.p` `lit_buff`
+element-size overflow at >256 pooled literals; `Flush_procedure` wild
+ranges when `PD_EXECUTE` is outside the record; `pdr_compose` missing
+PB canonicalisation (Darwin-only).
+
+**Darwin mechanisms that make it work** (details in the phases below):
+`__POPSEED` segment + in-place RX remap loader; ASLR-off re-exec;
+fixed break reserve at `0x8000000000` with a dual-mapped RX execution
+view at +2³⁶ (rebuilt in fork children via `pthread_atfork`);
+exec-fault redirect; variadic-ABI wrappers; host-OS sysdefs selection;
+poplink_cmnd with seed-loader object + codesign epilogue.
+
+---
+
 ## 0. Which axis is this? — "Same ISA, new OS"
 
 PORTING-POPLOG.md Part 0 decomposes every port into two largely-independent
