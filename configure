@@ -75,7 +75,18 @@ if [ -z "$HOST_ARCH" ]; then
 fi
 
 
+HOST_OS=`uname -s`
+
 CC_LINK_OPTIONS="-Wl,-export-dynamic"
+if [ "$HOST_OS" = Darwin ]; then
+    # macOS arm64 (Apple M-silicon). PIE is mandatory (-no-pie is ignored on
+    # arm64), ld64 has none of the GNU-ld options probed below, and the
+    # bootstrap flow differs (see PORTING-ARM64-M-SILICON-OSX.md and
+    # tools/build-msilicon.sh): corepop is linked from popc-emitted Mach-O
+    # plus the C runtime, with the Pop seed in a __POPSEED segment remapped
+    # executable at startup.
+    CC_LINK_OPTIONS=""
+fi
 case "$HOST_ARCH" in
   i86pc)
       # Solaris
@@ -87,6 +98,11 @@ case "$HOST_ARCH" in
       POP_arch=i386
         ;;
   aarch64)
+      POP_arch=arm64
+        ;;
+  arm64)
+      # macOS reports arm64 (not aarch64); without this it would fall
+      # through to the 32-bit arm case below.
       POP_arch=arm64
         ;;
   arm*)
@@ -133,6 +149,12 @@ else
 fi
 rm -f conftest.exe
 
+if [ "$HOST_OS" = Darwin ]; then
+    # clang ACCEPTS -no-pie but arm64 ld64 ignores it; the GNU-ld options
+    # below do not exist there. Skip the probes.
+    HAS_NOPIE=no; HAS_AS_NEEDED=no; HAS_HASH_STYLE=no; HASH_STYLE_OPT=""
+    echo "Darwin: skipping GNU-ld option probes (PIE mandatory)"
+else
 echo -n "Testing if compiler recognizes -no-pie"
 NO_PIE_OPT=-no-pie
 comp_cmd="${CC} $NO_PIE_OPT conftest.c -o conftest.exe"
@@ -168,6 +190,7 @@ else
 fi
 rm -f conftest.exe
 echo "   "$HAS_HASH_STYLE
+fi
 
 if [ x"$X_CONF" != "xno" ] ; then
 
