@@ -490,6 +490,15 @@ define lconstant dump_literals();
     else
         _int(front(literal_pools)) -> _current_literal_pool;
         back(literal_pools) -> literal_pools;
+#_IF DEF DARWIN
+        ;;; TEMP DIAGNOSTIC: a mid-code pool must land exactly where pass 0
+        ;;; recorded it, or the LDRs computed against the recorded position
+        ;;; read garbage.
+        if _current_literal_pool /== _asm_code_offset then
+            _extern printf('[pool-diverge] recorded=%lx actual=%lx\n',
+                            _current_literal_pool, _asm_code_offset) -> ;
+        endif;
+#_ENDIF
     endif;
     _0 -> _lit_count;
 enddefine;
@@ -2118,6 +2127,28 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     Code_pass(0, codelist) -> _code_offset;
     @@(w)[_int(listlength(asm_struct_list))] -> _strsize;
 
+#_IF DEF DARWIN
+    ;;; Pass 0b -- re-measure with the REAL _pdr_offset and _strsize.
+    ;;; Instruction SELECTION depends on them: I_CREATE_SF plants one
+    ;;; instruction when (_pdr_offset - 8) fits in a sub immediate (< 4KB)
+    ;;; but two otherwise, and PB-relative displacements pick different
+    ;;; load forms.  The literal-pool positions recorded here for the final
+    ;;; pass must come from an IDENTICAL instruction stream, else every
+    ;;; pooled LDR in the final code mis-addresses by the difference --
+    ;;; observed as the ML-lexer SIGILL (trailing pool landed 4 bytes off
+    ;;; for a procedure with a >4KB structure table).  Latent on ELF too,
+    ;;; but only Darwin's high addresses (heap 2**39, seed 2**32) force
+    ;;; pooled literals everywhere, so it is gated for this port.
+    ;;; _pdr_offset mirrors the (_asm_drop_ptr - pdr) + 8 computed below:
+    ;;; drop_ptr after Get_procedure = pdr@PD_TABLE + _strsize.
+    @@PD_TABLE{_strsize | b} _sub @@POPBASE _add _8 -> _pdr_offset;
+    [] -> literal_pools;
+    _0 -> _lit_count;
+    _0 -> _current_literal_zone;
+    _16:80000 -> _current_literal_pool;
+    Code_pass(0, codelist) -> _code_offset;
+#_ENDIF
+
     ;;; Now calculate total size of procedure and allocate store for it.
     ;;; The procedure record will be returned with the header and structure
     ;;; table already filled in, and with _asm_drop_ptr pointing to the
@@ -2136,6 +2167,14 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     back(literal_pools) -> literal_pools;
     ;;; Final pass -- plants the code
     Code_pass(false, codelist) -> _asm_code_offset;
+#_IF DEF DARWIN
+    ;;; TEMP DIAGNOSTIC: the final stream must match the measured one, or
+    ;;; the recorded literal-pool positions are wrong for every pooled LDR.
+    if _code_offset /== _asm_code_offset then
+        _extern printf('[ass-diverge] measured=%lx planted=%lx\n',
+                        _code_offset, _asm_code_offset) -> ;
+    endif;
+#_ENDIF
     _asm_drop_ptr _sub _buff -> _cnt;
     lvars _n = _0;
     while _n _lt _lit_count do
