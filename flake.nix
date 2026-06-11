@@ -12,7 +12,8 @@
       packages = forAll (pkgs: system: rec {
         poplog = pkgs.callPackage ./nix/poplog.nix {
           inherit self system;
-          sigtool = if pkgs.stdenv.isDarwin then pkgs.sigtool else null;
+          sigtool = if pkgs.stdenv.isDarwin
+                    then (pkgs.darwin.sigtool or null) else null;
         };
         default = poplog;
       });

@@ -11,10 +11,15 @@ nix build .#poplog          # or: nix build path:$PWD#poplog in a non-git tree
 ./result/bin/ved file       # terminal VED
 ```
 
-Supported systems: `x86_64-linux` (tested end-to-end),
+Supported systems: `x86_64-linux` and `aarch64-darwin` (both tested
+end-to-end: all four languages run from the store path), and
 `aarch64-linux` (seed vendored from a validated RPi5 build; flake
-untested -- no Nix host yet), `aarch64-darwin` (experimental:
-codesign/entitlement story under Nix not yet exercised).
+untested -- no aarch64-linux Nix host yet).
+
+macOS note: no entitlements are required -- the W^X machinery uses
+mach_vm_remap + mprotect on anonymous pages, not MAP_JIT, so the
+linker's ad-hoc signature suffices (the link epilogue refreshes it
+when a codesign is available, and tolerates its absence).
 
 ## Bootstrap seeds
 

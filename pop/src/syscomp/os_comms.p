@@ -199,9 +199,12 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
     unless exlink then
         asmf_pr('ST=$?\n');
 #_IF DEF DARWIN
-        ;;; ad-hoc sign with the JIT entitlement (required for the
-        ;;; MAP_JIT/W^X machinery; re-sign replaces the linker's signature)
-        asmf_pr('if [ $ST = 0 ]; then codesign -s - --entitlements "$usepop/tools/corepop-jit.entitlements" -f $IM || ST=$?; fi\n');
+        ;;; refresh the ad-hoc signature (no entitlements needed: the
+        ;;; W^X machinery uses mach_vm_remap + mprotect on anonymous
+        ;;; pages, not MAP_JIT).  Tolerate a missing/limited codesign
+        ;;; (e.g. sigtool shims in hermetic builds): the linker already
+        ;;; ad-hoc signs, so this is belt-and-braces.
+        asmf_pr('if [ $ST = 0 ]; then codesign -s - -f $IM 2>/dev/null || true; fi\n');
 #_ENDIF
 
         if cleanup_command then asmf_printf(cleanup_command, '%p\n') endif;
