@@ -45,6 +45,40 @@ mach_vm_remap + mprotect on anonymous pages, not MAP_JIT, so the
 linker's ad-hoc signature suffices (the link epilogue refreshes it
 when a codesign is available, and tolerates its absence).
 
+## Experimental graphics (Linux)
+
+`packages.<linux>.poplog-gfx` builds basepop11 with the native graphics
+backend (`--experimental-graphics` -> Dear ImGui + SDL3 + OpenGL3).  The
+ImGui source is fetched as a `fetchFromGitHub` FOD; SDL3 (3.2.20) is why
+the flake pins nixpkgs 25.05.
+
+```sh
+nix build .#poplog-gfx          # Linux only (Metal backend on macOS is separate)
+nm result/poplog/target/pop/basepop11 | grep -c pop_gfx   # -> 27
+echo "uses rc_graphic; rc_start();" | result/bin/pop11     # opens a window
+```
+
+The binary links nix's `libSDL3` + `libglvnd`; **SDL3 picks the display
+transport at run time** (Wayland if `WAYLAND_DISPLAY`, else X11, else
+`kmsdrm`) -- there is no hard X11 dependency.
+
+Running it needs a GL driver `libglvnd` can reach:
+
+* **NixOS** -- seamless; the configured GPU driver is wired into the GL
+  stack (`hardware.graphics.enable`).  This is the smooth path.
+* **Non-NixOS (Ubuntu, etc.)** -- the system GPU driver lives outside the
+  nix store, so a nix GL binary needs the driver injected, the usual way
+  being [nixGL](https://github.com/nix-community/nixGL):
+  `nixGL result/bin/pop11 myfile.p`.
+* **Headless / CI** -- software render with Mesa llvmpipe over EGL
+  (`SDL_VIDEO_X11_FORCE_EGL=1 LIBGL_ALWAYS_SOFTWARE=1`), no GPU required.
+
+The SDL3+OpenGL3 backend itself is verified rendering the full Poplog
+surface (lines/rects/circles/arcs/text + ImGui panels) on Linux/X11.
+The `nix build` is verified end-to-end (console smoke passes from the
+store path); driving its GL on a given box is the standard nix-graphics
+deployment story above.
+
 ## Bootstrap seeds
 
 Poplog builds itself with a prior binary `corepop`; per-platform seeds
