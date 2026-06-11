@@ -26,14 +26,19 @@ exload popgfx []
         pop_gfx_mark()                              :int,
         pop_gfx_rewind(m),
         pop_gfx_rgba(r, g, b, a)                    :uint,
-        pop_gfx_draw_point(x, y, c),
-        pop_gfx_draw_line(x0, y0, x1, y1, c, t),
-        pop_gfx_draw_rect(x0, y0, x1, y1, c, t),
-        pop_gfx_fill_rect(x0, y0, x1, y1, c),
-        pop_gfx_draw_circle(cx, cy, r, c, t),
-        pop_gfx_fill_circle(cx, cy, r, c),
-        pop_gfx_draw_arc(cx, cy, r, a0, a1, c, t),
-        pop_gfx_draw_text(x, y, c, s),
+        ;;; The geometry args are C `float` (ANSI prototypes), but Poplog
+        ;;; passes (d)decimals as double by DEFAULT (REF * EXTERNAL 5.2) --
+        ;;; so each float arg needs the <SF> flag to be passed single, or
+        ;;; the callee reads a 32-bit float out of a 64-bit double and the
+        ;;; coordinates come through corrupted.  `c` is the packed RGBA int.
+        pop_gfx_draw_point(x<SF>, y<SF>, c),
+        pop_gfx_draw_line(x0<SF>, y0<SF>, x1<SF>, y1<SF>, c, t<SF>),
+        pop_gfx_draw_rect(x0<SF>, y0<SF>, x1<SF>, y1<SF>, c, t<SF>),
+        pop_gfx_fill_rect(x0<SF>, y0<SF>, x1<SF>, y1<SF>, c),
+        pop_gfx_draw_circle(cx<SF>, cy<SF>, r<SF>, c, t<SF>),
+        pop_gfx_fill_circle(cx<SF>, cy<SF>, r<SF>, c),
+        pop_gfx_draw_arc(cx<SF>, cy<SF>, r<SF>, a0<SF>, a1<SF>, c, t<SF>),
+        pop_gfx_draw_text(x<SF>, y<SF>, c, s),
         pop_gfx_mouse_x()                           :float,
         pop_gfx_mouse_y()                           :float,
         pop_gfx_mouse_down(b)                       :int,
