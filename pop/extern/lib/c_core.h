@@ -19,7 +19,9 @@
 #define VMS
 #endif
 #endif
-#if defined(unix) || defined(__unix) || defined(__unix__)
+#if defined(unix) || defined(__unix) || defined(__unix__) || defined(__APPLE__)
+/* clang on macOS defines neither unix/__unix__; treat Darwin (__APPLE__ +
+ * __MACH__) as UNIX so the POSIX signal/errno/sigmask paths below apply. */
 #ifndef UNIX
 #define UNIX
 #endif
@@ -190,6 +192,12 @@ typedef struct timeval
 
 globalref POPWORD _pop_in_X_call;         /* pop Sys$- _in_X_call */
 
+#if defined(__APPLE__)
+/* macOS system headers pull in <stdbool.h>, making `bool` a macro for _Bool
+ * (1 byte). Poplog uses `bool` as an unsigned word; drop the macro and keep the
+ * historic typedef so the size/ABI is consistent across Poplog's C. */
+#undef bool
+#endif
 typedef unsigned bool;
 
 extern unsigned _pop_rem_ast(unsigned int * typep, POPWORD * datap);

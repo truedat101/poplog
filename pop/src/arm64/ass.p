@@ -54,7 +54,7 @@ global constant
 
 constant
     procedure (
-        initintvec,
+        initlongvec,
     )
 ;
 
@@ -208,7 +208,8 @@ lconstant
     _STR_POST   = _16:F8000400,
 
     ;;; LDR Xt, [Xn, Xm]:  1111 1000 011 Xm 011 0 10 Xn Xt
-    ;;; (register offset, LSL #3)
+    ;;; (register offset, UNSCALED -- S=0: plain [Xn + Xm], byte offset.
+    ;;; Verified against clang: scaled LSL#3 would be F8607800.)
     _LDR_REG    = _16:F8606800,
 
     ;;; STR Xt, [Xn, Xm]:  1111 1000 001 Xm 011 0 10 Xn Xt
@@ -473,6 +474,7 @@ enddefine;
 ;;;     and the LDR (literal) instruction has a +/-1MB range (19-bit signed
 ;;;     offset * 4).  We dump when we get close to the limit.
 
+
 define lconstant dump_literals();
     if _asm_pass then
         conspair(_pint(_asm_code_offset), literal_pools)
@@ -490,6 +492,15 @@ define lconstant dump_literals();
     else
         _int(front(literal_pools)) -> _current_literal_pool;
         back(literal_pools) -> literal_pools;
+#_IF DEF DARWIN
+        ;;; invariant: a mid-code pool must land exactly where pass 0
+        ;;; recorded it, or the LDRs computed against the recorded position
+        ;;; read garbage.
+        if _current_literal_pool /== _asm_code_offset then
+            _extern printf('[pool-diverge] recorded=%lx actual=%lx\n',
+                            _current_literal_pool, _asm_code_offset) -> ;
+        endif;
+#_ENDIF
     endif;
     _0 -> _lit_count;
 enddefine;
@@ -631,7 +642,7 @@ define drop_str_imm(_rt, _rn, _off);
 enddefine;
 
 ;;; drop_ldr_reg:
-;;;     LDR Xt, [Xn, Xm, LSL #3]
+;;;     LDR Xt, [Xn, Xm]   (UNSCALED register offset -- Xm is a BYTE offset)
 define drop_ldr_reg(_rt, _rn, _rm);
     lvars _rt, _rn, _rm;
     drop_w(_LDR_REG _biset _shift(_rm, _16) _biset _shift(_rn, _5)
@@ -805,7 +816,7 @@ define load_literal(_reg, _val);
         if _lit_count == _0 then
             _asm_code_offset -> _current_literal_zone;
         endif;
-        if _lit_count _lt _512 then
+        if _lit_count _lt _2048 then
             ;;; Compute distance from current instruction to literal in pool.
             ;;; Each literal is 8 bytes. Pool starts at _current_literal_pool.
             lvars _lit_pos = _shift(_lit_count, _3) _add _current_literal_pool,
@@ -1862,6 +1873,15 @@ define I_CREATE_SF();
         load_literal(_WK, _po);
         drop_sub_reg(_PB, _PB, _WK);     ;;; PB(x20) is not sp, so reg form is OK
     endif;
+#_IF DEF DARWIN
+    ;;; Dual-mapped heap (c_core.c): execution runs in an RX alias of the RW
+    ;;; heap at canonical + 2**36, so the `adr` above yields a VIEW address.
+    ;;; Canonicalise PB by clearing bit 36 -- otherwise SF_OWNER and all
+    ;;; PB-relative structure access use the (non-writable) view, and the
+    ;;; callstack walkers (exitfrom/caller/GC) fail to match procedures.
+    ;;;     and x20, x20, #0xffffffefffffffff   (encoding verified vs clang)
+    drop_w(_16:925BFA94);
+#_ENDIF
 
     ;;; --- Allocate the whole frame in one step on the hardware sp. ---
     ;;; (frame is 16-byte multiples via the VM's STACK_ALIGN padding, so a
@@ -2091,7 +2111,7 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     lvars codelist, reg_locals, pdr, _code_offset, _size, _reg_spec;
     lvars reg, _buff, _cnt;
     dlocal _regmask, _asm_drop_ptr, _asm_pass, _strsize, _pdr_offset,
-           lit_buff = initintvec(512), _lit_count = _0,
+           lit_buff = initlongvec(2048), _lit_count = _0,
            _current_literal_zone = _0, _current_literal_pool = _16:80000,
            literal_pools = [];
 
@@ -2108,6 +2128,28 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     _0 ->>  _pdr_offset -> _strsize;
     Code_pass(0, codelist) -> _code_offset;
     @@(w)[_int(listlength(asm_struct_list))] -> _strsize;
+
+#_IF DEF DARWIN
+    ;;; Pass 0b -- re-measure with the REAL _pdr_offset and _strsize.
+    ;;; Instruction SELECTION depends on them: I_CREATE_SF plants one
+    ;;; instruction when (_pdr_offset - 8) fits in a sub immediate (< 4KB)
+    ;;; but two otherwise, and PB-relative displacements pick different
+    ;;; load forms.  The literal-pool positions recorded here for the final
+    ;;; pass must come from an IDENTICAL instruction stream, else every
+    ;;; pooled LDR in the final code mis-addresses by the difference --
+    ;;; observed as the ML-lexer SIGILL (trailing pool landed 4 bytes off
+    ;;; for a procedure with a >4KB structure table).  Latent on ELF too,
+    ;;; but only Darwin's high addresses (heap 2**39, seed 2**32) force
+    ;;; pooled literals everywhere, so it is gated for this port.
+    ;;; _pdr_offset mirrors the (_asm_drop_ptr - pdr) + 8 computed below:
+    ;;; drop_ptr after Get_procedure = pdr@PD_TABLE + _strsize.
+    @@PD_TABLE{_strsize | b} _sub @@POPBASE _add _8 -> _pdr_offset;
+    [] -> literal_pools;
+    _0 -> _lit_count;
+    _0 -> _current_literal_zone;
+    _16:80000 -> _current_literal_pool;
+    Code_pass(0, codelist) -> _code_offset;
+#_ENDIF
 
     ;;; Now calculate total size of procedure and allocate store for it.
     ;;; The procedure record will be returned with the header and structure
@@ -2127,6 +2169,14 @@ define Do_consprocedure(codelist, reg_locals) -> pdr;
     back(literal_pools) -> literal_pools;
     ;;; Final pass -- plants the code
     Code_pass(false, codelist) -> _asm_code_offset;
+#_IF DEF DARWIN
+    ;;; invariant: the final stream must match the measured one, or
+    ;;; the recorded literal-pool positions are wrong for every pooled LDR.
+    if _code_offset /== _asm_code_offset then
+        _extern printf('[ass-diverge] measured=%lx planted=%lx\n',
+                        _code_offset, _asm_code_offset) -> ;
+    endif;
+#_ENDIF
     _asm_drop_ptr _sub _buff -> _cnt;
     lvars _n = _0;
     while _n _lt _lit_count do

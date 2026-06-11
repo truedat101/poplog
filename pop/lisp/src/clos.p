@@ -38,6 +38,17 @@ defclass instance_structure
 
 /* Cancel global identifiers which may have been defined by Objectclass */
 
+;;; Load the autoloadable dependencies BEFORE cancelling: an autoload that
+;;; fires mid-file does a section;...endsection; round-trip, and re-entering
+;;; $-lisp re-imports the global (objectclass) bindings of the words
+;;; cancelled below -- the constant declaration of define_method further down
+;;; then mishaps ("ILLEGAL DECLARATION OF WORD").  Hit on macOS, where
+;;; autoloading resolves; latent elsewhere.
+uses ncrev;
+uses ncdelete;
+uses ncdelete_if;
+uses lmember;
+
 applist([class_name class_supers define_method isclass], syscancel);
 
 

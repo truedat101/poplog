@@ -22,9 +22,10 @@ vars _image_handle = _0;    ;;; for SunOS
 
 
     /*  dummy external load to force linking against the dynamic linker
-        library (not needed for IRIX 5/OSF1 -- everything's in libc.so)
+        library (not needed for IRIX 5/OSF1/Darwin -- everything's in
+        libc.so / libSystem)
     */
-#_IF DEF UNIX and not(DEFV IRIX >= 5.0 or DEF OSF1)
+#_IF DEF UNIX and not(DEFV IRIX >= 5.0 or DEF OSF1 or DEF DARWIN)
 exload dl [^DL_LIB]
     lconstant exload_dummy;     ;;; anything will do
 endexload;
@@ -37,7 +38,7 @@ lconstant msvec = writeable {0 0 1};        ;;; for sys_pr_message
 define lconstant shlib_error() -> msg;
     lvars msg = false;
     ;;; NB: Linux ELF dlerror() is unreliable, so we don't use it
-#_IF DEFV SYSTEM_V >= 4.0 or DEF OSF1 or DEF AIX
+#_IF DEFV SYSTEM_V >= 4.0 or DEF OSF1 or DEF AIX or DEF DARWIN
     lvars _msg = _extern dlerror();
     _nonzero(_msg) and Consstring_bptr(_msg, _-1, CSB_FIXED) -> msg;
 #_ENDIF
@@ -57,6 +58,8 @@ lconstant macro DLOPEN_FLAGS = 16:003;  ;;; RTLD_LAZY_GLOBAL
 lconstant macro DLOPEN_FLAGS = 16:001;  ;;; RTLD_LAZY
 #_ELSEIF DEFV IRIX >= 5.0
 lconstant macro DLOPEN_FLAGS = 16:001;  ;;; RTLD_LAZY
+#_ELSEIF DEF DARWIN
+lconstant macro DLOPEN_FLAGS = 16:9;    ;;; macOS: RTLD_LAZY(0x1) | RTLD_GLOBAL(0x8)
 #_ENDIF
 
     /* open a shared library, allowing for unresolved references
@@ -132,6 +135,13 @@ enddefine;
 define Shlib_findsym(handles, try_previous_p, symbol, value) -> success;
     lvars handles, try_previous_p, symbol, value, msg, success = false;
     lconstant hvec = writeable initv(1);
+#_IF DEF DARWIN
+    ;;; Mach-O symbol names carry a leading underscore (extern_name_translate)
+    ;;; but dlsym() takes the plain C name
+    if datalength(symbol) fi_> 0 and fast_subscrs(1, symbol) == `_` then
+        allbutfirst(1, symbol) -> symbol
+    endif;
+#_ENDIF
     unless isvector(handles) then
         handles -> fast_subscrv(1, hvec);
         hvec -> handles

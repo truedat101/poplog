@@ -26,7 +26,7 @@ lconstant macro (
     AS_CMD  = '/usr/ccs/bin/as',
     AR_CMD  = '/usr/ccs/bin/ar',
 );
-#_ELSEIF DEF LINUX or DEF FREEBSD or DEF NETBSD
+#_ELSEIF DEF LINUX or DEF FREEBSD or DEF NETBSD or DEF DARWIN
 lconstant macro (
     ;;; AS_CMD  = '/sklad/kompi/poplog/pp4/asm',
     AS_CMD  = '/usr/bin/as',
@@ -134,6 +134,14 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
         asmf_pr('POP__cc=${POP__cc:-cc}\n');
         asmf_pr(cc_link_command_header);
         for f in link_flags do asmf_printf(f, '-Wl,%p \\\n') endfor;
+#_IF DEF DARWIN
+        ;;; the Mach-O loader shim is the real main: it remaps __POPSEED
+        ;;; RX in place and tail-calls _pop_seed_main (amain.s)
+        nl_printf('$popexternlib/pop_seed_loader.o');
+        ;;; optional native graphics objects (empty unless the build
+        ;;; exports them -- see Makefile GFX_CONF=imgui)
+        nl_printf('$POP_GFX_OBJECTS');
+#_ENDIF
                 out_obj_files(wobj_files);
 #_ELSE
         ;;; link command header string (defined in asmout.p)
@@ -161,6 +169,10 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
     ;;; pop library (must come before link_other since that will contain
     ;;; any X libraries)
     nl_printf('-lpop');
+#_IF DEF DARWIN
+    ;;; frameworks etc. for the optional graphics objects (empty unless set)
+    nl_printf('$POP_GFX_LDFLAGS');
+#_ENDIF
 
     out_obj_files(link_other);
 
@@ -186,6 +198,14 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
 
     unless exlink then
         asmf_pr('ST=$?\n');
+#_IF DEF DARWIN
+        ;;; refresh the ad-hoc signature (no entitlements needed: the
+        ;;; W^X machinery uses mach_vm_remap + mprotect on anonymous
+        ;;; pages, not MAP_JIT).  Tolerate a missing/limited codesign
+        ;;; (e.g. sigtool shims in hermetic builds): the linker already
+        ;;; ad-hoc signs, so this is belt-and-braces.
+        asmf_pr('if [ $ST = 0 ]; then codesign -s - -f $IM 2>/dev/null || true; fi\n');
+#_ENDIF
 
         if cleanup_command then asmf_printf(cleanup_command, '%p\n') endif;
         if makebase then
@@ -290,7 +310,8 @@ define os_library_command(option, o_lib, o_files);
 #_IF not(DEF SYSTEM_V or DEF HPUX or DEF OSF1 or DEF IRIX)
     ;;; run "ranlib"
     if option /== "x" and pop_status == 0 then
-        sysobey('/usr/bin/ranlib', ['ranlib' ^o_lib])
+        sysobey(systranslate('POP__ranlib') or '/usr/bin/ranlib',
+                ['ranlib' ^o_lib])
     endif;
 #_ENDIF
 

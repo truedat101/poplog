@@ -63,6 +63,11 @@ lconstant macro NCCS = 20;
 deftype tcflag_t = int;
 lconstant macro NCCS = 32;
 
+  #_ELSEIF DEF DARWIN
+
+deftype tcflag_t = long;        ;;; macOS: unsigned long (LP64 -> 8 bytes)
+lconstant macro NCCS = 20;
+
   #_ELSE_ERROR
   #_ENDIF
 
@@ -86,6 +91,9 @@ struct TERMIOS
   #_IF DEF OSF1 or DEFV LINUX >= 2.0 or DEF FREEBSD or DEF NETBSD
     int         TMIO_ISPEED,    ;;; input speed
                 TMIO_OSPEED;    ;;; output speed
+  #_ELSEIF DEF DARWIN
+    long        TMIO_ISPEED,    ;;; macOS: speed_t is unsigned long (8 bytes)
+                TMIO_OSPEED;
   #_ENDIF
   };
 
@@ -173,12 +181,12 @@ lconstant macro (
 
     ;;; Control character indexes in TMIO_CC
 
-  #_IF DEF OSF1 or DEF ALPHA_LINUX or DEF FREEBSD or DEF NETBSD
+  #_IF DEF OSF1 or DEF ALPHA_LINUX or DEF FREEBSD or DEF NETBSD or DEF DARWIN
 
     #_IF DEF FREEBSD
         lconstant macro _CC_VERASE2     = _7;
-    #_ELSEIF not(DEF NETBSD)
-        lconstant macro _CC_VSWTCH      = _7;
+    #_ELSEIF not(DEF NETBSD or DEF DARWIN)
+        lconstant macro _CC_VSWTCH      = _7;   ;;; macOS leaves c_cc[7] unused
     #_ENDIF
 
     lconstant macro (

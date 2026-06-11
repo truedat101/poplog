@@ -1728,14 +1728,21 @@ define M_CREATE_SF();
         ix + 1 -> ix;
     endfast_for;
 
-    ;;; Store the dynamic-local save values into their slots (list order:
-    ;;; non-pop dlocals first, then pop, as the shared GC offsets assume).
-    ;;; Dlocal region starts at SF_LOCALS + Nstkvars.
-    SFL + Nstkvars -> ix;
+    ;;; Store the dynamic-local save values into their slots.  m_trans
+    ;;; lists POP dlocals FIRST and the canonical frame layout puts pop
+    ;;; dlocals at the TOP of the dlocal region (directly below the pop
+    ;;; register saves): PD_GC_OFFSET_LEN/PD_GC_SCAN_LEN and the runtime
+    ;;; Dlocal_frame_offset all map list index k to slot (Ndlocals-1-k).
+    ;;; So assign slots DESCENDING from the top of the dlocal region.
+    ;;; (Ascending assignment put the pop dlocals where the GC expects
+    ;;; the non-pop ones: the GC then never relocated saved pop values
+    ;;; -- stale cucharout etc. after any GC -- and Copyscan'd the
+    ;;; non-pop saves as if they were pop pointers.)
+    SFL + Nstkvars + Ndlocals - 1 -> ix;
     fast_for n in dlocal_labs do
         lvars dv = load_to_reg(n, R1);
         asm_emit("str", dv, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
-        ix + 1 -> ix;
+        ix - 1 -> ix;
     endfast_for;
 
     ;;; Clear the POP register-locals (the registers themselves) to popint 0 --
@@ -1799,11 +1806,12 @@ define M_UNWIND_SF();
     ;;; (e.g. pop_expr_prec) across a returning call.  It MUST run before PB is
     ;;; restored to the caller below, since a dlocal operand may be addressed
     ;;; PB-relative (literal pool of THIS procedure).
-    SFL + sf_Nstkvars -> ix;
+    ;;; (slots assigned DESCENDING -- see M_CREATE_SF)
+    SFL + sf_Nstkvars + sf_Ndlocals - 1 -> ix;
     fast_for n in sf_dlocal_labs do
         asm_emit("ldr", R1, '[sp, #' >< (ix * WORD_OFFS) >< ']', 3);
         gen_reg_store(R1, n, R5);
-        ix + 1 -> ix;
+        ix - 1 -> ix;
     endfast_for;
 
     ;;; Restore PB to the caller's owner (its SF_OWNER one frame up, at
@@ -2024,6 +2032,34 @@ enddefine;
 ;;;         [alignment padding]
 ;;;         [end_label]
 
+#_IF DEF UNIX_MACHO
+;;; Mach-O: clang's assembler cannot evaluate a FORWARD shifted label-difference
+;;; in a data directive, so popc must emit PD_LENGTH as a literal number rather
+;;; than the `.set _LF, ((endlab - exec) >> 3) + hdr` the ELF path uses.  popc
+;;; emits the whole exec..endlab span itself (no assembler-managed literal pools
+;;; on this backend), so its byte size is the sum over the final codelist:
+;;;     "label" / "#"  -> 0 bytes
+;;;     "align"        -> pad up to an 8-byte boundary
+;;;     "long"         -> (datalength-1) * 8   (xword data, via asm_outword)
+;;;     anything else  -> 4   (one fixed-width AArch64 instruction)
+define lconstant codelist_nbytes(codelist) -> nbytes;
+    lvars instr, opcode;
+    0 -> nbytes;
+    fast_for instr in codelist do
+        f_subv(1, instr) -> opcode;
+        if opcode == "label" or opcode == "#" then
+            ;;; emits no bytes
+        elseif opcode == "align" then
+            ((nbytes + 7) >> 3) << 3 -> nbytes      ;;; pad to 8-byte boundary
+        elseif opcode == "long" then
+            nbytes + (datalength(instr) - 1) * 8 -> nbytes
+        else
+            nbytes + 4 -> nbytes
+        endif
+    endfor
+enddefine;
+#_ENDIF
+
 define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
     lconstant procedure gencode;
     lvars codelist, hdr_len, pdr_len, new_lits,
@@ -2058,8 +2094,14 @@ define mc_code_generator(codelist, hdr_len) -> (gencode, pdr_len);
         ;;; Plant an end label
         outlab(genlab() ->> endlab);
         ;;; Define pdr_len as the size in words of the procedure
+#_IF DEF UNIX_MACHO
+        ;;; Mach-O: literal length (see codelist_nbytes above). exec..endlab is
+        ;;; the codelist rounded up to 8 by the final align, /8 words, + header.
+        outlabset(pdr_len, ((codelist_nbytes(codelist) + 7) >> 3) + hdr_len);
+#_ELSE
         outlabset(pdr_len,
                   asm_pdr_len(hdr_len, current_pdr_exec_label, endlab));
+#_ENDIF
     enddefine;
 enddefine;
 

@@ -42,6 +42,8 @@ void pop_gfx_poll(void);           /* pump pending OS events (non-blocking)  */
 
 /* --- retained canvas (screen-space pixels; persists until clear) -------- */
 void     pop_gfx_clear(void);                     /* wipe the canvas (XpwClearWindow) */
+int      pop_gfx_mark(void);                      /* canvas length, for rewind        */
+void     pop_gfx_rewind(int mark);                /* truncate canvas back to a mark   */
 uint32_t pop_gfx_rgba(int r, int g, int b, int a);
 void pop_gfx_draw_point(float x, float y, uint32_t rgba);
 void pop_gfx_draw_line(float x0, float y0, float x1, float y1, uint32_t rgba, float thickness);

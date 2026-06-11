@@ -75,7 +75,31 @@ if [ -z "$HOST_ARCH" ]; then
 fi
 
 
+HOST_OS=`uname -s`
+
 CC_LINK_OPTIONS="-Wl,-export-dynamic"
+if [ "$HOST_OS" = Darwin ]; then
+    # macOS is supported on Apple Silicon (arm64) ONLY.  The Darwin port
+    # lives in the arm64 backend (Mach-O output in syscomp/arm64, the
+    # __POPSEED seed segment, the dual-mapped heap); the x86_64 backend
+    # still emits ELF/GNU-as and none of the OS-layer work exists there.
+    # Note Intel-Darwin would actually be EASIER in OS policy (no hard
+    # W^X, -no_pie works on x86_64 Mach-O) but needs the object-format
+    # work redone in syscomp/x86_64 -- see PORTING-ARM64-M-SILICON-OSX.md.
+    if [ "$HOST_ARCH" != arm64 ] && [ "$HOST_ARCH" != aarch64 ]; then
+        echo "ERROR: Poplog on macOS is only supported on Apple Silicon (arm64)."
+        echo "       Darwin/$HOST_ARCH is not ported (the $HOST_ARCH backend emits ELF)."
+        echo "       See PORTING-ARM64-M-SILICON-OSX.md for what a port would entail."
+        exit 1
+    fi
+    # macOS arm64 (Apple M-silicon). PIE is mandatory (-no-pie is ignored on
+    # arm64), ld64 has none of the GNU-ld options probed below, and the
+    # bootstrap flow differs (see PORTING-ARM64-M-SILICON-OSX.md and
+    # tools/build-msilicon.sh): corepop is linked from popc-emitted Mach-O
+    # plus the C runtime, with the Pop seed in a __POPSEED segment remapped
+    # executable at startup.
+    CC_LINK_OPTIONS=""
+fi
 case "$HOST_ARCH" in
   i86pc)
       # Solaris
@@ -87,6 +111,11 @@ case "$HOST_ARCH" in
       POP_arch=i386
         ;;
   aarch64)
+      POP_arch=arm64
+        ;;
+  arm64)
+      # macOS reports arm64 (not aarch64); without this it would fall
+      # through to the 32-bit arm case below.
       POP_arch=arm64
         ;;
   arm*)
@@ -133,6 +162,12 @@ else
 fi
 rm -f conftest.exe
 
+if [ "$HOST_OS" = Darwin ]; then
+    # clang ACCEPTS -no-pie but arm64 ld64 ignores it; the GNU-ld options
+    # below do not exist there. Skip the probes.
+    HAS_NOPIE=no; HAS_AS_NEEDED=no; HAS_HASH_STYLE=no; HASH_STYLE_OPT=""
+    echo "Darwin: skipping GNU-ld option probes (PIE mandatory)"
+else
 echo -n "Testing if compiler recognizes -no-pie"
 NO_PIE_OPT=-no-pie
 comp_cmd="${CC} $NO_PIE_OPT conftest.c -o conftest.exe"
@@ -168,6 +203,7 @@ else
 fi
 rm -f conftest.exe
 echo "   "$HAS_HASH_STYLE
+fi
 
 if [ x"$X_CONF" != "xno" ] ; then
 

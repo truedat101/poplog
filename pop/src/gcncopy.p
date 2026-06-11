@@ -54,6 +54,10 @@ define lconstant App_procedure(_p, app_p);
     lvars procedure app_p, _p, _ptr, _exec;
     ;;; do table/frozvals
     _p!PD_EXECUTE@(code->w) -> _exec;
+#_IF DEF DARWIN
+    ;;; Phase 4: strip the RX-view bias (see gccopy.p SCAN_PD_TABLE)
+    _exec _biclear _16:1000000000 -> _exec;
+#_ENDIF
     if _p!PD_FLAGS _bitst _:M_PD_CLOSURE then
         app_p(_p@PD_CLOS_PDPART);
         _p@PD_CLOS_FROZVALS -> _ptr

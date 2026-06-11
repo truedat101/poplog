@@ -25,11 +25,46 @@ lconstant macro (
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file "aarith.s"
 
 ;;; Wrapping in POP object
-   .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
    .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
@@ -143,13 +178,11 @@ DEF_C_LAB (_pmult_testovf)
     b.eq .Lpmult_no_ovf
     ;;; Pop true/false are the ADDRESSES of C_LAB(true)/C_LAB(false); load the
     ;;; address (adrp+add), do not deref (the cell holds the C int 0/1).
-    adrp x0, C_LAB(false)
-    add x0, x0, :lo12:C_LAB(false)
+    adr_l x0, C_LAB(false)
     str x0, [USP]
     ret
 .Lpmult_no_ovf:
-    adrp x0, C_LAB(true)
-    add x0, x0, :lo12:C_LAB(true)
+    adr_l x0, C_LAB(true)
     str x0, [USP]
     ret
 
@@ -165,16 +198,14 @@ DEF_C_LAB (_pint_testovf)
     cmp x2, x0              /* did we lose bits? */
     b.ne .Lpint_ovf
     str x1, [USP]           /* popint replaces the arg in its slot (-> USP[8]) */
-    adrp x0, C_LAB(true)
-    add x0, x0, :lo12:C_LAB(true)
+    adr_l x0, C_LAB(true)
     str x0, [USP, #-8]!     /* push true on top: USP[0]=true, USP[8]=popint.
                                (The old order pushed the popint then overwrote
                                it with true at USP[0], losing the popint and
                                leaving the raw machine int below.) */
     ret
 .Lpint_ovf:
-    adrp x0, C_LAB(false)
-    add x0, x0, :lo12:C_LAB(false)
+    adr_l x0, C_LAB(false)
     str x0, [USP]
     ret
 
@@ -195,13 +226,11 @@ DEF_C_LAB (_pshift_testovf)
     orr x2, x2, #3           /* add pop tag */
     str x2, [USP, #8]
 .Lpshift_done:
-    adrp x0, C_LAB(true)
-    add x0, x0, :lo12:C_LAB(true)
+    adr_l x0, C_LAB(true)
     str x0, [USP]
     ret
 .Lpshift_ovf:
-    adrp x0, C_LAB(false)
-    add x0, x0, :lo12:C_LAB(false)
+    adr_l x0, C_LAB(false)
     ;;; pop one arg and replace the other
     str x0, [USP, #8]!
     ret
@@ -234,7 +263,7 @@ DEF_C_LAB (_bgi_add)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #40        /* pop 5 args */
-    bl do_bgi_add
+    bl EXTERN_NAME(do_bgi_add)
     ;;; Clean control stack and return
     ldp x29, x30, [sp], #16
     ret
@@ -251,7 +280,7 @@ DEF_C_LAB (_bgi_sub)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #40        /* pop 5 args */
-    bl do_bgi_sub
+    bl EXTERN_NAME(do_bgi_sub)
     ;;; Clean control stack and return
     ldp x29, x30, [sp], #16
     ret
@@ -263,7 +292,7 @@ DEF_C_LAB (_bgi_negate)
     ldr x2, [USP, #16]
     add USP, USP, #24        /* pop 3 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_negate
+    b EXTERN_NAME(do_bgi_negate)
 
 DEF_C_LAB (_bgi_negate_no_ov)
     ;;; Load arguments to registers (3 args)
@@ -272,7 +301,7 @@ DEF_C_LAB (_bgi_negate_no_ov)
     ldr x2, [USP, #16]
     add USP, USP, #24        /* pop 3 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_negate_no_ov
+    b EXTERN_NAME(do_bgi_negate_no_ov)
 
 ;;; left shift
 ;;; Arguments (4 on USP, top to bottom):
@@ -289,7 +318,7 @@ DEF_C_LAB (_bgi_lshift)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #24        /* pop 3, keep 1 slot for result */
-    bl do_bgi_lshift
+    bl EXTERN_NAME(do_bgi_lshift)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -302,7 +331,7 @@ DEF_C_LAB (_bgi_rshiftl)
     ldr x2, [USP, #16]
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
-    b do_bgi_rshiftl
+    b EXTERN_NAME(do_bgi_rshiftl)
 
 ;;; Multiply unsigned bigint by unsigned machine integer (slice)
 ;;; Arguments (4 on USP, top to bottom):
@@ -318,7 +347,7 @@ DEF_C_LAB (_bgi_mult)
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_mult
+    b EXTERN_NAME(do_bgi_mult)
 
 DEF_C_LAB (_bgi_mult_add)
     ;;; Load arguments to registers
@@ -328,7 +357,7 @@ DEF_C_LAB (_bgi_mult_add)
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_mult_add
+    b EXTERN_NAME(do_bgi_mult_add)
 
 ;;; Subtract product from destination (4 args, tail call)
 DEF_C_LAB (_bgi_sub_mult)
@@ -339,7 +368,7 @@ DEF_C_LAB (_bgi_sub_mult)
     ldr x3, [USP, #24]
     add USP, USP, #32        /* pop all 4 args */
     ;;; transfer control to C code (tail call)
-    b do_bgi_sub_mult
+    b EXTERN_NAME(do_bgi_sub_mult)
 
 DEF_C_LAB (_bgi_div)
     stp x29, x30, [sp, #-16]!
@@ -351,7 +380,7 @@ DEF_C_LAB (_bgi_div)
     ldr x3, [USP, #24]
     add USP, USP, #24        /* pop 3, keep 1 slot for result */
     ;;; call C code
-    bl do_bgi_div
+    bl EXTERN_NAME(do_bgi_div)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -364,7 +393,7 @@ DEF_C_LAB (_quotient_estimate_init)
     ldr x2, [USP, #16]
     add USP, USP, #16        /* pop 2, keep 1 slot for result */
     ;;; call C code
-    bl do_quotient_estimate_init
+    bl EXTERN_NAME(do_quotient_estimate_init)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -377,7 +406,7 @@ DEF_C_LAB (_quotient_estimate)
     ldr x2, [USP, #16]
     add USP, USP, #16        /* pop 2, keep 1 slot for result */
     ;;; call C code
-    bl do_quotient_estimate
+    bl EXTERN_NAME(do_quotient_estimate)
     str x0, [USP]
     ldp x29, x30, [sp], #16
     ret
@@ -474,6 +503,11 @@ DEF_C_LAB (_rshift)
     .align  3
 
 ;;; End wrapper: set size
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start

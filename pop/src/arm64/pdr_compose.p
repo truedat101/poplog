@@ -64,7 +64,13 @@ define Cons_pcomposite() -> _comp;
 
     ;;; Determine size of procedure record.
     ;;; Code is 12 instructions = 48 bytes = 6 (64-bit) words.
+    ;;; (DARWIN: 13 instructions + nop pad = 56 bytes = 7 words -- the
+    ;;; canonicalising AND after the adr, as in closure_cons.p.)
+#_IF DEF DARWIN
+    @@PD_COMPOSITE_TABLE[_7] _sub @@POPBASE -> _size;
+#_ELSE
     @@PD_COMPOSITE_TABLE[_6] _sub @@POPBASE -> _size;
+#_ENDIF
 
     ;;; Allocate new procedure record
     Get_store(_size) -> _comp;
@@ -80,7 +86,13 @@ define Cons_pcomposite() -> _comp;
     ;;; Plant the executable code.
     ;;; _drop_ptr tracks the byte offset from the record base into the code area.
     @@PD_COMPOSITE_TABLE -> _drop_ptr;
+#_IF DEF DARWIN
+    ;;; Phase 4: bias PD_EXECUTE/PD_EXIT into the RX view (+2**36); the
+    ;;; code itself is planted at the canonical _drop_ptr offsets.
+    _comp@(w){_drop_ptr} _add _16:1000000000 -> _comp!PD_EXECUTE;
+#_ELSE
     _comp@(w){_drop_ptr} -> _comp!PD_EXECUTE;
+#_ENDIF
 
     ;;; ---------------------------------------------------------------
     ;;; Instruction 1: adr x20, .
@@ -97,6 +109,15 @@ define Cons_pcomposite() -> _comp;
     _16:D1000294 _biset _shift(@@PD_COMPOSITE_TABLE, _10)
         -> _comp!(i){_drop_ptr};
     _drop_ptr _add _4 -> _drop_ptr;
+
+#_IF DEF DARWIN
+    ;;; dual-mapped heap: the adr executed in the RX view yields
+    ;;; record_base + 2**36; canonicalise before x20 escapes as PB/SF_OWNER
+    ;;; (a view-biased owner breaks caller()/frame walks/property lookups).
+    ;;; and x20, x20, #0xffffffefffffffff
+    _16:925BFA94 -> _comp!(i){_drop_ptr};
+    _drop_ptr _add _4 -> _drop_ptr;
+#_ENDIF
 
     ;;; Instruction 3: stp x20, x30, [sp, #-16]!
     ;;; Push PB (owner) and LR onto the call stack (pre-index, 16-byte frame).
@@ -150,7 +171,11 @@ define Cons_pcomposite() -> _comp;
 
     ;;; ---------------------------------------------------------------
     ;;; PD_EXIT: mark the start of the exit sequence.
+#_IF DEF DARWIN
+    _comp@(w){_drop_ptr} _add _16:1000000000 -> _comp!PD_EXIT;
+#_ELSE
     _comp@(w){_drop_ptr} -> _comp!PD_EXIT;
+#_ENDIF
 
     ;;; Instruction 10: ldp x20, x30, [sp], #16
     ;;; Pop our saved PB and LR from the call stack (post-index).
@@ -170,6 +195,11 @@ define Cons_pcomposite() -> _comp;
     ;;; Return to caller via x30.
     ;;; Encoding: 0xD65F03C0
     _16:D65F03C0 -> _comp!(i){_drop_ptr};
+#_IF DEF DARWIN
+    ;;; pad the 13-instruction body to the 7-word record with a nop
+    _drop_ptr _add _4 -> _drop_ptr;
+    _16:D503201F -> _comp!(i){_drop_ptr};
+#_ENDIF
 enddefine;
 
 endsection;     /* $-Sys */

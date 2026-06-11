@@ -18,7 +18,16 @@
 
 struct registers_buffer {
     uint64_t i_reg[8];
-    double f_reg[8];
+    /* The hand-written caller (arm64/aextern.s) loads d0-d7 from this
+     * area at a 16-BYTE stride -- it reserves 8*16 bytes, the full
+     * 128-bit width of the q0-q7 vector registers (see that file's
+     * "8*8 + 8*16 = 192 byte" comment).  Each FP slot must therefore be
+     * 16 bytes wide: with a plain double[8] (8-byte stride) the loads
+     * read d1 from slot 2, d2 from slot 4, ..., so every other float or
+     * double argument is silently dropped.  Only external calls passing
+     * 2+ FP args were affected, which is why it stayed hidden until the
+     * graphics layer started passing many floats per call. */
+    struct { double d; uint64_t _pad; } f_reg[8];
 };
 
 typedef struct registers_buffer reg_buff;
@@ -33,7 +42,7 @@ store_single(arg_state * as, void * sp, reg_buff * rp, float val) {
         /* Store single in FP register slot (zero-extended to double width) */
         memset(&dval_storage, 0, sizeof(dval_storage));
         memcpy(&dval_storage, &val, sizeof(val));
-        rp->f_reg[fi] = dval_storage;
+        rp->f_reg[fi].d = dval_storage;
         as->fi++;
     } else {
         /* Spill to stack as 8-byte slot */
@@ -48,7 +57,7 @@ static void
 store_double(arg_state * as, void * sp, reg_buff * rp, double val) {
     int fi = as->fi;
     if (fi < 8) {
-        rp->f_reg[fi] = val;
+        rp->f_reg[fi].d = val;
         as->fi++;
     } else {
         *((double *)((uint64_t *)sp + as->si)) = val;
@@ -72,11 +81,15 @@ store_int(arg_state * as, void * sp, reg_buff * rp, uint64_t val) {
 #define ET_DDEC 2
 
 /* Must agree with offset in syscomp/symdefs.p
- * On 64-bit: key is at word offset -1 from the record start,
- * K_EXTERN_TYPE offset within the key structure.
- * This is 12 fields * 8 bytes + 2 = 98 on 64-bit.
+ * On 64-bit the key pointer points at K_FLAGS; K_EXTERN_TYPE is at
+ *   2 ints (K_FLAGS, K_GC_TYPE)            =  8 bytes
+ * + 10 fulls (K_GET_SIZE .. K_HASH)        = 80 bytes
+ * + 2 bytes (K_NUMBER_TYPE, K_PLOG_TYPE)   =  2 bytes  -> 90.
+ * (The old value 98 mis-counted the two ints as fulls: it read a byte
+ * of K_CONS_R instead, so every compound arg looked "dereference" --
+ * exfunc closures were passed by content and ET_DDEC never matched.)
  */
-#define ET_OFF (8*12+2)
+#define ET_OFF 90
 
 void
 copy_external_arguments(int n, uint64_t * ap, void * sp, reg_buff * rp,
@@ -108,8 +121,18 @@ copy_external_arguments(int n, uint64_t * ap, void * sp, reg_buff * rp,
             unsigned char * ak = ((unsigned char * *)ai)[-1];
             unsigned char et = *(ak + ET_OFF);
             if (et == ET_DDEC) {
+                /* DDECIMAL layout (syscomp/symdefs.p):
+                 *     word DD_1;  full KEY;  >->
+                 * The Pop structure pointer (ai) addresses the slot just
+                 * AFTER KEY, so on a 64-bit build the double DD_1 lies two
+                 * words back -- one word before KEY, and KEY is the very
+                 * word ai[-1] that the ET_OFF read above dereferences.
+                 * x86_64/aextern.s reads this field as _DD_1(ptr)=@@DD_1;
+                 * the original read here used offset 0, which fetched the
+                 * FOLLOWING heap object's first word -- so every boxed
+                 * ddecimal (double) external argument was silently wrong. */
                 double dval;
-                memcpy(&dval, (void *)ai, sizeof(double));
+                memcpy(&dval, (char *)ai - 2 * sizeof(uint64_t), sizeof(double));
                 if (fltsingle & 1) {
                     float fval = dval;
                     store_single(&as, sp, rp, fval);

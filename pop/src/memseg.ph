@@ -51,12 +51,28 @@ struct FREE_BLOCK_HEADER
   };
 
 
+;;; Memory protections.
+;;; DARWIN: macOS refuses PROT_READ|WRITE|EXEC outright (no RWX without
+;;; MAP_JIT), so an "all" request must not include EXEC -- a failed
+;;; mprotect leaves guard pages locked (every Set_mem_prot caller
+;;; discards the result) and the next userstack move dies on them.
+;;; Heap code executes via the RX view, never the canonical mapping,
+;;; so READ|WRITE is the correct "all" for the heap (likewise NOWRITE).
+#_IF DEF DARWIN
 lconstant macro (
-
-    ;;; Memory protections
+    _M_PROT_ALL     = _2:011,
+    _M_PROT_NOWRITE = _2:001,
+    _M_PROT_NONE    = _2:000,
+);
+#_ELSE
+lconstant macro (
     _M_PROT_ALL     = _2:111,
     _M_PROT_NOWRITE = _2:101,
     _M_PROT_NONE    = _2:000,
+);
+#_ENDIF
+
+lconstant macro (
 
     ;;; Flags used by sys_lock_system
     SLS_SHARE                   = 2:1e0,

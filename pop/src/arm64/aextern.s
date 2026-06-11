@@ -35,16 +35,59 @@ endif;
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "aextern.s"
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 
 ;;; Wrapping in POP object
-   .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
    .xword   Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
 ;;; Literal pool entries (pointer-sized)
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 saved_sp.lab:
     .xword I_LAB(Sys$-Extern$- _saved_sp)
 
@@ -123,7 +166,7 @@ do_args:
                             ;;; x2 already has stack arg pointer -> arg3
     mov x1, USP            ;;; user stack pointer -> arg2
                             ;;; x0 already has nargs -> arg1
-    bl copy_external_arguments
+    bl EXTERN_NAME(copy_external_arguments)
 
     ;;; Advance USP past the arguments (each Pop word is 8 bytes)
     add USP, USP, x25, lsl #3
@@ -203,6 +246,13 @@ do_args:
 ;;; We must preserve argument registers x0-x7.
 
 DEF_C_LAB(Sys$- _exfunc_clos_action)
+#_IF DEF DARWIN
+    ;;; x16 = the exfunc-closure record address, computed PC-relatively
+    ;;; (adr) by the closure's copied template code: executed from the RX
+    ;;; view it is record+2**36, so canonicalise before using it as a
+    ;;; data pointer.
+    and x16, x16, #0xffffffefffffffff
+#_ENDIF
     ;;; Save argument registers we need to use as scratch
     stp x0, x1, [SP, #-16]!
 
@@ -301,6 +351,11 @@ DEF_C_LAB(Sys$- _external_callback_func)
     ret
 
 ;;; End wrapper: set size
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start

@@ -17,10 +17,45 @@ lconstant macro (
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "amove.s"
 ;;; Wrapping in POP object
-   .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
    .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
@@ -43,19 +78,17 @@ DEF_C_LAB (_icmp)
     ldr x0, [USP], #8          ;;; x0 = src1   (top of stack) = memcmp s1
     ldr x1, [USP], #8          ;;; x1 = src2                    = memcmp s2
     ldr x2, [USP]              ;;; x2 = byte_count (peek; result slot) = memcmp n
-    bl memcmp
+    bl EXTERN_NAME(memcmp)
     cmp x0, #0
     b.eq .Lcmp_true
     ;;; Pop `false` is the ADDRESS of C_LAB(false) (that address is the boolean
     ;;; value the compiler/VM use), NOT its contents -- the cell holds the C int
     ;;; 0.  So load the address (adrp+add), never deref it.  cf. amisc.s/afloat.s
     ;;; which spell the same value `.xword C_LAB(false)`.
-    adrp x0, C_LAB(false)
-    add  x0, x0, :lo12:C_LAB(false)
+    adr_l x0, C_LAB(false)
     b .Lcmp_done
 .Lcmp_true:
-    adrp x0, C_LAB(true)
-    add  x0, x0, :lo12:C_LAB(true)
+    adr_l x0, C_LAB(true)
 .Lcmp_done:
     str x0, [USP]
     ldp x29, x30, [sp], #16
@@ -84,7 +117,7 @@ DEF_C_LAB (_move)
     add x3, x0, x2             ;;; dst + byte_count
     str x3, [USP]              ;;; update result on stack to dst + byte_count
     ;;; x0=dst, x1=src, x2=byte_count already = memmove(dst, src, n)
-    b memmove
+    b EXTERN_NAME(memmove)
 
 ;;; _bfill
 ;;; Byte fill using memset.  Three Pop arguments on USP:
@@ -99,7 +132,7 @@ DEF_C_LAB (_bfill)
     ldr x2, [USP], #8          ;;; x2 = byte_count
     ldr x1, [USP], #8          ;;; x1 = fill_value
     ;;; x0=dst, x1=value, x2=n already = memset(dst, value, n)
-    b memset
+    b EXTERN_NAME(memset)
 
 ;;; _ifill, _fill
 ;;; Word fill.  Three Pop arguments on USP:
@@ -128,8 +161,7 @@ DEF_C_LAB (_fill)
 
 DEF_C_LAB (_move_userstack)
     ldr x0, [USP], #8          ;;; byte offset
-    adrp x3, I_LAB(_userhi)
-    add  x3, x3, :lo12:I_LAB(_userhi)
+    adr_l x3, I_LAB(_userhi)
     ldr  x2, [x3]              ;;; old _userhi
     add  x1, x2, x0            ;;; new _userhi
     str  x1, [x3]              ;;; store new _userhi
@@ -142,7 +174,7 @@ DEF_C_LAB (_move_userstack)
     ;;; Actually: dst = new USP (x0 already set), src = old USP (x1), n = x2
     mov  x0, USP               ;;; dst = new USP base
     ;;; x1 = old USP (src), x2 = byte count (n)
-    b memmove
+    b EXTERN_NAME(memmove)
 
 ;;; _move_callstack
 ;;; Move the call stack up or down.
@@ -301,6 +333,11 @@ DEF_C_LAB (_ubfield)
     ret
 
 ;;; End wrapper: set size
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start

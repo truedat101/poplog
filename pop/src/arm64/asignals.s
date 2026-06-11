@@ -34,10 +34,45 @@ lconstant macro (
 >_#
 
         .file   "asignals.s"
-        .arch armv8-a
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
+    .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
 
 ;;; Wrapping in POP object
-        .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
         .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
@@ -46,20 +81,17 @@ EXTERN_NAME(__pop_errsig):
 
     ;;; reset_pop_environ
     ;;; Clear __pop_in_user_extern
-    adrp x0, EXTERN_NAME(__pop_in_user_extern)
-    add  x0, x0, :lo12:EXTERN_NAME(__pop_in_user_extern)
+    adr_l x0, EXTERN_NAME(__pop_in_user_extern)
     str  xzr, [x0]
 
     ;;; Restore USP from _userhi
-    adrp x0, I_LAB(_userhi)
-    add  x0, x0, :lo12:I_LAB(_userhi)
+    adr_l x0, I_LAB(_userhi)
     ldr  USP, [x0]
 
     ;;; FIXME: handle FPE handler
 
     ;;; Check saved_sp
-    adrp x0, SAVED_SP
-    add  x0, x0, :lo12:SAVED_SP
+    adr_l x0, SAVED_SP
     ldr  x1, [x0]
     cbz  x1, L0.done
     mov  sp, x1
@@ -85,8 +117,7 @@ DEF_C_LAB (_call_sys)
     ;;;
     ;;; Save entry sp (= x29 + 48) to saved_sp so __pop_errsig can recover.
     add  x10, x29, #48
-    adrp x9, SAVED_SP
-    add  x9, x9, :lo12:SAVED_SP
+    adr_l x9, SAVED_SP
     str  x10, [x9]
 
     ;;; Get the system call address and the argument count from user stack
@@ -155,8 +186,7 @@ L1.2:
     str  x0, [USP, #-8]!
 
     ;;; Clear saved_sp (mirror of original ARM32 contract: cleared between calls)
-    adrp x9, SAVED_SP
-    add  x9, x9, :lo12:SAVED_SP
+    adr_l x9, SAVED_SP
     str  xzr, [x9]
 
     ;;; Restore sp using x29 (frame pointer), which was set to sp at entry
@@ -183,8 +213,7 @@ DEF_C_LAB (_call_sys_se)
     ;;; x29 (FP) recovers sp on exit; entry sp = x29 + 48.
     ;;; Save entry sp to saved_sp for __pop_errsig.
     add  x10, x29, #48
-    adrp x9, SAVED_SP
-    add  x9, x9, :lo12:SAVED_SP
+    adr_l x9, SAVED_SP
     str  x10, [x9]
 
     ldr  x12, [USP], #8        ;;; syscall address
@@ -245,8 +274,7 @@ L1se.2:
 
     str  x0, [USP, #-8]!
 
-    adrp x9, SAVED_SP
-    add  x9, x9, :lo12:SAVED_SP
+    adr_l x9, SAVED_SP
     str  xzr, [x9]
 
     ;;; Recover sp via x29 (frame pointer) — preserved across the C call.
@@ -258,6 +286,11 @@ L1se.2:
     ret
 
 ;;; End wrapper: set size
-        .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
         .set Ltext_size, Ltext_end-Ltext_start

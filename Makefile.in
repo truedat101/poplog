@@ -22,12 +22,19 @@ POP_arch = @@POP_arch@@
 ifeq (${GFX_CONF},imgui)
 # Experimental native graphics backend (Dear ImGui + Metal, macOS); no X linked.
 # Glue: pop/extern/lib/imgui_backend.{h,mm}; ImGui vendored by ./tools/fetch-imgui.sh.
-# 'make gfx-smoke' (below) builds + links the whole stack into a window and
-# validates the toolchain end-to-end without a Poplog image.
-# TODO (basepop11 integration): compile the GFX objects into ${popexlib}, set
-# GFX_OBJECT so they fold into the Poplog link, and thread GFX_FRAMEWORKS through
-# pglink. Until that lands, an --experimental-gfx Poplog still builds -nox.
+# The GFX objects are compiled into ${popexlib} and folded into the Poplog
+# link via $POP_GFX_OBJECTS/$POP_GFX_LDFLAGS, which gen_link_command
+# (syscomp/os_comms.p, Darwin branch) writes into poplink_cmnd as lazy
+# shell expansions -- empty when unset, so non-gfx links are unaffected.
 XL_FLAG=-nox
+GFX_LINK_OBJS = ${popexlib}/imgui_backend.o ${popexlib}/imgui.o \
+                ${popexlib}/imgui_draw.o ${popexlib}/imgui_tables.o \
+                ${popexlib}/imgui_widgets.o ${popexlib}/imgui_impl_metal.o \
+                ${popexlib}/imgui_impl_osx.o
+GFX_LINK_LDFLAGS = -lc++ -framework Metal -framework MetalKit -framework Cocoa \
+                   -framework QuartzCore -framework GameController -framework Carbon
+export POP_GFX_OBJECTS = ${GFX_LINK_OBJS}
+export POP_GFX_LDFLAGS = ${GFX_LINK_LDFLAGS}
 else
 ifeq (${X_CONF},no)
 XL_FLAG=-nox
@@ -107,7 +114,7 @@ stamp_popc: ${popsys}/corepop stamp_dirs_and_symlinks ${SYSCOMP_SRC}
 	   -d -a=${POP_arch} popc poplibr poplink)
 	touch stamp_popc
 
-stamp_new_corepop: stamp_popc stamp_srclib ${popexlib}/libpop.a
+stamp_new_corepop: stamp_popc stamp_srclib ${popexlib}/libpop.a ${popexlib}/pop_seed_loader.o ${GFX_LINK_OBJS}
 	(cd ${popsys} && POP__cc="${CC} ${HASH_STYLE_OPT}"; \
 	    export POP__cc && \
 	    ${DO_COMMAND} ${PGLINK} -core && \
@@ -169,7 +176,7 @@ stamp_newpop: stamp_popc
 	touch stamp_newpop
 
 LIBPOP_CSRC = c_bignum c_callback c_core c_sysinit ext_arm \
-              pop_encoding pop_poll pop_stat pop_timer
+              pop_encoding pop_poll pop_stat pop_timer pop_vararg_fix
 
 LIBPOP_OBJS0 = $(addprefix ${popexlib}/, $(addsuffix .o, \
                 $(basename $(notdir ${LIBPOP_CSRC}))))
@@ -181,6 +188,26 @@ ${LIBPOP_OBJS0}: ${popexlib}/%.o: pop/extern/lib/%.c stamp_dirs_and_symlinks
 
 ${popexlib}/XtPoplog.o: pop/extern/lib/XtPoplog.c stamp_dirs_and_symlinks
 	$(CC) -c -g -Wall -O $(X_INCLUDES) $< -o $@
+
+${popexlib}/pop_seed_loader.o: pop/extern/lib/pop_seed_loader.c stamp_dirs_and_symlinks
+	$(CC) -c -g -Wall -O $< -o $@
+
+# GFX object compilation (only built when referenced -- GFX_CONF=imgui)
+${popexlib}/imgui_backend.o: pop/extern/lib/imgui_backend.mm stamp_dirs_and_symlinks
+	clang++ -std=c++17 -fobjc-arc -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui.o: ${GFX_IMGUI}/imgui.cpp stamp_dirs_and_symlinks
+	clang++ -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_draw.o: ${GFX_IMGUI}/imgui_draw.cpp stamp_dirs_and_symlinks
+	clang++ -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_tables.o: ${GFX_IMGUI}/imgui_tables.cpp stamp_dirs_and_symlinks
+	clang++ -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_widgets.o: ${GFX_IMGUI}/imgui_widgets.cpp stamp_dirs_and_symlinks
+	clang++ -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_impl_metal.o: ${GFX_IMGUI}/backends/imgui_impl_metal.mm stamp_dirs_and_symlinks
+	clang++ -std=c++17 -fobjc-arc -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_impl_osx.o: ${GFX_IMGUI}/backends/imgui_impl_osx.mm stamp_dirs_and_symlinks
+	clang++ -std=c++17 -fobjc-arc -O2 ${GFX_INCLUDES} -c $< -o $@
+
 
 ${popexlib}/libpop.a: ${LIBPOP_OBJS}
 	ar rc $@ $^
@@ -197,8 +224,8 @@ ${XPW_OBJS}: ${popexlib}/%.o: pop/x/Xpw/%.c ${XPW_HSRC} stamp_dirs_and_symlinks
 ${popexlib}/libXpw.so: ${XPW_OBJS}
 	$(CC) -g -shared -o $@ $^
 
-${popsys}/basepop11: ${popexlib}/libpop.a ${XPW_TARGETS} \
-                     stamp_popc stamp_vedlib
+${popsys}/basepop11: ${popexlib}/libpop.a ${XPW_TARGETS} ${GFX_LINK_OBJS} \
+                     stamp_popc stamp_vedlib ${popexlib}/pop_seed_loader.o
 	(cd ${popsys} && POP__cc="${CC}"; export POP__cc && \
 	   rm -f basepop11 clisp pml pop11 prolog ved xved && \
 	   ${DO_COMMAND} ${PGLINK} ${XL_FLAG} -map && \

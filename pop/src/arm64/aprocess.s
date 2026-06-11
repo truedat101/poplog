@@ -38,9 +38,44 @@ lconstant macro MOVFL   = "ldrb";
 
 >_#
 
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
     .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "aprocess.s"
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 
     /* --- Swap out (suspend) the live call stack into the process record ---
 
@@ -315,6 +350,9 @@ DEF_C_LAB (_swap_in_continue)
     b     si_test_finished
 
     .align 3
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 usrhi_lab:
     .xword I_LAB(_userhi)
 DEF_C_LAB (_ussave)
@@ -324,8 +362,7 @@ DEF_C_LAB (_usrestore)
     ldr   x0, [USP, #8]
     ldr   x1, [USP], #16
     cbz   x0, usr_done
-    adrp  x2, I_LAB(_userhi)
-    add   x2, x2, :lo12:I_LAB(_userhi)
+    adr_l  x2, I_LAB(_userhi)
     mov   x3, USP
     ldr   x2, [x2]
     sub   USP, USP, x0
