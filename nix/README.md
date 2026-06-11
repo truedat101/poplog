@@ -11,6 +11,30 @@ nix build .#poplog          # or: nix build path:$PWD#poplog in a non-git tree
 ./result/bin/ved file       # terminal VED
 ```
 
+## Use cases
+
+The flake exposes `packages`, `apps`, and a `devShell`:
+
+```sh
+# Run a language front-end directly (no checkout needed):
+nix run .#pop11             # or .#prolog .#clisp .#pml .#ved
+nix run .                   # bare run starts the Pop-11 REPL
+echo '6 * 7 =>' | nix run .#pop11        # ** 42
+
+# Ephemeral shell with every front-end on PATH:
+nix shell .#poplog -c pop11 myfile.p
+
+# Dev shell for hacking on Poplog sources:
+nix develop                 # pop11/clisp/prolog/pml/ved on PATH, $usepop set
+```
+
+Compiling a source file: use a front-end (`pop11 file.p`), not the bare
+`basepop11` -- run with no subsystem, `basepop11` looks for its own
+startup file and reports `basepop11.p` not found. `exload`/`exacc`
+(calling C from Pop) works from the store build: it shells out to the
+system compiler at run time, so a C toolchain must be on PATH (on macOS
+`/usr/bin/clang` always is).
+
 Supported systems: `x86_64-linux` and `aarch64-darwin` (both tested
 end-to-end: all four languages run from the store path), and
 `aarch64-linux` (seed vendored from a validated RPi5 build; flake
