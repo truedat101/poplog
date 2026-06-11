@@ -11,4 +11,7 @@ else
     sysctl -n machdep.cpu.brand_string 2>/dev/null | sed 's/^/cpu:    /'
 fi
 echo "engine: $ENGINE"
+# binfmt_misc silently runs foreign-arch binaries under qemu -- a wrong-arch
+# engine produces plausible-looking but meaningless numbers.  Always verify.
+echo "binary: $(file -b "$ENGINE" 2>/dev/null | cut -d, -f1-2)"
 "$ROOT/poplog" "$ENGINE" < "$ROOT/tools/bench-poplog.p" 2>&1 | grep -E ':|bench-done'
