@@ -10,7 +10,7 @@
 #_INCLUDE 'declare.ph'
 
 global constant
-        procedure stringin,
+        procedure (stringin, allbutfirst),
     ;
 
 global vars
@@ -65,9 +65,19 @@ define Init_arg_search(arg, dir_list, default_extn, nf_mess, app_p);
         arg sys_>< default_extn -> arg
     endif;
     if nam_sub /== 1 or dir_list == [] then
-        ;;; just try arg if it has a non-empty path component, or
-        ;;; dir_list is empty
-        #_< [^nullstring] >_# -> dir_list
+        ;;; arg has a non-empty path component (or there is no search
+        ;;; path): try it as given first
+        returnif(app_p(arg));
+        if nam_sub /== 1 and dir_list /== [] then
+            ;;; relocatable installations: a saved image records the
+            ;;; absolute paths of its base images as resolved at SAVE
+            ;;; time; if the tree has moved, fall back to searching
+            ;;; for the bare filename along dir_list (e.g. popsavepath)
+            allbutfirst(nam_sub fi_- 1, arg) -> arg
+        else
+            mishap(arg, 1, nf_mess);
+            sysexit()
+        endif
     endif;
 
     ;;; try dirs in order, applying -app_p- to each filename

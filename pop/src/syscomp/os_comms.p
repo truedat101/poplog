@@ -307,7 +307,8 @@ define os_library_command(option, o_lib, o_files);
 #_IF not(DEF SYSTEM_V or DEF HPUX or DEF OSF1 or DEF IRIX)
     ;;; run "ranlib"
     if option /== "x" and pop_status == 0 then
-        sysobey('/usr/bin/ranlib', ['ranlib' ^o_lib])
+        sysobey(systranslate('POP__ranlib') or '/usr/bin/ranlib',
+                ['ranlib' ^o_lib])
     endif;
 #_ENDIF
 
