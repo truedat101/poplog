@@ -28,6 +28,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <cstdio>
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -172,6 +173,46 @@ void pop_gfx_frame_end(void)
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(g_window);
+}
+
+/* Headless capture: render one frame of the retained canvas to the current
+ * GL framebuffer and read it back to a binary PPM (P6).  No window swap, so
+ * it works under the SDL "offscreen" video driver (EGL surfaceless) with Mesa
+ * llvmpipe -- i.e. no display, no GPU, no compositor.  This is the CI /
+ * regression primitive for the graphics stack on Linux.  Returns 1 on ok. */
+extern "C" int pop_gfx_render_to_ppm(const char *path)
+{
+    if (g_window == nullptr || path == nullptr)
+        return 0;
+    pop_gfx_poll();
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+    canvas_replay();
+    ImGui::Render();
+
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(g_window, &w, &h);
+    glViewport(0, 0, w, h);
+    glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glFinish();
+
+    std::vector<unsigned char> rgba((size_t) w * h * 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return 0;
+    fprintf(fp, "P6\n%d %d\n255\n", w, h);
+    /* GL origin is bottom-left; PPM is top-down -- flip rows. */
+    for (int y = h - 1; y >= 0; --y) {
+        const unsigned char *row = rgba.data() + (size_t) y * w * 4;
+        for (int x = 0; x < w; ++x)
+            fwrite(row + (size_t) x * 4, 1, 3, fp);   /* RGB, drop A */
+    }
+    fclose(fp);
+    return 1;
 }
 
 void pop_gfx_shutdown(void)

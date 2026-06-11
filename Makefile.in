@@ -103,7 +103,24 @@ gfx-smoke-sdl:
 	    ${GFX_IMGUI}/imgui_tables.cpp ${GFX_IMGUI}/imgui_widgets.cpp \
 	    ${GFX_IMGUI}/backends/imgui_impl_sdl3.cpp ${GFX_IMGUI}/backends/imgui_impl_opengl3.cpp \
 	    $(shell pkg-config --libs sdl3) -lGL -o gfx-smoke-sdl
-	@echo "Built ./gfx-smoke -- run it to open the window."
+	@echo "Built ./gfx-smoke-sdl -- run it to open the window."
+
+# Headless render harness (Linux/Unix): SDL3 offscreen (EGL surfaceless) +
+# OpenGL3, renders the scene to a PPM with NO display/GPU/compositor (Mesa
+# llvmpipe).  This is the CI / regression primitive -- see
+# tools/validate-gfx-headless.sh.  Usage:
+#   ./tools/fetch-imgui.sh && make gfx-headless && ./gfx-headless out.ppm
+.PHONY: gfx-headless
+gfx-headless:
+	@test -f ${GFX_IMGUI}/imgui.cpp || { echo "Run ./tools/fetch-imgui.sh first."; exit 1; }
+	${GFX_CXX} -std=c++17 -O2 \
+	    -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib $(shell pkg-config --cflags sdl3) \
+	    pop/extern/lib/imgui_backend_sdl.cpp pop/extern/lib/imgui_headless.cpp \
+	    ${GFX_IMGUI}/imgui.cpp ${GFX_IMGUI}/imgui_draw.cpp \
+	    ${GFX_IMGUI}/imgui_tables.cpp ${GFX_IMGUI}/imgui_widgets.cpp \
+	    ${GFX_IMGUI}/backends/imgui_impl_sdl3.cpp ${GFX_IMGUI}/backends/imgui_impl_opengl3.cpp \
+	    $(shell pkg-config --libs sdl3) -lGL -o gfx-headless
+	@echo "Built ./gfx-headless -- ./gfx-headless out.ppm renders with no display."
 
 # W^X JIT smoke test (PORTING-ARM64-M-SILICON-OSX.md Phase 4): JIT a tiny AArch64
 # function into MAP_JIT memory and call it -- proves the Apple-Silicon write->
