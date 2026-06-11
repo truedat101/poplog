@@ -11,6 +11,13 @@
 { lib, stdenv, system, self
 , ncurses, perl, patchelf
 , sigtool ? null
+# --- experimental native graphics (Dear ImGui) ---------------------------
+# withGraphics builds basepop11 with --experimental-graphics.  On Linux the
+# backend is SDL3 + OpenGL3 (imgui_backend_sdl.cpp); the ImGui source is a
+# fetchFromGitHub FOD because the sandbox has no network and the in-tree
+# pop/extern/imgui/ is gitignored.  macOS gfx (Metal) is not wired here yet.
+, withGraphics ? false
+, sdl3 ? null, libGL ? null, pkg-config ? null, imgui ? null
 }:
 
 let
@@ -23,7 +30,7 @@ let
   isDarwin = stdenv.isDarwin;
 in
 stdenv.mkDerivation {
-  pname = "poplog";
+  pname = "poplog" + lib.optionalString withGraphics "-gfx";
   version = "16.1-arm64";
 
   src = self;
@@ -33,8 +40,10 @@ stdenv.mkDerivation {
 
   nativeBuildInputs =
     lib.optionals (!isDarwin) [ patchelf ]
-    ++ lib.optionals (isDarwin && sigtool != null) [ sigtool ];
-  buildInputs = [ ncurses ];
+    ++ lib.optionals (isDarwin && sigtool != null) [ sigtool ]
+    ++ lib.optionals withGraphics [ pkg-config ];
+  buildInputs = [ ncurses ]
+    ++ lib.optionals withGraphics [ sdl3 libGL ];
 
   postPatch = ''
     patchShebangs scripts tools || true
@@ -54,7 +63,14 @@ stdenv.mkDerivation {
                --set-rpath "${stdenv.cc.libc}/lib" \
                target/pop/corepop
     ''}
-    ./configure --with_no_x
+    ${lib.optionalString withGraphics ''
+      # vendor the ImGui source (fetch-imgui.sh can't run -- no network);
+      # the tree is gitignored so it isn't in src=self.
+      mkdir -p pop/extern/imgui
+      cp -R ${imgui}/. pop/extern/imgui/
+      chmod -R u+w pop/extern/imgui
+    ''}
+    ./configure ${if withGraphics then "--experimental-graphics" else "--with_no_x"}
     runHook postConfigure
   '';
 
