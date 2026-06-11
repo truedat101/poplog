@@ -138,10 +138,11 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
         ;;; the Mach-O loader shim is the real main: it remaps __POPSEED
         ;;; RX in place and tail-calls _pop_seed_main (amain.s)
         nl_printf('$popexternlib/pop_seed_loader.o');
-        ;;; optional native graphics objects (empty unless the build
-        ;;; exports them -- see Makefile GFX_CONF=imgui)
-        nl_printf('$POP_GFX_OBJECTS');
 #_ENDIF
+        ;;; optional native graphics objects (empty unless the build exports
+        ;;; them -- Makefile GFX_CONF=imgui on macOS / imgui-sdl on Linux).
+        ;;; Safe on every platform: an unset env var expands to nothing.
+        nl_printf('$POP_GFX_OBJECTS');
                 out_obj_files(wobj_files);
 #_ELSE
         ;;; link command header string (defined in asmout.p)
@@ -169,10 +170,9 @@ define gen_link_command(exlink, link_cmnd, image_name, wobj_files, link_flags,
     ;;; pop library (must come before link_other since that will contain
     ;;; any X libraries)
     nl_printf('-lpop');
-#_IF DEF DARWIN
-    ;;; frameworks etc. for the optional graphics objects (empty unless set)
+    ;;; libs/frameworks for the optional graphics objects (empty unless set):
+    ;;; Metal/Cocoa frameworks on macOS, -lSDL3 -lGL on Linux (Makefile GFX_CONF)
     nl_printf('$POP_GFX_LDFLAGS');
-#_ENDIF
 
     out_obj_files(link_other);
 

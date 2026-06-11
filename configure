@@ -15,7 +15,9 @@ usage() {
   echo "  --with_motif      fail if no Motif"
   echo "  --with_xt         use X toolkit instead of Motif"
   echo "  --with_no_x       do not use X"
-  echo "  --experimental-gfx   experimental native ImGui+Metal graphics (macOS); implies no X"
+  echo "  --experimental-graphics  experimental native ImGui graphics; implies no X."
+  echo "                           Backend by OS: Metal+Cocoa (macOS), SDL3+OpenGL (Linux)."
+  echo "  --experimental-gfx       alias for --experimental-graphics"
   echo "  --with_packages   fail if package tree is missing"
 }
 
@@ -38,7 +40,9 @@ while [ "$*" != "" ] ; do
         --with_no_x)
            X_CONF=no
              ;;
-        --experimental-gfx)
+        --experimental-graphics|--experimental-gfx)
+           # "gfx requested"; the concrete backend is resolved by OS below
+           # (HOST_OS isn't known yet at option-parse time).
            GFX_CONF=imgui
            X_CONF=no
              ;;
@@ -76,6 +80,13 @@ fi
 
 
 HOST_OS=`uname -s`
+
+# Resolve the experimental-graphics backend by OS: Metal+Cocoa on macOS,
+# SDL3+OpenGL elsewhere (Metal is macOS-only).  --experimental-graphics
+# sets GFX_CONF=imgui as a "requested" marker; pick the real backend here.
+if [ "$GFX_CONF" = imgui ] && [ "$HOST_OS" != Darwin ]; then
+    GFX_CONF=imgui-sdl
+fi
 
 CC_LINK_OPTIONS="-Wl,-export-dynamic"
 if [ "$HOST_OS" = Darwin ]; then

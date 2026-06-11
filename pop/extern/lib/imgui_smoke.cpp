@@ -49,7 +49,7 @@ int main(int argc, const char **argv)
         if (!pop_gfx_frame_begin()) { pop_gfx_poll(); continue; }
 
         if (pop_gfx_begin("Hello from Pop-11")) {
-            pop_gfx_label("Native macOS graphics, no X server.");
+            pop_gfx_label("Native graphics: SDL3+OpenGL (Linux), Metal (macOS).");
             pop_gfx_label("The canvas behind me was drawn once and persists.");
             if (pop_gfx_button("Click me")) clicks++;
             checked = pop_gfx_checkbox("A checkbox", checked);
