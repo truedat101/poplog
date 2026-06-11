@@ -48,18 +48,25 @@ Poplog builds and runs natively on a growing set of platforms
 Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
 `PORTING-ARM64-M-SILICON-OSX.md`.
 
-### Build with Nix (flakes)
+## Packaging (Nix)
 
-A Nix flake builds the whole system from source on `x86_64-linux`,
-`aarch64-darwin`, and `aarch64-linux`:
+A self-contained **Nix flake** builds and bootstraps the whole system — all
+four languages and their saved images — from source, with no manual seed or
+toolchain setup.  Tested end-to-end on `x86_64-linux` and `aarch64-darwin`;
+`aarch64-linux` ships a vendored seed.
 
 ```sh
-nix build .#poplog      # then ./result/bin/{pop11,clisp,prolog,pml,ved}
-nix run  .#pop11        # or .#prolog / .#clisp / .#pml -- run a REPL directly
+nix build .#poplog          # build; then ./result/bin/{pop11,clisp,prolog,pml,ved}
+nix run   .#pop11           # run a REPL directly (or .#prolog / .#clisp / .#pml)
+nix shell .#poplog          # drop all five front-ends onto $PATH
+nix develop                 # dev shell for hacking on Poplog sources
+nix build .#poplog-gfx      # Linux: the experimental graphics build (SDL3 + OpenGL3)
 ```
 
-See [`nix/README.md`](nix/README.md) for more use cases (`nix shell`,
-`nix develop`) and the graphics variant.
+The flake exposes `packages`, `apps`, and a `devShell` for every supported
+system.  On macOS the build is signed ad-hoc with **no entitlements required**.
+Full details — use cases, the bootstrap-seed story, and the graphics variant —
+are in **[`nix/README.md`](nix/README.md)**.
 
 ## Native graphics (experimental)
 
