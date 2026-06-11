@@ -2060,6 +2060,23 @@ void _pop_cache_flush(char *ptr, unsigned long nbytes) {
         write(2, b, n);
         return;
     }
+    /* fast path: a range wholly inside the committed heap BELOW the
+       userstack limit page (the PROT_NONE guard sits AT _userhi) is
+       guaranteed mapped readable on both aliases -- flush directly.
+       This is the per-creation flush for every runtime procedure and
+       closure; the mach_vm_region walk below costs more than the
+       closure itself (M2 closures1M: 16cs walked vs ~4cs direct). */
+    {
+        extern unsigned long i__031userhi[] __asm__("i__031userhi");
+        char *userhi = (char *) i__031userhi[0];
+        if (view_base != (char *) 0
+            && ptr >= break_base && userhi != (char *) 0
+            && end <= userhi && end > ptr) {
+            sys_icache_invalidate(ptr, nbytes);
+            sys_icache_invalidate(ptr + ((unsigned long) 1 << 36), nbytes);
+            return;
+        }
+    }
     while (ptr < end) {
         mach_vm_address_t addr = (mach_vm_address_t) ptr;
         mach_vm_size_t size = 0;

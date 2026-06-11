@@ -10,7 +10,7 @@ across languages (`tools/bench-poplog.p`, `tools/bench-baseline.py`,
 
 | configuration | nfib29 | intloop10M | lists | compile500 | gc20 | closures1M | strings |
 |---|---|---|---|---|---|---|---|
-| Apple M2, arm64 macOS (this port) | 2 | 9 | 2 | 2 | 3 | 16 | 1 |
+| Apple M2, arm64 macOS (this port) | 2 | 5 | 1 | 2 | 3 | 3 | 1 |
 | Raspberry Pi 5, arm64 Linux | 2 | 12 | 3 | 1 | 4 | 4 | 0 |
 | i7-9700K, x86-64 Linux | 21 | 77 | 17 | 5 | 17 | 134 | 1 |
 | i7-9700K, **arm64 Poplog under qemu-aarch64** | 21 | 79 | 17 | 4 | 16 | 131 | 1 |
@@ -31,7 +31,7 @@ backend: the $80 Pi 5 matches the M2 and beats the i7 build 7-30x.
 
 | configuration | nfib29 | intloop10M | lists | compile500 | gc20 | closures1M |
 |---|---|---|---|---|---|---|
-| M2: Poplog | 2 | 9 | 2 | 2 | 3 | 16 |
+| M2: Poplog | 2 | 5 | 1 | 2 | 3 | 3 |
 | M2: Python 3.14 | 7 | 29 | 7 | 1 | 1 | 5 |
 | M2: Perl 5.34 | 19 | 19 | - | - | - | - |
 | Pi5: Poplog | 2 | 12 | 3 | 1 | 4 | 4 |
@@ -54,10 +54,10 @@ Reading guide:
   more than halves call cost vs 3.10 on the same i7 (13 -> 5 with the
   uv-managed PGO/LTO build; the unoptimized Nix build measured 7).
   Compare within a machine, and note the interpreter build.
-* Python wins `gc20`/`closures1M` in places: refcounting makes
-  `gc.collect()` cheap on an acyclic heap, and the M2 Poplog closure
-  cost is a known macOS issue (per-creation icache flush via
-  `mach_vm_region` walk -- see the perf TODO), as the Pi5's 4 shows.
+* Python wins `gc20` in places: refcounting makes `gc.collect()`
+  cheap on an acyclic heap.  (An earlier M2 closures1M of 16 was the
+  per-creation icache flush doing a `mach_vm_region` walk; the direct
+  dual-alias fast path for in-heap ranges brought it to 3.)
 
 ## Reproducing
 
