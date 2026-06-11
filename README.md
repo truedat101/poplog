@@ -21,6 +21,79 @@ compilers for all the languages.  There is substantial AI and teaching
 material using Poplog, some included in this repository, some
 in separate packages repository, some available on the net.
 
+---
+
+## The four languages, live
+
+All four incremental compilers share one virtual machine and one saved image,
+and interoperate freely.  Captured from the Apple Silicon (macOS) build:
+
+| Pop-11 — the core language | Prolog — Edinburgh syntax |
+| :---: | :---: |
+| ![Pop-11 REPL](docs/images/repl-pop11.png) | ![Prolog REPL](docs/images/repl-prolog.png) |
+| **Common Lisp — CLTL2** | **Standard ML — type inference** |
+| ![Common Lisp REPL](docs/images/repl-clisp.png) | ![Standard ML REPL](docs/images/repl-pml.png) |
+
+## Platforms
+
+Poplog builds and runs natively on a growing set of platforms
+(status as of June 2026):
+
+| OS | Architecture | Status | Notes |
+| --- | --- | --- | --- |
+| **Linux** | x86-64 | ✅ Supported | Reference platform |
+| **Linux** | AArch64 (ARM64) | ✅ Supported | Validated on Raspberry Pi 5 — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so it ports readily to other ARM64 boards (MediaTek Genio, Qualcomm Snapdragon) |
+| **macOS** | Apple Silicon (arm64) | ✅ Supported | Native Mach-O port — self-hosting, all four languages, terminal VED, C↔Pop callbacks, and native graphics |
+
+Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
+`PORTING-ARM64-M-SILICON-OSX.md`.
+
+### Build with Nix (flakes)
+
+A Nix flake builds the whole system from source on `x86_64-linux`,
+`aarch64-darwin`, and `aarch64-linux`:
+
+```sh
+nix build .#poplog      # then ./result/bin/{pop11,clisp,prolog,pml,ved}
+nix run  .#pop11        # or .#prolog / .#clisp / .#pml -- run a REPL directly
+```
+
+See [`nix/README.md`](nix/README.md) for more use cases (`nix shell`,
+`nix develop`) and the graphics variant.
+
+## Native graphics (experimental)
+
+Historically Poplog's graphics were tied to the X window system (Xpw / `xved`).
+There is now an **optional native graphics backend** built on
+[Dear ImGui](https://github.com/ocornut/imgui), selected at build time with
+`./configure --experimental-graphics` (it implies "no X"):
+
+* **macOS** — Metal + Cocoa: a native window with no X server or XQuartz.
+* **Linux / Unix** — SDL3 + OpenGL3.  SDL3 selects the display transport at run
+  time — **Wayland**, X11, or KMS/DRM — so there is **no hard X11 dependency**;
+  it also renders **headless** via Mesa software (llvmpipe) for CI.
+
+The classic `rc_graphic` turtle library and `rc_mouse` are ported onto it, so
+existing Pop-11 graphics code runs unchanged.  Graphics are strictly **opt-in**:
+the default build (and `nix build .#poplog`) is console-only.
+
+| `rc_graphic` turtle on macOS (Metal) | Headless render on Linux (SDL3 + llvmpipe, no display) |
+| :---: | :---: |
+| ![macOS native graphics](docs/images/graphics-macos.png) | ![Linux headless graphics](docs/images/graphics-linux-headless.png) |
+
+The right-hand image was rendered on Linux with **no display, GPU, or
+compositor** (`tools/validate-gfx-headless.sh`) — the reproducible CI gate for
+the graphics stack.
+
+## Performance
+
+Poplog's incremental compilers emit fast native code on every backend.  For
+cross-platform and cross-language benchmark numbers (x86-64, Apple M-series,
+Raspberry Pi 5, with Python and Perl baselines for context), see
+**[BENCHMARKS.md](BENCHMARKS.md)**.
+
+---
+
 This is cleaned up version of Poplog sources, currently only
 core part.  It misses binary needed for bootstrap and extensions
 (packages).  Packages are in separate repository:
@@ -37,12 +110,9 @@ There is buildable tarball for Intel/AMD 64-bit Linux at
 
 (this build version does not include newest changes to repository).
 
-An **AArch64 (ARM64) Linux** port is also available, developed and validated on
-the **Raspberry Pi 5**: all four languages (Pop-11, Prolog, Common Lisp,
-Standard ML) run and report errors, and all three saved images build.  It is
-written to the generic `armv8-a` baseline (no core-specific tuning) and flushes
-the instruction cache via `__clear_cache`, so it should port readily to other
-AArch64 Linux boards (e.g. MediaTek Genio, Qualcomm Snapdragon) -- the main
+The **AArch64 Linux** port (see the Platforms table above) is written to the
+generic `armv8-a` baseline and flushes the instruction cache via
+`__clear_cache`, so it ports readily to other ARM64 boards -- the main
 platform-specific knob is the kernel **page size** (saved images are
 page-aligned; the Pi 5 uses 16 KB pages).  See `PORTING-ARM64-LINUX-RPI5.md`
 (and its "Portability to other AArch64 platforms" section) for details.
