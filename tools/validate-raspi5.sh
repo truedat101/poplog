@@ -125,6 +125,17 @@ else
     printf '  [SKIP] interactive PTY test (no `script` util)\n'
 fi
 
+echo "-- gate 8: external-call FP ABI (multi-float exacc) --"
+# Guards the two aarch64 FP-argument marshalling fixes (NOTES-FOR-
+# MAINTAINERS A10): the f_reg register-buffer stride and the boxed-
+# ddecimal read offset.  Both were latent on arm64 Linux too -- every
+# external call passing 2+ floats/doubles was wrong (pow(2,10) -> 1,
+# cbrt(27) -> 0) until fixed.  No X/graphics here, so this is the only
+# coverage of the float FFI path on the console ladder.  (exload shells
+# out to the C toolchain at run time, so cc must be on PATH.)
+OUT=$(timeout 30 "${POP[@]}" tools/ffi-float-regression.p 2>&1)
+gate "FFI float regression (pow/atan2/hypot/cbrt)" 'FFI-FLOAT-REGRESSION-PASSED'
+
 echo
 echo "== summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ] && echo "   PORT VALIDATED (console core)." || echo "   VALIDATION FAILED."

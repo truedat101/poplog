@@ -136,6 +136,19 @@ if [ -f psv/prolog.psv ]; then
     gate "interactive ?- toplevel (r = 14)" 'r *= *14'
 else printf '  [SKIP] prolog PTY gate\n'; fi
 
+echo "-- gate 8: external-call FP ABI (multi-float exacc) --"
+# Guards the two aarch64 FP-argument marshalling fixes (NOTES-FOR-
+# MAINTAINERS A10).  Needs a linked basepop11 (corepop can't resolve
+# libm) and a C toolchain for exload (macOS /usr/bin/clang always is);
+# the rc_graphic path (tools/validate-gfx.sh) exercises the same float
+# FFI surface when a gfx build is present.
+if [ -x target/pop/basepop11 ]; then
+    OUT=$(tmo 30 ./poplog target/pop/basepop11 "$ROOT/tools/ffi-float-regression.p" 2>&1)
+    gate "FFI float regression (pow/atan2/hypot/cbrt)" 'FFI-FLOAT-REGRESSION-PASSED'
+else
+    printf '  [SKIP] FFI float regression (no linked basepop11 in build tree)\n'
+fi
+
 echo
 echo "== summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ] && echo "   PORT VALIDATED (console core)." || echo "   VALIDATION INCOMPLETE."
