@@ -121,6 +121,39 @@ recorded path is missing.  This is what makes store/packaged installs
 `/usr/bin/ranlib` was hardcoded (POP__as/POP__ar already had env
 overrides).  Needed by any hermetic build environment.
 
+### A10. ext_arm.c: two FP-argument marshalling bugs (all arm64)
+`pop/extern/lib/ext_arm.c` -- both latent on arm64 Linux too; they
+only bite when an external call passes **two or more** floating-point
+arguments, which almost nothing in the core does.  The native graphics
+layer (many `float` coordinates per call) is the first heavy user and
+exposed both.  A direct regression is `tools/ffi-float-regression.p`
+(`pow`/`atan2`/`hypot`/`cbrt`); it fails on either bug.
+
+* **f_reg register-buffer stride.**  The hand-written caller
+  (`pop/src/arm64/aextern.s`) loads `d0`-`d7` from the register buffer
+  at a **16-byte** stride -- it reserves `8*16` bytes, the full q0-q7
+  vector-register width (its own "8*8 + 8*16 = 192 byte" comment).  But
+  `reg_buff` declared `double f_reg[8]` at an **8-byte** stride, so `d1`
+  read slot 2, `d2` read slot 4, ... and *every other* FP argument was
+  silently dropped.  `pow(2,10)` came back `pow(2,0)=1`.  Fix: make each
+  FP slot 16 bytes wide (`struct { double d; uint64_t _pad; } f_reg[8]`).
+
+* **boxed-ddecimal read offset.**  A ddecimal's 64-bit double `DD_1`
+  lies two words before the structure pointer (layout
+  `word DD_1; full KEY; >->` in `syscomp/symdefs.p`; `KEY` is the
+  `ai[-1]` word the A2 type-byte read already relies on).
+  `x86_64/aextern.s` reads it as `_DD_1(ptr) = @@DD_1`; this code read
+  at **offset 0** instead -- the *following* heap object's first word --
+  so every `double`-valued external argument read the wrong value
+  (`cbrt(27)` -> `0`).  Fix: read at `ai - 2*sizeof(uint64_t)`.
+
+The Pop-side type spec matters too: Poplog passes (d)decimals as
+**double** by default (REF * EXTERNAL 5.2), so a C glue routine taking
+ANSI `float` needs each such argument flagged `<SF>` -- `popgfx.p` now
+does this for every coordinate.  (A2 noted "ddecimal float arguments
+have never worked on arm64"; A10 is the rest of that story -- with A2 +
+A10 + `<SF>`, single and double FP arguments both pass correctly.)
+
 ---
 
 ## B. Performance: both backends are good; here is the data
