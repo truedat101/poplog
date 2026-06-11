@@ -132,13 +132,16 @@ its current state:
 
 -- Keeping the window alive, and finishing ----------------------------
 
-While Pop-11 is computing, the window is repainted after every drawing
-operation.  Once you stop drawing, call
+The window is repainted after every drawing operation, but ONLY while
+Pop-11 is executing -- while the REPL waits for your next command the
+window is frozen (it will not redraw or respond to clicks).  Whenever
+you want to look at the picture or interact with the window, call
 
     rc_pump(300);
 
-to keep the window responsive for about 3 seconds (or call it in a
-loop).  When you are done:
+to keep it live for about 3 seconds (or longer).  Your drawing
+accumulates on a retained canvas, so it is never lost between pumps.
+When you are done:
 
     rc_finish();
 

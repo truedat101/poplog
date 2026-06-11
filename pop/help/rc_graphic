@@ -112,6 +112,12 @@ rc_pump(HSECS)
     Native-only: keep the window responsive for about HSECS
     hundredths of a second after drawing has finished.
 
+    IMPORTANT (interactive use): the window is rendered ONLY while
+    Pop-11 is drawing or pumping.  Between commands at the REPL the
+    window is frozen and will not respond to clicks or expose events;
+    if your picture seems missing, run rc_pump(200) -- drawing
+    accumulates on a retained canvas, so nothing is lost.
+
 
 -- See also -----------------------------------------------------------
 

@@ -178,7 +178,11 @@ define rc_new_window(width, height, xloc, yloc, setframe);
         mishap(0, 'rc_graphic: CANNOT OPEN GRAPHICS WINDOW')
     endunless;
     true ->> gfx_live -> rc_window;
-    gfx_step() -> ;
+    ;;; settle the freshly created window: the Metal layer needs a few
+    ;;; pumped frames before presented content reliably appears
+    ;;; (matters interactively, where only one frame per drawing call
+    ;;; follows)
+    gfx_run(15);
 enddefine;
 
 define rc_clear_window();
