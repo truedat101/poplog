@@ -39,7 +39,7 @@ backend: the $80 Pi 5 matches the M2 and beats the i7 build 7-30x.
 | Pi5: Perl 5.40 | 93 | 82 | - | - | - | - |
 | i7: Poplog (x86-64) | 21 | 77 | 17 | 5 | 17 | 134 |
 | i7: Python 3.10 | 13 | 39 | 9 | 1 | 1 | 7 |
-| i7: Python 3.13 | 7 | 39 | 9 | 1 | 1 | 6 |
+| i7: Python 3.13 (uv/PGO build) | 5 | 38 | 8 | 1 | 1 | 5 |
 | i7: Perl 5.34 | 19 | 16 | - | - | - | - |
 
 Reading guide:
@@ -50,8 +50,10 @@ Reading guide:
   builds bytecode, so its parity there is the stronger result.
 * **On x86-64, Poplog loses to Python and Perl** -- consistent with the
   QEMU finding: the x86_64 backend is the outlier, not the machine.
-* Python versions matter: 3.13's specializing interpreter halves call
-  cost vs 3.10 on the same i7 (13 -> 7).  Compare within a machine.
+* Python versions AND builds matter: 3.13's specializing interpreter
+  more than halves call cost vs 3.10 on the same i7 (13 -> 5 with the
+  uv-managed PGO/LTO build; the unoptimized Nix build measured 7).
+  Compare within a machine, and note the interpreter build.
 * Python wins `gc20`/`closures1M` in places: refcounting makes
   `gc.collect()` cheap on an acyclic heap, and the M2 Poplog closure
   cost is a known macOS issue (per-creation icache flush via
@@ -60,7 +62,7 @@ Reading guide:
 ## Reproducing
 
     ./tools/bench-poplog.sh                  # any built Poplog tree
-    python3 tools/bench-baseline.py
+    python3 tools/bench-baseline.py          # or: uv run --python 3.13 tools/bench-baseline.py
     perl tools/bench-baseline.pl
     # qemu (binfmt-mediated): QEMU_LD_PREFIX=<sysroot> <foreign binary> < tools/bench-poplog.p
 
