@@ -11,9 +11,10 @@ nix build .#poplog          # or: nix build path:$PWD#poplog in a non-git tree
 ./result/bin/ved file       # terminal VED
 ```
 
-Supported systems: `x86_64-linux` (tested), `aarch64-linux` (seed
-pending), `aarch64-darwin` (experimental: codesign/entitlement story
-under Nix not yet exercised).
+Supported systems: `x86_64-linux` (tested end-to-end),
+`aarch64-linux` (seed vendored from a validated RPi5 build; flake
+untested -- no Nix host yet), `aarch64-darwin` (experimental:
+codesign/entitlement story under Nix not yet exercised).
 
 ## Bootstrap seeds
 
