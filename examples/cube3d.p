@@ -40,7 +40,13 @@ define lconstant project(v, ay, ax);
     CY - y2 * f * SCALE                             ;;; sy (screen +y is down)
 enddefine;
 
-lvars angle = 20, i, e, pts;
+;;; Smooth spin: the backend presents with vsync (SDL_GL swap-interval 1 /
+;;; CAMetalLayer), so gfx_step() already paces the loop to the display refresh.
+;;; We therefore add NO extra sleep and advance by a fixed, small step each
+;;; refreshed frame -- constant angular velocity, hence smooth.  (An added
+;;; syssleep would beat against vsync -- frames landing 2 or 3 refreshes apart
+;;; -- and visibly judder, which is what this demo used to do.)
+lvars angle = 20.0, i, e, pts;
 repeat
     gfx_clear();
     {% for i from 1 to 8 do project(verts(i), angle, 25) endfor %} -> pts;
@@ -49,8 +55,8 @@ repeat
         gfx_line(pts(a*2-1), pts(a*2), pts(b*2-1), pts(b*2), fg, 2)
     endfor;
     quitunless(gfx_step());
-    angle + 2 -> angle;
-    syssleep(3)
+    angle + 1.0 -> angle;               ;;; ~60 deg/s at 60 Hz (a turn every 6 s)
+    if angle >= 360.0 then angle - 360.0 -> angle endif
 endrepeat;
 
 gfx_shutdown();
