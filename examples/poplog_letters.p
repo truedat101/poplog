@@ -2,7 +2,11 @@
  * where each big letter is itself drawn out of small copies of that letter.
  * (Big "P" made of little "P"s, big "O" of little "O"s, ...)
  *
- * Run:  ./poplog ./target/pop/basepop11 examples/poplog_letters.p
+ * Needs a graphics build (./configure --experimental-graphics, or
+ * `nix build .#poplog-gfx`).  Run from the Poplog source tree with:
+ *     ./poplog ./target/pop/basepop11 examples/poplog_letters.p
+ * or, with a graphics build's front-end on PATH:
+ *     pop11 examples/poplog_letters.p
  */
 
 uses popgfx;

@@ -4,7 +4,11 @@
  * black, portrait screen, no pixels.  This is a mock Minestorm/Asteroids
  * scene -- HUD, player ship, drifting rocks, and shots -- all in line art.
  *
- * Run:  ./poplog ./target/pop/basepop11 examples/vectrex.p
+ * Needs a graphics build (./configure --experimental-graphics, or
+ * `nix build .#poplog-gfx`).  Run from the Poplog source tree with:
+ *     ./poplog ./target/pop/basepop11 examples/vectrex.p
+ * or, with a graphics build's front-end on PATH:
+ *     pop11 examples/vectrex.p
  */
 
 uses popgfx;

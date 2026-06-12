@@ -23,3 +23,11 @@ Each opens a window that stays up for about a minute, or until you close it.
 | `vectrex.p` | A concept "screenshot" for a [Vectrex](https://en.wikipedia.org/wiki/Vectrex)-style vector game (Asteroids/Minestorm): HUD, ship, drifting rocks, shots. |
 | `rc_square.p` | Minimal `rc_graphic` turtle demo — a square. |
 | `rc_spiral.p` | `rc_graphic` turtle spiral. |
+
+### Gallery
+
+| 10 PRINT | POPLOG (letters of letters) | 3D cube |
+| :---: | :---: | :---: |
+| ![10 PRINT](../docs/images/ex-tenprint.png) | ![POPLOG](../docs/images/ex-poplog-letters.png) | ![3D cube](../docs/images/ex-cube3d.png) |
+| **Impossible triangle** | **Vectrex concept** | |
+| ![Impossible triangle](../docs/images/ex-impossible-triangle.png) | ![Vectrex](../docs/images/ex-vectrex.png) | |

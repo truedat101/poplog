@@ -92,6 +92,14 @@ The right-hand image was rendered on Linux with **no display, GPU, or
 compositor** (`tools/validate-gfx-headless.sh`) — the reproducible CI gate for
 the graphics stack.
 
+A few runnable demos live in [`examples/`](examples/) (`pop11
+examples/tenprint.p` on a graphics build) — for instance the classic
+[10 PRINT](https://10print.org/) maze and "POPLOG" drawn out of small letters:
+
+| `examples/tenprint.p` | `examples/poplog_letters.p` |
+| :---: | :---: |
+| ![10 PRINT maze](docs/images/ex-tenprint.png) | ![POPLOG in letters](docs/images/ex-poplog-letters.png) |
+
 ## Performance
 
 Poplog's incremental compilers emit fast native code on every backend.  For

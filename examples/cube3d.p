@@ -4,7 +4,11 @@
  * applies a perspective projection, and redraws.  Demonstrates per-frame
  * animation on the retained canvas (gfx_clear / gfx_step).
  *
- * Run:  ./poplog ./target/pop/basepop11 examples/cube3d.p
+ * Needs a graphics build (./configure --experimental-graphics, or
+ * `nix build .#poplog-gfx`).  Run from the Poplog source tree with:
+ *     ./poplog ./target/pop/basepop11 examples/cube3d.p
+ * or, with a graphics build's front-end on PATH:
+ *     pop11 examples/cube3d.p
  */
 
 uses popgfx;

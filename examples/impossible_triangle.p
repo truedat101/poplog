@@ -3,7 +3,11 @@
  * Three identical beams, each rotated 120 deg about the centre, each drawn so
  * its far end overlaps the next beam -- a loop that cannot exist in 3D.
  *
- * Run:  ./poplog ./target/pop/basepop11 examples/impossible_triangle.p
+ * Needs a graphics build (./configure --experimental-graphics, or
+ * `nix build .#poplog-gfx`).  Run from the Poplog source tree with:
+ *     ./poplog ./target/pop/basepop11 examples/impossible_triangle.p
+ * or, with a graphics build's front-end on PATH:
+ *     pop11 examples/impossible_triangle.p
  */
 
 uses popgfx;

@@ -6,7 +6,11 @@
  * maze (see https://10print.org/).  Here each grid cell gets a random
  * "/" or "\", drawn as a line.
  *
- * Run:  ./poplog ./target/pop/basepop11 examples/tenprint.p
+ * Needs a graphics build (./configure --experimental-graphics, or
+ * `nix build .#poplog-gfx`).  Run from the Poplog source tree with:
+ *     ./poplog ./target/pop/basepop11 examples/tenprint.p
+ * or, with a graphics build's front-end on PATH:
+ *     pop11 examples/tenprint.p
  */
 
 uses popgfx;
