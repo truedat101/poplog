@@ -13,9 +13,11 @@
 , sigtool ? null
 # --- experimental native graphics (Dear ImGui) ---------------------------
 # withGraphics builds basepop11 with --experimental-graphics.  On Linux the
-# backend is SDL3 + OpenGL3 (imgui_backend_sdl.cpp); the ImGui source is a
-# fetchFromGitHub FOD because the sandbox has no network and the in-tree
-# pop/extern/imgui/ is gitignored.  macOS gfx (Metal) is not wired here yet.
+# backend is SDL3 + OpenGL3 (imgui_backend_sdl.cpp); on macOS it is Metal +
+# Cocoa (imgui_backend.mm), whose frameworks come from the Darwin stdenv SDK
+# (no extra derivations).  Either way the ImGui source is a fetchFromGitHub
+# FOD because the sandbox has no network and the in-tree pop/extern/imgui/ is
+# gitignored.
 , withGraphics ? false
 , sdl3 ? null, libGL ? null, pkg-config ? null, imgui ? null
 }:
@@ -41,9 +43,11 @@ stdenv.mkDerivation {
   nativeBuildInputs =
     lib.optionals (!isDarwin) [ patchelf ]
     ++ lib.optionals (isDarwin && sigtool != null) [ sigtool ]
-    ++ lib.optionals withGraphics [ pkg-config ];
+    # SDL3 is found via pkg-config on Linux; macOS links frameworks directly
+    ++ lib.optionals (withGraphics && !isDarwin) [ pkg-config ];
   buildInputs = [ ncurses ]
-    ++ lib.optionals withGraphics [ sdl3 libGL ];
+    # Linux gfx: SDL3 + OpenGL.  macOS gfx: Metal/Cocoa come from the stdenv SDK.
+    ++ lib.optionals (withGraphics && !isDarwin) [ sdl3 libGL ];
 
   postPatch = ''
     patchShebangs scripts tools || true

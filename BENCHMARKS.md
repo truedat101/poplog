@@ -42,6 +42,25 @@ The environment is not pinned (no CPU isolation, fixed governor, or thermal
 control); results are intended for **within-machine, cross-engine** comparison,
 not cross-machine ranking.
 
+### Platform coverage
+
+The three machines above are what this report measures. For completeness, the
+full set of platforms Poplog targets (or has historically targeted) — including
+the ones not yet ported or benchmarked in this fork — is:
+
+| Platform | Architecture | Port status | Benchmarked here |
+|---|---|---|---|
+| Linux | x86-64 | ✅ Supported (reference) | ✅ i7 |
+| macOS | Apple Silicon (arm64) | ✅ Supported (this port) | ✅ M2 |
+| Linux | AArch64 / `armv8-a` | ✅ Supported (RPi 5) | ✅ Pi 5 |
+| Linux | ARM32 (`armv7`/`armv6`, RPi 3) | 🚧 TODO — not yet ported | — TODO — |
+| Solaris | SPARC (v8/v9) | 🚧 TODO — classic Poplog platform; historical academic ports, not yet revived in this fork | — TODO — |
+
+The TODO rows are listed deliberately: they are real Poplog targets (32-bit ARM
+and SPARC/Solaris both have heritage in the codebase), they just have no
+**native** build or benchmark in this fork yet, so every measured column for
+them reads *TODO* rather than a number.
+
 ---
 
 ## Methodology

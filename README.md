@@ -44,6 +44,12 @@ Poplog builds and runs natively on a growing set of platforms
 | **Linux** | x86-64 | ✅ Supported | Reference platform |
 | **Linux** | AArch64 (ARM64) | ✅ Supported | Validated on Raspberry Pi 5 — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so it ports readily to other ARM64 boards (MediaTek Genio, Qualcomm Snapdragon) |
 | **macOS** | Apple Silicon (arm64) | ✅ Supported | Native Mach-O port — self-hosting, all four languages, terminal VED, C↔Pop callbacks, and native graphics |
+| **Linux** | ARM32 (`armv7`/`armv6`) | 🚧 TODO | Raspberry Pi 3 / 32-bit ARM — not yet ported |
+| **Solaris** | SPARC (v8/v9) | 🚧 TODO | Classic Poplog platform; historical academic ports, not yet revived in this fork |
+
+The 🚧 rows are real Poplog targets with no native build in this fork yet — see
+the [platform-coverage table in BENCHMARKS.md](BENCHMARKS.md#platform-coverage)
+for how they show up (TODO) across the benchmark columns.
 
 Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
 `PORTING-ARM64-M-SILICON-OSX.md`.
@@ -60,13 +66,18 @@ nix build .#poplog          # build; then ./result/bin/{pop11,clisp,prolog,pml,v
 nix run   .#pop11           # run a REPL directly (or .#prolog / .#clisp / .#pml)
 nix shell .#poplog          # drop all five front-ends onto $PATH
 nix develop                 # dev shell for hacking on Poplog sources
-nix build .#poplog-gfx      # Linux: the experimental graphics build (SDL3 + OpenGL3)
+nix build .#poplog-gfx      # experimental graphics: Metal on macOS, SDL3+OpenGL3 on Linux
 ```
 
 The flake exposes `packages`, `apps`, and a `devShell` for every supported
 system.  On macOS the build is signed ad-hoc with **no entitlements required**.
-Full details — use cases, the bootstrap-seed story, and the graphics variant —
-are in **[`nix/README.md`](nix/README.md)**.
+
+**First-build cost:** Nix builds the whole toolchain closure from source, so
+the first build pulls **~1.1 GB** of cached dependencies and lands a **~1.2 GiB**
+on-disk closure (the Poplog out-path is ~95 MB; the rest is shared deps), taking
+a couple of minutes to build.  Subsequent builds of the same source fetch
+nothing.  Full details — use cases, costs, the bootstrap-seed story, and the
+graphics variant — are in **[`nix/README.md`](nix/README.md)**.
 
 ## Native graphics (experimental)
 

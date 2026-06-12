@@ -11,6 +11,24 @@ nix build .#poplog          # or: nix build path:$PWD#poplog in a non-git tree
 ./result/bin/ved file       # terminal VED
 ```
 
+## Build cost (first build)
+
+Nix builds Poplog **and its toolchain closure** from source, substituting
+prebuilt dependencies from the binary cache. Budget for it the first time:
+
+* **Download** — roughly **~1.1 GB** of dependencies (clang/stdenv, ncurses,
+  perl; plus SDL3 + Mesa for `poplog-gfx` on Linux, or the ImGui FOD).
+  Cached afterward — rebuilding the same source fetches nothing.
+* **Disk** — the realized runtime closure is **~1.2 GiB** (the Poplog
+  out-path itself is only ~95 MB; the rest is the shared dependency closure
+  that other Nix builds reuse).
+* **Time** — about **2 minutes** of build on a fast machine (Poplog
+  bootstraps from the seed `corepop`, then builds the four language images),
+  plus the one-time download.
+
+A *source* edit re-runs the full bootstrap — the build is not incremental
+across `nix build`. For iterative hacking use `nix develop` (below).
+
 ## Use cases
 
 The flake exposes `packages`, `apps`, and a `devShell`:
@@ -36,33 +54,46 @@ system compiler at run time, so a C toolchain must be on PATH (on macOS
 `/usr/bin/clang` always is).
 
 Supported systems: `x86_64-linux` and `aarch64-darwin` (both tested
-end-to-end: all four languages run from the store path), and
-`aarch64-linux` (seed vendored from a validated RPi5 build; flake
-untested -- no aarch64-linux Nix host yet).
+end-to-end: all four languages run from the store path — and the
+`poplog-gfx` graphics variant builds on both), and `aarch64-linux` (seed
+vendored from a validated RPi5 build; flake untested -- no aarch64-linux
+Nix host yet).
 
 macOS note: no entitlements are required -- the W^X machinery uses
 mach_vm_remap + mprotect on anonymous pages, not MAP_JIT, so the
 linker's ad-hoc signature suffices (the link epilogue refreshes it
 when a codesign is available, and tolerates its absence).
 
-## Experimental graphics (Linux)
+## Experimental graphics
 
-`packages.<linux>.poplog-gfx` builds basepop11 with the native graphics
-backend (`--experimental-graphics` -> Dear ImGui + SDL3 + OpenGL3).  The
-ImGui source is fetched as a `fetchFromGitHub` FOD; SDL3 (3.2.20) is why
-the flake pins nixpkgs 25.05.
+`poplog-gfx` builds basepop11 with the native graphics backend
+(`--experimental-graphics` -> Dear ImGui).  It is provided for **every
+supported system**; `./configure` picks the backend per platform:
+
+* **macOS** (`aarch64-darwin`) — **Metal + Cocoa**.  The frameworks come from
+  the Darwin stdenv SDK, so no extra inputs are needed; the binary links
+  `Metal`/`MetalKit`/`Cocoa`/`QuartzCore`/`GameController`.
+* **Linux** — **SDL3 + OpenGL3**.  SDL3 (3.2.20) is why the flake pins
+  nixpkgs 25.05.
+
+Either way the ImGui source is fetched as a `fetchFromGitHub` FOD (the
+in-tree `pop/extern/imgui/` is gitignored and the sandbox has no network).
 
 ```sh
-nix build .#poplog-gfx          # Linux only (Metal backend on macOS is separate)
-nm result/poplog/target/pop/basepop11 | grep -c pop_gfx   # -> 27
+nix build .#poplog-gfx          # Metal on macOS, SDL3 + OpenGL3 on Linux
+nm result/poplog/target/pop/basepop11 | grep -c pop_gfx   # 26 (Metal) / 27 (SDL3)
+otool -L result/poplog/target/pop/basepop11 | grep Metal   # macOS: framework linked
 echo "uses rc_graphic; rc_start();" | result/bin/pop11     # opens a window
 ```
 
-The binary links nix's `libSDL3` + `libglvnd`; **SDL3 picks the display
-transport at run time** (Wayland if `WAYLAND_DISPLAY`, else X11, else
+On **macOS** the graphics binary links the system Metal/Cocoa frameworks and
+just runs — no driver injection or display server to arrange.
+
+On **Linux** the binary links nix's `libSDL3` + `libglvnd`; **SDL3 picks the
+display transport at run time** (Wayland if `WAYLAND_DISPLAY`, else X11, else
 `kmsdrm`) -- there is no hard X11 dependency.
 
-Running it needs a GL driver `libglvnd` can reach:
+Running the Linux build needs a GL driver `libglvnd` can reach:
 
 * **NixOS** -- seamless; the configured GPU driver is wired into the GL
   stack (`hardware.graphics.enable`).  This is the smooth path.
@@ -99,5 +130,6 @@ When release artifacts exist, replace the vendored files with
   the engine falls back to searching `popsavepath` by filename
   (`Init_arg_search`), which is what makes the store-installed images
   relocatable.
-* Graphics (`--experimental-gfx`, macOS) is not wired into the Nix
-  build yet.
+* Native graphics (`--experimental-graphics`) is wired into the Nix build
+  on **both** platforms via `poplog-gfx` — Metal/Cocoa on macOS, SDL3 +
+  OpenGL3 on Linux.

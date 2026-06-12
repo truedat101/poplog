@@ -28,15 +28,19 @@
                     then (pkgs.darwin.sigtool or null) else null;
         };
         default = poplog;
-      } // nixpkgs.lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
-        # experimental native graphics (SDL3 + OpenGL3), Linux only for now
-        poplog-gfx = pkgs.callPackage ./nix/poplog.nix {
+        # experimental native graphics: Metal/Cocoa on macOS, SDL3 + OpenGL3
+        # on Linux.  The backend is selected by ./configure inside the
+        # derivation; only the platform inputs differ here.
+        poplog-gfx = pkgs.callPackage ./nix/poplog.nix ({
           inherit self system;
           withGraphics = true;
+          sigtool = if pkgs.stdenv.isDarwin
+                    then (pkgs.darwin.sigtool or null) else null;
+          imgui = imguiSrc pkgs;
+        } // nixpkgs.lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
           sdl3 = pkgs.sdl3; libGL = pkgs.libGL;
           inherit (pkgs) pkg-config;
-          imgui = imguiSrc pkgs;
-        };
+        });
       });
 
       # `nix run .#pop11`, `.#prolog`, `.#clisp`, `.#pml`, `.#ved`;
