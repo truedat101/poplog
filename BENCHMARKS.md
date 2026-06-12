@@ -6,12 +6,19 @@ compilation, closures, and string handling — with Python and Perl baselines on
 the same workloads. These characterise the *engine*, not applications, and are
 deliberately small and single-threaded.
 
-> **Scope & honesty note.** These are single-run micro-benchmarks at coarse
-> (10 ms) resolution, intended to place Poplog's native-code engine *next to*
-> popular interpreters on identical work — not to produce publication-grade
-> confidence intervals. Every protocol detail, unit, and cross-language
-> asymmetry below is disclosed so the numbers read (and reproduce) correctly.
-> See [Threats to validity](#threats-to-validity).
+> **Re-collection in progress (2026-06).** The harness has been rebuilt to a
+> statistically rigorous protocol — CPU-time across all engines, auto-calibrated
+> batches, warm-up, **N repeated runs**, and **median + bootstrap 95 % CI** with
+> coefficient-of-variation, via `tools/bench.sh` (see [Methodology](#methodology)
+> and [Reproducing](#reproducing)). **The numeric tables below are still the
+> earlier single-run values and will be replaced** with median + CI figures
+> collected with the new harness on each machine (decks cleared, governor fixed).
+> Treat the current numbers as *indicative ordering*, not final.
+>
+> **Scope.** These characterise the *engine*, not applications, and are
+> deliberately small and single-threaded. Every protocol detail, unit, and
+> cross-language asymmetry is disclosed so the numbers read (and reproduce)
+> correctly. See [Threats to validity](#threats-to-validity).
 
 ---
 
@@ -36,24 +43,36 @@ not cross-machine ranking.
 
 ## Methodology
 
-* **What is measured.** Elapsed time of each workload, run once, in a freshly
-  started engine, on an otherwise idle machine.
-* **Unit: centiseconds (cs) — hundredths of a second, i.e. 1 cs = 10 ms.
-  Lower is better.** This unit is used in *every* results table below.
-* **Resolution is 1 cs (10 ms), single run, no warm-up and no averaging.** A
-  reported **`0` means "below the 10 ms resolution"**, not "instantaneous".
-  Treat differences of 1–2 cs as noise; the signal is in the multiples.
-* **Timer asymmetry (disclosed).** Poplog uses `systime()` — process **CPU
-  time**; Python uses `time.perf_counter()` and Perl `Time::HiRes::time` —
-  **wall-clock** time. For these single-threaded, compute-bound workloads on an
-  idle machine the two are close, and if anything CPU time slightly *favours*
-  Poplog (it excludes time scheduled off-core). The effect is expected to be
-  sub-resolution for most rows; it is noted here rather than hidden. (Aligning
-  all timers on wall clock is listed under [Pending datapoints](#pending-datapoints).)
-* **Identical workloads.** The Poplog, Python, and Perl programs implement the
-  same seven workloads (`tools/bench-poplog.p`, `tools/bench-baseline.py`,
-  `tools/bench-baseline.pl`). Cross-language mapping caveats are in
-  [Workloads](#workloads).
+The harness (`tools/bench.sh`, driving `bench-poplog.p` / `bench-baseline.py` /
+`bench-baseline.pl`, aggregated by `bench-aggregate.py`) follows a deliberately
+conservative microbenchmark protocol:
+
+* **Metric: CPU time, identical across engines.** Poplog `systime()`, Python
+  `time.process_time()`, Perl `(times())[0,1]` — all **process CPU time
+  (user+system)**. Using CPU time (not wall clock) makes the three engines
+  *directly comparable* AND robust to background load, which matters most when
+  "clearing the decks." (Poplog's wall-clock `sys_microtime` is unreliable on
+  the Darwin port — it returns stale values inside compute-heavy procedures —
+  so CPU time is also the *reliable* choice.)
+* **Auto-calibration.** Each workload is repeated **K** times per timed batch,
+  K chosen automatically so a batch lasts ≥ `BENCH_MINTIME` (default **2 s**) of
+  CPU time. The per-iteration cost is the batch time ÷ K. This keeps the 10 ms
+  timer resolution a tiny fraction of each batch on every engine, fast or slow.
+* **Warm-up + repetition.** `BENCH_WARMUP` batches (default 3) are discarded to
+  settle caches/allocation, then **`BENCH_RUNS` batches (default 30)** are
+  recorded per workload.
+* **Statistics.** The aggregator reports, per workload, **min, median, mean,
+  coefficient of variation (CoV %), and a bootstrap 95 % CI on the median**
+  (10 000 resamples). Cross-engine comparison reports the **ratio of medians
+  with a bootstrap 95 % CI** — *a CI that excludes 1.0 is significant at ≈5 %*.
+  Medians (not means) are headline because timing distributions are
+  right-skewed by OS interference; pure-stdlib so it runs even on a Pi.
+* **System-under-test capture.** `bench.sh` records CPU, logical cores, RAM,
+  cache sizes, governor (and warns if it isn't `performance`), load average
+  (warns if busy), and `file` of the engine (the binfmt/arch guard from
+  [Threats to validity](#threats-to-validity)).
+* **Identical workloads** across all three engines; cross-language mapping
+  caveats are in [Workloads](#workloads).
 
 ---
 
@@ -164,21 +183,38 @@ cells are not directly comparable.*
 
 ## Reproducing
 
+Clear the decks first (close browsers/apps; on Linux set the CPU governor to
+`performance`), then run the full suite on each machine:
+
 ```sh
-./tools/bench-poplog.sh                  # prints host, CPU, and engine arch -- CHECK IT
-python3 tools/bench-baseline.py          # or: uv run --python 3.13 tools/bench-baseline.py
-perl    tools/bench-baseline.pl
+./tools/bench.sh                         # SUT capture + all engines + stats + comparison
+./tools/bench.sh /path/to/basepop11      # benchmark a specific engine
+PYTHON=python3.13 ./tools/bench.sh        # pick the Python build (name it in the report!)
+BENCH_RUNS=50 BENCH_MINTIME=3 ./tools/bench.sh   # more rigour (longer runtime)
+```
+
+Quick single-engine check, or feeding the aggregator directly:
+
+```sh
+./tools/bench-poplog.sh                  # Poplog only, with stats; prints engine arch -- CHECK IT
+./poplog ./target/pop/basepop11 < tools/bench-poplog.p | python3 tools/bench-aggregate.py
+python3 tools/bench-aggregate.py run1.samples run2.samples   # compare saved sample files
 # QEMU (binfmt-mediated): QEMU_LD_PREFIX=<sysroot> <foreign binary> < tools/bench-poplog.p
 ```
 
-The harness prints `hostname`, CPU model, and `file` of the engine before
-running, so a wrong-architecture engine (the failure mode in Threats to
-validity #6) is caught immediately. Workloads are fixed in the three
-`tools/bench-*` scripts; keep them identical across platforms for comparability.
+`bench.sh` prints `file` of the engine before running, so a wrong-architecture
+engine (the failure mode in Threats to validity #6) is caught immediately.
+Workloads are fixed in the three `tools/bench-*` scripts; keep them identical
+across platforms for comparability. To compare several Python builds on one
+machine, run the baseline under each and pass all the `.samples` files to
+`bench-aggregate.py`.
 
 ## Pending datapoints
 
+* **Re-collect every table** with `tools/bench.sh` (median + 95 % CI) on each
+  machine with the decks cleared, replacing the indicative single-run numbers.
 * A **real Raspberry Pi 3** (or MediaTek Genio-class arm64) for the low-power
   tier, to replace the QEMU arm32/arm64 stand-ins with native silicon.
-* **Multi-run, wall-clock-aligned timing** to put error bars on the headline
-  rows and remove the CPU-vs-wall timer asymmetry.
+* A reliable **wall-clock** µs timer for Poplog (fix or work around the Darwin
+  `sys_microtime` bug) if a wall-time cross-check is ever wanted alongside the
+  CPU-time numbers.
