@@ -48,7 +48,7 @@ Poplog builds and runs natively on a growing set of platforms
 | **Linux** | RISC-V (`riscv64`, RV64GC) | 🚧 TODO | Dev target QEMU `qemu-system-riscv64 -M virt`; real silicon StarFive VisionFive 2 / Milk-V Mars |
 | **FreeBSD** | x86-64 (amd64) | 🚧 TODO | ELF/Unix — should port readily from the Linux x86-64 reference |
 | **Solaris** | SPARC (v8/v9) | 🚧 TODO | Classic Poplog platform; historical academic ports, not yet revived in this fork |
-| **Windows** | IA-64 (Itanium) | 🚧 TODO | Legacy/exotic — Itanium + Windows; no current hardware, archival interest |
+| **Windows** | x86-64 | 🚧 TODO | Native Windows port (or WSL2 as an interim) — not yet attempted |
 
 The 🚧 rows are real Poplog targets with no native build in this fork yet — see
 the [platform-coverage table in BENCHMARKS.md](BENCHMARKS.md#platform-coverage)

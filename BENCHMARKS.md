@@ -57,11 +57,11 @@ the ones not yet ported or benchmarked in this fork — is:
 | Linux | RISC-V (`riscv64`, RV64GC) | 🚧 TODO — dev target QEMU `qemu-system-riscv64 -M virt`; real silicon StarFive VisionFive 2 / Milk-V Mars | — TODO — |
 | FreeBSD | x86-64 (amd64) | 🚧 TODO — ELF/Unix, should port readily from the Linux x86-64 reference | — TODO — |
 | Solaris | SPARC (v8/v9) | 🚧 TODO — classic Poplog platform; historical academic ports, not yet revived in this fork | — TODO — |
-| Windows | IA-64 (Itanium) | 🚧 TODO — legacy/exotic; no current hardware, archival interest only | — TODO — |
+| Windows | x86-64 | 🚧 TODO — native Windows port (or WSL2 as an interim); not yet attempted | — TODO — |
 
 The TODO rows are listed deliberately: they are real Poplog targets — some with
-heritage in the codebase (32-bit ARM, SPARC/Solaris, Itanium/Windows), some
-worth a fresh port (RISC-V, FreeBSD) — they just have no **native** build or
+heritage in the codebase (32-bit ARM, SPARC/Solaris), some worth a fresh port
+(RISC-V, FreeBSD, x86-64 Windows) — they just have no **native** build or
 benchmark in this fork yet, so every measured column for them reads *TODO*
 rather than a number. RISC-V is the most actionable: a `qemu-system-riscv64
 -M virt` (RV64GC) image gives a CI-friendly target before any board is on hand.
