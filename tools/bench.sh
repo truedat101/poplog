@@ -50,14 +50,21 @@ fi
 echo "engine:    $ENGINE"
 echo "binary:    $(file -b "$ENGINE" 2>/dev/null | cut -d, -f1-2)"   # arch check (binfmt guard)
 echo "protocol:  runs=$RUNS warmup=$WARMUP mintime=${MINTIME}s, CPU-time, auto-calibrated"
-# hygiene warning
-load=$(uptime | sed 's/.*load average[s]*: *//' | cut -d, -f1 | tr -d ' ')
+# hygiene warning (uptime uses ", " on Linux, " " on macOS -- take the 1-min field either way)
+load=$(uptime | sed 's/.*load average[s]*: *//' | tr ',' ' ' | awk '{print $1}')
 echo "loadavg:   $load $(awk -v l="$load" 'BEGIN{print (l+0>0.5)?"(busy -- close other apps for a clean run)":"(idle, good)"}')"
 line
 
 # ---------------------------------------------------------------- run engines
+# POPLOG_CMD overrides how the engine is invoked (e.g. a nix-built front-end:
+#   POPLOG_CMD=/nix/store/...-poplog/bin/pop11 ./tools/bench.sh <that-basepop11>
+# The engine path argument is still used for the arch check above.
 echo "Running Poplog ..."
-"$ROOT/poplog" "$ENGINE" < "$ROOT/tools/bench-poplog.p" > "$OUT/1-poplog.samples" 2>/dev/null
+if [ -n "${POPLOG_CMD:-}" ]; then
+    sh -c "$POPLOG_CMD" < "$ROOT/tools/bench-poplog.p" > "$OUT/1-poplog.samples" 2>/dev/null
+else
+    "$ROOT/poplog" "$ENGINE" < "$ROOT/tools/bench-poplog.p" > "$OUT/1-poplog.samples" 2>/dev/null
+fi
 
 if command -v "$PYTHON" >/dev/null; then
     echo "Running $($PYTHON --version 2>&1) ..."

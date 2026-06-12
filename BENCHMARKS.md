@@ -1,19 +1,18 @@
 # Poplog engine micro-benchmarks
 
-**Revision 2026-06 (corrected).** Micro-benchmarks of Poplog's runtime-core
+**Revision 2026-06 (rigorous re-collection).** Micro-benchmarks of Poplog's runtime-core
 mechanics — procedure calls, integer arithmetic, allocation/GC, incremental
 compilation, closures, and string handling — with Python and Perl baselines on
 the same workloads. These characterise the *engine*, not applications, and are
 deliberately small and single-threaded.
 
-> **Re-collection in progress (2026-06).** The harness has been rebuilt to a
-> statistically rigorous protocol — CPU-time across all engines, auto-calibrated
-> batches, warm-up, **N repeated runs**, and **median + bootstrap 95 % CI** with
-> coefficient-of-variation, via `tools/bench.sh` (see [Methodology](#methodology)
-> and [Reproducing](#reproducing)). **The numeric tables below are still the
-> earlier single-run values and will be replaced** with median + CI figures
-> collected with the new harness on each machine (decks cleared, governor fixed).
-> Treat the current numbers as *indicative ordering*, not final.
+> **Collected with the rigorous harness (`tools/bench.sh`).** Every number
+> below is the **median of 30 runs**, CPU-time, auto-calibrated batches, with a
+> **bootstrap 95 % CI** and coefficient of variation. All three machines ran the
+> *same* Poplog (version 160200) on the *same* workloads. See
+> [Methodology](#methodology). Reported per-iteration times are in **ms / µs,
+> lower is better**; cross-language cells are **slowdown ratios vs Poplog**
+> (>1 = slower than Poplog).
 >
 > **Scope.** These characterise the *engine*, not applications, and are
 > deliberately small and single-threaded. Every protocol detail, unit, and
@@ -24,16 +23,20 @@ deliberately small and single-threaded.
 
 ## Systems under test
 
-| ID | CPU | Cores / clock | OS | Poplog build |
-|---|---|---|---|---|
-| **i7** | Intel Core i7-9700K (Coffee Lake, 2018) | 8C/8T, 3.6–4.9 GHz | Ubuntu 22.04 LTS, x86-64 | Nix flake, verified `ELF 64-bit … x86-64` |
-| **M2** | Apple M2 (2022) | 8-core (4P+4E), ~3.5 GHz | macOS, arm64 | This port (native Mach-O, arm64) |
-| **Pi5** | Broadcom BCM2712 (Cortex-A76, 2023) | 4C, 2.4 GHz | DietPi (Debian), arm64 | Native (ELF, arm64, generic `armv8-a`) |
+| ID | CPU | Cores / clock | RAM / cache | OS, governor | Poplog build (verified) |
+|---|---|---|---|---|---|
+| **i7** | Intel Core i7-9700K (Coffee Lake, 2018) | 8C/8T, 3.6–4.9 GHz | 31.3 GiB; L2 2 MiB, **L3 12 MiB** | Ubuntu 22.04 LTS, x86-64; `powersave` (intel_pstate, boosts under load) | Nix flake, `ELF 64-bit … x86-64` |
+| **M2** | Apple M2 (2022) | 8-core (4P+4E), ~3.5 GHz | 16 GiB; L1d 64 KiB, L2 4 MiB | macOS, arm64; no governor (P/E auto-sched) | This port, native `Mach-O … arm64` |
+| **Pi5** | Broadcom BCM2712 (Cortex-A76, 2023) | 4C, 2.4 GHz | 7.9 GiB; L2 2 MiB, L3 2 MiB | DietPi (Debian), arm64; `performance` | Native `ELF … arm64`, generic `armv8-a` |
 
-Interpreter baselines: CPython **3.10** (distro) and **3.13** (uv, PGO/LTO
-build) on i7; CPython **3.14** on M2; CPython **3.13** on Pi5; Perl **5.34**
-(i7/M2) and **5.40** (Pi5). Interpreter *build* matters as much as version
-(see [Analysis](#analysis)), so each is named explicitly.
+All three ran Poplog **version 160200**. Each engine's architecture was
+`file`-verified before benchmarking — on the i7 this caught a stray *aarch64*
+`basepop11` that would have run under qemu (the failure mode in
+[Threats to validity](#threats-to-validity)); the nix x86-64 build was used
+instead. Interpreter baselines: CPython **3.10.12** (distro) and **3.13.0rc2**
+(uv, PGO/LTO standalone) on i7; **3.14.0** on M2; **3.13.5** on Pi5; Perl
+**5.34** (i7/M2) and **5.40** (Pi5) — interpreter *build* matters as much as
+version (see [Analysis](#analysis)), so each is named.
 
 The environment is not pinned (no CPU isolation, fixed governor, or thermal
 control); results are intended for **within-machine, cross-engine** comparison,
@@ -97,87 +100,133 @@ emulation artifact.
 
 ## Poplog across machines and backends
 
-*All cells are **centiseconds (10 ms units), lower is better.** `0` = below
-resolution; `-` = not implemented for that engine.*
+Poplog's own per-iteration time on each native machine — **median of 30 runs,
+lower is better.** Coefficient of variation was **< 1 %** on every row except
+the two M2 rows marked ◊ (see below).
 
-| configuration | nfib29 | intloop10M | lists | compile500 | gc20 | closures1M | strings |
-|---|---|---|---|---|---|---|---|
-| i7-9700K, x86-64 Linux (Nix build) | 1 | 7 | 1 | 1 | 1 | 3 | 0 |
-| Apple M2, arm64 macOS (this port) | 2 | 5 | 1 | 2 | 3 | 3 | 1 |
-| Raspberry Pi 5, arm64 Linux | 2 | 12 | 3 | 1 | 4 | 4 | 0 |
-| i7, arm64 Poplog under qemu-aarch64 | 21 | 79 | 17 | 4 | 16 | 131 | 1 |
-| i7, arm32 corepop under qemu-arm (rpi3-class armhf, upstream `corepop.arm`) | 20 | 323† | 13 | 7 | 11 | 106 | 1 |
+| Workload | i7 (x86-64) | M2 (arm64) | Pi 5 (arm64) |
+|---|---|---|---|
+| nfib29 (calls) | 14.5 ms | 13.2 ms | 24.9 ms |
+| intloop10M | 61.5 ms | 52.2 ms | 124 ms |
+| lists (alloc/GC) | 11.4 ms | 9.0 ms | 22.2 ms |
+| closures1M | 22.0 ms | 45.1 ms ◊ | 33.5 ms |
+| gc20 | 20.4 ms | 28.4 ms ◊ | 48.1 ms |
+| strings | 2.15 ms | 1.94 ms | 4.12 ms |
+| compile500 (→ machine code) | **66.7 ms ‡** | 9.0 ms | 13.5 ms |
 
-All three **native** builds land within ~2× of each other: both the x86-64 and
-the arm64 backends generate excellent code. QEMU's dynamic-translation tax
-(~10–30× here) is visible only in the explicitly emulated rows — and the arm32
-`intloop10M` (323) is inflated further by the bignum overflow (†).
+**‡ x86-64 runtime compilation is ~5× slower than arm64.** The x86-64 machine-
+code emitter compiles `compile500` in 66.7 ms vs 9–13.5 ms on the arm64 builds
+— consistent across three independent nix x86-64 builds, and *not* a nix or
+measurement artifact (a nix **arm64** build compiles in 12.5 ms, same as
+native). A genuine x86-64-backend code-emission cost, worth investigating; it is
+the only workload where the arm64 backend clearly beats x86-64.
+
+**◊ M2 variance.** macOS schedules a CPU-bound process across performance and
+efficiency cores (no pinning without elevated privileges), so `closures1M` and
+`gc20` show CoV 4–5 % on the M2; their `min`s (39.6 ms / 26 ms) are the clean
+P-core times. All other M2 rows are < 1 % CoV.
 
 ## Cross-language baselines (same workloads)
 
-*All cells are **centiseconds (10 ms units), lower is better.** `0` = below
-resolution; `-` = workload not implemented for that engine. Compare **down a
-column within one machine** (the `i7:` / `M2:` / `Pi5:` prefixes); cross-machine
-cells are not directly comparable.*
+Per machine, **Poplog's median per-iteration time** and each baseline's
+**slowdown ratio vs Poplog** (>1 = the baseline is that many × slower than
+Poplog; <1 = faster than Poplog). Every ratio's bootstrap 95 % CI is tight
+(±1–2 %); only ratios whose CI brackets 1.0 are *not* significant, and those are
+called out as ties. `—` = workload not implemented for that engine.
 
-| configuration | nfib29 | intloop10M | lists | compile500 | gc20 | closures1M |
-|---|---|---|---|---|---|---|
-| i7: Poplog (x86-64, Nix) | 1 | 7 | 1 | 1 | 1 | 3 |
-| i7: Python 3.13 (uv/PGO build) | 5 | 38 | 8 | 1 | 1 | 5 |
-| i7: Python 3.10 (system) | 13 | 39 | 9 | 1 | 1 | 7 |
-| i7: Perl 5.34 | 19 | 16 | - | - | - | - |
-| M2: Poplog | 2 | 5 | 1 | 2 | 3 | 3 |
-| M2: Python 3.14 | 7 | 29 | 7 | 1 | 1 | 5 |
-| M2: Perl 5.34 | 19 | 19 | - | - | - | - |
-| Pi5: Poplog | 2 | 12 | 3 | 1 | 4 | 4 |
-| Pi5: Python 3.13 | 25 | 131 | 25 | 2 | 3 | 20 |
-| Pi5: Perl 5.40 | 93 | 82 | - | - | - | - |
+**Intel i7-9700K (x86-64)** — vs CPython 3.10 (distro), 3.13.0rc2 (uv/PGO), Perl:
+
+| Workload | Poplog | Python 3.10 | Python 3.13 | Perl 5.34 |
+|---|---|---|---|---|
+| nfib29 | 14.5 ms | 8.56× | **3.67×** | 13.8× |
+| intloop10M | 61.5 ms | 6.26× | **5.60×** | 2.65× |
+| lists | 11.4 ms | 7.76× | **7.20×** | — |
+| closures1M | 22.0 ms | 3.00× | **2.13×** | — |
+| gc20 | 20.4 ms | 0.50× | 0.48× | — |
+| strings | 2.15 ms | 0.34× | 1.00× (tie) | — |
+| compile500 ‡ | 66.7 ms | 0.08× | 0.12× | — |
+
+**Apple M2 (arm64)** — vs CPython 3.14, Perl:
+
+| Workload | Poplog | Python 3.14 | Perl 5.34 |
+|---|---|---|---|
+| nfib29 | 13.2 ms | **5.14×** | 13.6× |
+| intloop10M | 52.2 ms | **5.56×** | 3.09× |
+| lists | 9.0 ms | **7.09×** | — |
+| closures1M ◊ | 45.1 ms | 1.04× (tie) | — |
+| gc20 ◊ | 28.4 ms | 0.35× | — |
+| strings | 1.94 ms | 0.43× | — |
+| compile500 | 9.0 ms | 0.58× | — |
+
+**Raspberry Pi 5 (arm64)** — vs CPython 3.13.5, Perl:
+
+| Workload | Poplog | Python 3.13 | Perl 5.40 |
+|---|---|---|---|
+| nfib29 | 24.9 ms | **5.07×** | 15.7× |
+| intloop10M | 124 ms | **4.94×** | 3.09× |
+| lists | 22.2 ms | **5.46×** | — |
+| closures1M | 33.5 ms | **2.46×** | — |
+| gc20 | 48.1 ms | 0.36× | — |
+| strings | 4.12 ms | 1.02× (tie) | — |
+| compile500 | 13.5 ms | 0.79× | — |
 
 ---
 
 ## Analysis
 
-* **Native-code speed with interactive ergonomics.** Across every machine,
-  Poplog leads the *best* available Python build by ~**5×** on procedure calls
-  (`nfib29`) and **5–10×** on loops, lists, and closures — while offering the
-  same incremental, REPL-driven workflow. That is the headline: *interactive
-  like Python, native-code fast.*
-* **`compile500` is the strongest result, not the weakest.** Pop and Python
-  tie here, but Pop's incremental compiler emits **machine code** while
-  Python's `compile()` emits **bytecode**. Parity on unequal work favours Pop.
+* **Poplog wins the engine fundamentals on every machine, with confidence.**
+  Against the *best available* CPython on each box, Poplog is **3.7–7.2×** faster
+  on procedure calls, tight loops, and allocation/lists, and **2.1–3.0×** on
+  closures (i7/Pi5) — all with sub-1 % variance and CIs that exclude 1.0. That is
+  the defensible claim: *interactive like Python, native-code fast.* (Against the
+  more common, non-PGO CPython 3.10, the call gap is **8.6×**.)
+* **`compile500` is the one engine loss, and it is x86-64-specific.** Poplog's
+  incremental compiler emits **machine code** where Python's `compile()` emits
+  **bytecode** (Pop does strictly more work), so this is already an unequal
+  comparison. The *arm64* backend is competitive (0.58–0.79×); the *x86-64*
+  backend is ~5× slower at code emission (‡ above) and loses clearly here. A real
+  x86-64-codegen item, not a whole-engine weakness.
+* **`gc20` Python always wins.** CPython refcounting makes `gc.collect()` cheap
+  on an acyclic heap; Pop runs a real moving collector — different mechanisms,
+  not a decisive row.
+* **`strings` is a wash.** Roughly a tie against modern CPython (both fall to
+  C-level string code); CPython 3.10 happens to be quickest here, and the
+  3.13.0rc2 build looks regressed on `str.find` vs 3.10.
 * **Interpreter build matters as much as version.** On the same i7, `nfib29`
-  costs **13** (CPython 3.10 distro) vs **5** (CPython 3.13 uv PGO/LTO) — a 2.6×
+  costs **8.56×** vs CPython 3.10 but **3.67×** vs the PGO 3.13 build — a 2.3×
   spread from build configuration alone. Always name the interpreter build.
-* **`gc20` is the one Python sometimes ties.** CPython's refcounting makes
-  `gc.collect()` cheap on an acyclic heap; Pop runs a real moving collector.
-  Different mechanisms — read this row as "comparable," not "decisive."
-* **Perl** trails on both headline workloads everywhere, and implements only
-  the two it can map cleanly.
+* **Perl** trails everywhere (calls 13.6–15.7×) and maps only the two workloads
+  it can express cleanly.
 
 ---
 
 ## Threats to validity
 
-1. **Single run, 10 ms resolution.** No warm-up, no averaging, no confidence
-   intervals. Differences of 1–2 cs are within noise; only multiplicative gaps
-   are meaningful. `0` cells are sub-resolution.
-2. **CPU-time vs wall-time asymmetry** between Poplog (`systime`) and the
-   baselines (wall clock) — small for these workloads, slightly Pop-favouring;
-   see [Methodology](#methodology).
-3. **Cross-language semantics are not identical.** `compile500` (machine code
+1. **Cross-language semantics are not identical.** `compile500` (machine code
    vs bytecode) and `gc20` (moving GC vs refcounting) compare *analogous*, not
-   identical, operations — annotated in [Workloads](#workloads).
-4. **32-bit bignum overflow** inflates `intloop10M` on the arm32 row (†).
-5. **Unpinned environment.** No core pinning, governor fix, or thermal control;
-   adequate for order-of-magnitude within-machine comparison, not tight ranking.
-6. **The QEMU artifact (now fixed).** An earlier revision reported x86-64 Poplog
-   as 5–10× slower than the arm64 backend. That was an artifact: the benched
-   `basepop11` was an **aarch64** binary left in the tree by cross-compilation,
-   and Linux `binfmt_misc` silently ran it under `qemu-aarch64` (which also
-   explains why it "matched" an explicit QEMU run — it was the same thing
-   twice). **`tools/bench-poplog.sh` now prints `file` of the engine; always
-   check the arch.** The x86-64 numbers here are from the Nix-built,
-   file-verified tree.
+   identical, operations — annotated in [Workloads](#workloads). These are the
+   only rows Python wins, and both are documented mechanism differences.
+2. **Core pinning.** The Pi 5 ran under the `performance` governor and is the
+   cleanest dataset (CoV ≤ 0.2 %). The i7 ran `powersave` (intel_pstate boosts
+   under sustained load, so this is close to performance for a multi-second
+   batch). The **M2 could not be pinned to P-cores** without elevated privileges,
+   giving CoV 4–5 % on `closures1M`/`gc20` (◊) — their `min`s are the clean
+   P-core times. Ratios are unaffected by the governor (all engines share it).
+3. **x86-64 compile-speed outlier (‡).** `compile500` on x86-64 is ~5× the arm64
+   cost; isolated to the x86-64 code emitter (not nix, not measurement). A real
+   item to investigate, flagged rather than averaged away.
+4. **Single Poplog version, mixed Python builds.** All machines ran Poplog
+   160200, but Python build/version differs per machine (named per row);
+   interpreter *build* moves results 2–3× (see [Analysis](#analysis)), so
+   cross-machine Python cells are not directly comparable.
+5. **The QEMU/binfmt arch trap (caught here).** A wrong-architecture engine is
+   the dangerous failure mode: an **aarch64** `basepop11` left in the tree runs
+   transparently under `qemu-aarch64` and produces plausible-but-meaningless
+   numbers (an earlier revision of this file fell for exactly this — it "matched"
+   an explicit QEMU run because it *was* the same thing twice). **`tools/bench.sh`
+   prints `file` of the engine before every run** and that guard fired on this
+   i7 collection — the repo `basepop11` was aarch64-under-qemu, so the verified
+   nix x86-64 build was used instead. Always check the arch line.
 
 ---
 
@@ -203,18 +252,20 @@ python3 tools/bench-aggregate.py run1.samples run2.samples   # compare saved sam
 ```
 
 `bench.sh` prints `file` of the engine before running, so a wrong-architecture
-engine (the failure mode in Threats to validity #6) is caught immediately.
-Workloads are fixed in the three `tools/bench-*` scripts; keep them identical
-across platforms for comparability. To compare several Python builds on one
-machine, run the baseline under each and pass all the `.samples` files to
-`bench-aggregate.py`.
+engine (the failure mode in [Threats to validity](#threats-to-validity) #5) is
+caught immediately. Workloads are fixed in the three `tools/bench-*` scripts;
+keep them identical across platforms for comparability. To compare several
+Python builds on one machine, run the baseline under each and pass all the
+`.samples` files to `bench-aggregate.py` (as was done for the i7 row).
 
 ## Pending datapoints
 
-* **Re-collect every table** with `tools/bench.sh` (median + 95 % CI) on each
-  machine with the decks cleared, replacing the indicative single-run numbers.
+* **Investigate the x86-64 `compile500` slowdown (‡)** — the code emitter is
+  ~5× the arm64 cost; the only workload where arm64 clearly beats x86-64.
+* **P-core-pinned M2 re-run** (e.g. via a high-QoS / `taskpolicy` launch) to
+  remove the ◊ variance on `closures1M`/`gc20`.
 * A **real Raspberry Pi 3** (or MediaTek Genio-class arm64) for the low-power
-  tier, to replace the QEMU arm32/arm64 stand-ins with native silicon.
+  tier, to add a native low-power datapoint.
 * A reliable **wall-clock** µs timer for Poplog (fix or work around the Darwin
   `sys_microtime` bug) if a wall-time cross-check is ever wanted alongside the
   CPU-time numbers.
