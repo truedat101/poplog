@@ -45,7 +45,10 @@ Poplog builds and runs natively on a growing set of platforms
 | **Linux** | AArch64 (ARM64) | ✅ Supported | Validated on Raspberry Pi 5 — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so it ports readily to other ARM64 boards (MediaTek Genio, Qualcomm Snapdragon) |
 | **macOS** | Apple Silicon (arm64) | ✅ Supported | Native Mach-O port — self-hosting, all four languages, terminal VED, C↔Pop callbacks, and native graphics |
 | **Linux** | ARM32 (`armv7`/`armv6`) | 🚧 TODO | Raspberry Pi 3 / 32-bit ARM — not yet ported |
+| **Linux** | RISC-V (`riscv64`, RV64GC) | 🚧 TODO | Dev target QEMU `qemu-system-riscv64 -M virt`; real silicon StarFive VisionFive 2 / Milk-V Mars |
+| **FreeBSD** | x86-64 (amd64) | 🚧 TODO | ELF/Unix — should port readily from the Linux x86-64 reference |
 | **Solaris** | SPARC (v8/v9) | 🚧 TODO | Classic Poplog platform; historical academic ports, not yet revived in this fork |
+| **Windows** | IA-64 (Itanium) | 🚧 TODO | Legacy/exotic — Itanium + Windows; no current hardware, archival interest |
 
 The 🚧 rows are real Poplog targets with no native build in this fork yet — see
 the [platform-coverage table in BENCHMARKS.md](BENCHMARKS.md#platform-coverage)
