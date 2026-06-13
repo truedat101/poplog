@@ -98,7 +98,104 @@ mirrors the real machine.
 
 ## Open questions to resolve early
 
-* Does upstream (Hebisch) already have or want a riscv64 backend? Coordinate to
-  avoid divergence (as with Solaris/FreeBSD).
+* Does upstream (Hebisch) already have or want a riscv64 backend? **RESOLVED:**
+  no — upstream is in preservation mode (no release plan), so write it fresh.
 * Vector (`V`) and the exact `-march` of the staged hardware — start at the
   portable `rv64gc` baseline, tune later.
+
+---
+
+# P3: genproc transformation map (validated against real output)
+
+This is the turnkey spec for the `genproc.p` rewrite, derived by capturing the
+**actual** assembly the (scaffold) riscv64 popc emits and feeding it to
+`riscv64-linux-gnu-as`. The asmout (P2) directives are already correct
+(`.option arch, rv64gc`, `.quad/.byte/.word/.short`, labels, `.align 3`); only
+the **instructions** (genproc) remain.
+
+## The validation loop (use this every iteration)
+
+On red5buntu, point `POP__as` (which popc invokes per `os_comms.p:74`) at a
+wrapper that saves the `.s` and runs the real assembler:
+
+```sh
+cat > /tmp/rv-as.sh <<'EOF'
+#!/bin/sh
+for last in "$@"; do :; done            # popc passes (as <opts> -o ofile afile)
+cp "$last" /tmp/rvcap.s 2>/dev/null      # afile (the .s) is last
+shift; exec riscv64-linux-gnu-as -march=rv64gc "$@"
+EOF
+chmod +x /tmp/rv-as.sh
+( cd pop/src && POP__as=/tmp/rv-as.sh ../../poplog popc -c -nosys -od /tmp trigc.p )
+# -> /tmp/rvcap.s holds the emitted assembly; assembler errors are the to-do list.
+```
+Edit genproc on the Mac → `rsync` syscomp/riscv64 → `make POP_arch=riscv64
+stamp_popc` → re-run the above → assembler errors shrink toward zero.
+
+## Register mapping (roles unchanged; only the physical register differs)
+
+Poplog's register roles map straight onto the RISC-V LP64D file. RISC-V GAS
+accepts both ABI names and `xN`; the `regnumber` machinery uses `xN`, so keep
+that. Note `x18` is **not** reserved on RISC-V (that was arm64's platform reg);
+RISC-V's reserved set is `x0`=zero, `x1`=ra, `x2`=sp, `x3`=gp, `x4`=tp.
+
+| Role (constant) | arm64 | RISC-V | ABI |
+|---|---|---|---|
+| `LR` | x30 | **x1** | ra |
+| `SP` (R13) | sp | **x2** | sp |
+| `USP` (R10) operand stack | x19 | **x9** | s1 (callee-saved) |
+| `PB` (R11) procedure base | x20 | **x18** | s2 (callee-saved) |
+| `WK_REG` (R0) work/arg0 | x0 | **x10** | a0 |
+| `R1` work/arg1 | x1 | **x11** | a1 |
+| `CHAIN_REG` (R2) | x2 | **x12** | a2 |
+| `WK_ADDR_REG_1` (R3) | x3 | **x5** | t0 |
+| `WK_ADDR_REG_2` (R12) | x12 | **x6** | t1 |
+| `R4` scratch | x4 | **x7** | t2 |
+| `R5` 2nd work | x5 | **x28** | t3 |
+| `R9` scratch | x9 | **x29** | t4 |
+| `R16` (IP0) indirect-branch scratch | x16 | **x30** | t5 |
+| `pop_registers` (locals) | 21,22 | **19,20** | s3,s4 |
+| `nonpop_registers` (locals) | 23,24,25 | **21,22,23** | s5,s6,s7 |
+
+Machinery edits: `regnumber`/`reglabel` loop → iterate `0..31`, drop the `x18`
+skip and the `wN` (32-bit-view) names; `sp`→2, `lr`→1 (not 31/30). `as_wreg`
+→ identity (RISC-V has no separate 32-bit register names; byte/half ops use the
+full register with `lb/lh/lw`/`sb/sh/sw`).
+
+## Instruction translation (from the captured `xc_sin` procedure)
+
+| arm64 emitted | RISC-V | note |
+|---|---|---|
+| `sub sp,sp,#16` | `addi sp,sp,-16` | frame alloc |
+| `add sp,sp,#16` | `addi sp,sp,16` | frame free |
+| `str x20,[sp,#0]` | `sd s2,0(sp)` | store: `off(reg)`, not `[reg,#off]` |
+| `ldr x30,[sp,#8]` | `ld ra,8(sp)` | load |
+| `ldr x1,[x20,#40]` | `ld t0,40(s2)` | field load |
+| `str x1,[x19,#-8]!` (push) | `addi s1,s1,-8` ; `sd t0,0(s1)` | **no pre/post-index — split into 2** |
+| `ldr x1,[x19],#8` (pop) | `ld t0,0(s1)` ; `addi s1,s1,8` | likewise |
+| `mov x1,#7` | `li t0,7` | immediate |
+| `mov x1,x2` | `mv t0,a2` | reg move |
+| `bl xc_foo` | `call xc_foo` | sets `ra`; `call` handles far range |
+| `ldr x20,xc_sin-8` | `auipc s2,%pcrel_hi(L);ld s2,%pcrel_lo(1b)(s2)` | PC-relative pointer load |
+| `ret` | `ret` | same mnemonic (`jalr x0,ra,0`) |
+| `cmp`/`b.cond` | `beq/bne/blt/bge ...` | **no flags reg** — compare two regs and branch |
+
+## Structural rewrites (the genuinely different parts)
+
+1. **No auto-index addressing.** Every Poplog user-stack push/pop (`[USP,#-8]!`
+   / `[USP],#8`) becomes two instructions (`addi` + `sd`/`ld`). This touches the
+   operand-formatting helpers used everywhere — do it once, centrally.
+2. **No condition-codes register.** arm64's `cmp` + `b.cond` becomes a single
+   RISC-V compare-and-branch (`blt`, `bgeu`, `beq`, …) on two registers; the
+   M-code conditional lowering in genproc changes shape.
+3. **PC-relative addressing** via `auipc`+`%pcrel_hi/_lo` (literal/label loads)
+   rather than arm64's literal-pool `ldr =label` / `adrp`+`add`.
+4. **Immediates** are 12-bit signed; larger values need `lui`/`li` expansion
+   (the assembler's `li` pseudo handles most).
+5. **`PD_LENGTH`** (`.set _L3, ((_L4 - xc_sin) >> 3) + 7`) already emits fine on
+   ELF (this is the easy case the Mach-O port had to fight).
+
+Suggested edit order within genproc: register layer (above) → the central
+operand formatter (load/store `off(reg)` + the push/pop split) → mnemonics in the
+`asm_emit` call sites → branch lowering → PC-relative loads → the procedure
+prologue/epilogue. Gate each against the validation loop.
