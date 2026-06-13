@@ -40,11 +40,7 @@ define lconstant project(v, ay, ax);
     CY - y2 * f * SCALE                             ;;; sy (screen +y is down)
 enddefine;
 
-;;; Smooth spin: gfx_step() is frame-locked to the display refresh by the
-;;; backend (Metal: a frames-in-flight semaphore released at vsync; SDL: the
-;;; blocking SwapWindow with swap-interval 1).  So we add NO sleep and advance
-;;; a fixed, small step each frame -- constant angular velocity, hence smooth.
-lvars angle = 20.0, i, e, pts;
+lvars angle = 20, i, e, pts;
 repeat
     gfx_clear();
     {% for i from 1 to 8 do project(verts(i), angle, 25) endfor %} -> pts;
@@ -53,8 +49,8 @@ repeat
         gfx_line(pts(a*2-1), pts(a*2), pts(b*2-1), pts(b*2), fg, 2)
     endfor;
     quitunless(gfx_step());
-    angle + 1.0 -> angle;               ;;; ~60 deg/s at 60 Hz (a turn every 6 s)
-    if angle >= 360.0 then angle - 360.0 -> angle endif
+    angle + 2 -> angle;
+    syssleep(3)
 endrepeat;
 
 gfx_shutdown();

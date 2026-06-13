@@ -17,9 +17,7 @@
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
 #import <QuartzCore/CAMetalLayer.h>
-#import <QuartzCore/CABase.h>      /* CACurrentMediaTime */
 
-#include <unistd.h>               /* usleep */
 #include <vector>
 #include <string>
 #include <cmath>
@@ -79,16 +77,6 @@ static PopGfxWindowDelegate    *g_delegate = nil;
 static MTLRenderPassDescriptor *g_rpd      = nil;
 static bool                     g_frame_active = false;
 
-/* Frame pacing: throttle the CPU loop to the display refresh so a fixed step
- * per frame gives constant angular velocity (smooth) rather than racing ahead
- * (and exhausting the drawable pool -> freeze).  We use a monotonic-clock
- * frame limiter (CACurrentMediaTime + usleep), NOT a present/vsync callback:
- * this loop owns the main thread, so a callback delivered via the run loop
- * could never fire while we block on it -- that deadlocks.  The limiter is
- * self-contained and refresh-rate-correct. */
-static double                   g_target_dt    = 1.0 / 60.0;  /* set in init    */
-static double                   g_last_present = 0.0;
-
 int pop_gfx_init(const char *title, int width, int height)
 {
     @autoreleasepool {
@@ -128,16 +116,6 @@ int pop_gfx_init(const char *title, int width, int height)
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         [NSApp finishLaunching];                       /* run loop w/o NSApp run */
-
-        /* pace the frame limiter to this display's refresh (60, 120, ...) */
-        double fps = 60.0;
-        if (@available(macOS 12.0, *)) {
-            NSInteger r = g_window.screen.maximumFramesPerSecond;
-            if (r > 0) fps = (double)r;
-        }
-        g_target_dt = 1.0 / fps;
-        g_last_present = 0.0;
-
         g_closed = false;
         return 1;
     }
@@ -200,19 +178,6 @@ void pop_gfx_frame_end(void)
             [cb presentDrawable:drawable];
         [cb commit];
         g_rpd = nil;
-
-        /* Frame limiter: hold the loop to one frame per refresh interval.  The
-         * present above is vsync-locked, so spacing our frames evenly to the
-         * same period keeps motion smooth without a present callback. */
-        double now = CACurrentMediaTime();
-        if (g_last_present > 0.0) {
-            double elapsed = now - g_last_present;
-            if (elapsed < g_target_dt) {
-                useconds_t us = (useconds_t)((g_target_dt - elapsed) * 1.0e6);
-                if (us > 0u && us < 1000000u) usleep(us);
-            }
-        }
-        g_last_present = CACurrentMediaTime();
     }
 }
 
