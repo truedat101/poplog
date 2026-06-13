@@ -53,18 +53,21 @@ the ones not yet ported or benchmarked in this fork — is:
 | Linux | x86-64 | ✅ Supported (reference) | ✅ i7 |
 | macOS | Apple Silicon (arm64) | ✅ Supported (this port) | ✅ M2 |
 | Linux | AArch64 / `armv8-a` | ✅ Supported (RPi 5) | ✅ Pi 5 |
-| Linux | ARM32 (`armv7`/`armv6`, RPi 3) | 🚧 TODO — not yet ported | — TODO — |
-| Linux | RISC-V (`riscv64`, RV64GC) | 🚧 TODO — dev target QEMU `qemu-system-riscv64 -M virt`; real silicon StarFive VisionFive 2 / Milk-V Mars | — TODO — |
-| FreeBSD | x86-64 (amd64) | 🚧 TODO — ELF/Unix, should port readily from the Linux x86-64 reference | — TODO — |
-| Solaris | SPARC (v8/v9) | 🚧 TODO — classic Poplog platform; historical academic ports, not yet revived in this fork | — TODO — |
-| Windows | x86-64 | 🚧 TODO — native Windows port (or WSL2 as an interim); not yet attempted | — TODO — |
+| Linux | ARM32 (`armv6`/`armv7`, RPi 1–3) | ✅ Supported (long-standing) | — not benchmarked |
+| Solaris | x86 (i386) | ✅ Supported (upstream; Solaris 10) | — not benchmarked |
+| FreeBSD | x86-64 | ✅ Supported (upstream) | — not benchmarked |
+| Linux | RISC-V (`riscv64`, RV64GC) | 🚧 TODO — not yet ported | — TODO — |
+| Windows | x86-64 | 🚧 TODO — not yet ported | — TODO — |
 
-The TODO rows are listed deliberately: they are real Poplog targets — some with
-heritage in the codebase (32-bit ARM, SPARC/Solaris), some worth a fresh port
-(RISC-V, FreeBSD, x86-64 Windows) — they just have no **native** build or
-benchmark in this fork yet, so every measured column for them reads *TODO*
-rather than a number. RISC-V is the most actionable: a `qemu-system-riscv64
--M virt` (RV64GC) image gives a CI-friendly target before any board is on hand.
+There are two tiers below the three benchmarked machines. **Supported but not
+benchmarked here:** ARM32 Linux, Solaris/x86 and FreeBSD/x86-64 are real,
+building Poplog ports (the 32-bit ARM backend `syscomp/arm` is long-standing;
+Solaris/i386 and FreeBSD/x86-64 are recent upstream additions by W. Hebisch,
+tested on Solaris 10 and x86-64 FreeBSD) — we simply have not run this harness
+on them, so their benchmark column is *not benchmarked* rather than a number.
+**Not yet ported:** RISC-V and x86-64 Windows read *TODO* throughout. RISC-V is
+the most actionable next port — a `qemu-system-riscv64 -M virt` (RV64GC) image
+gives a CI-friendly target before any board is on hand.
 
 ---
 

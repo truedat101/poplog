@@ -44,15 +44,18 @@ Poplog builds and runs natively on a growing set of platforms
 | **Linux** | x86-64 | ✅ Supported | Reference platform |
 | **Linux** | AArch64 (ARM64) | ✅ Supported | Validated on Raspberry Pi 5 — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so it ports readily to other ARM64 boards (MediaTek Genio, Qualcomm Snapdragon) |
 | **macOS** | Apple Silicon (arm64) | ✅ Supported | Native Mach-O port — self-hosting, all four languages, terminal VED, C↔Pop callbacks, and native graphics |
-| **Linux** | ARM32 (`armv7`/`armv6`) | 🚧 TODO | Raspberry Pi 3 / 32-bit ARM — not yet ported |
-| **Linux** | RISC-V (`riscv64`, RV64GC) | 🚧 TODO | Dev target QEMU `qemu-system-riscv64 -M virt`; real silicon StarFive VisionFive 2 / Milk-V Mars |
-| **FreeBSD** | x86-64 (amd64) | 🚧 TODO | ELF/Unix — should port readily from the Linux x86-64 reference |
-| **Solaris** | SPARC (v8/v9) | 🚧 TODO | Classic Poplog platform; historical academic ports, not yet revived in this fork |
-| **Windows** | x86-64 | 🚧 TODO | Native Windows port (or WSL2 as an interim) — not yet attempted |
+| **Linux** | ARM32 (`armv6`/`armv7`) | ✅ Supported | Long-standing 32-bit ARM port (`pop/src/syscomp/arm`); Raspberry Pi 1–3 and other 32-bit ARM Linux.  Not benchmarked in this report |
+| **Solaris** | x86 (i386) | ✅ Supported | Upstream port (W. Hebisch); tested on Solaris 10 (`CC=gcc`, vendored `corepop_solaris.i386`).  Not benchmarked here |
+| **FreeBSD** | x86-64 | ✅ Supported | Upstream port (W. Hebisch); tested on x86-64.  Not benchmarked here |
+| **Linux** | RISC-V (`riscv64`) | 🚧 TODO | Not yet ported — dev target QEMU `qemu-system-riscv64 -M virt`; boards: StarFive VisionFive 2 / Milk-V Mars |
+| **Windows** | x86-64 | 🚧 TODO | Not yet ported (WSL2 runs the Linux build as an interim) |
 
-The 🚧 rows are real Poplog targets with no native build in this fork yet — see
-the [platform-coverage table in BENCHMARKS.md](BENCHMARKS.md#platform-coverage)
-for how they show up (TODO) across the benchmark columns.
+"Supported" means it builds and runs.  The first three rows are validated *and*
+benchmarked in this fork; ARM32, Solaris/x86 and FreeBSD/x86-64 are existing
+Poplog ports (ARM32 long-standing; Solaris + FreeBSD recent upstream additions
+by W. Hebisch) that simply haven't been re-tested or benchmarked here.  The 🚧
+rows are genuinely not yet ported.  See the
+[platform-coverage table in BENCHMARKS.md](BENCHMARKS.md#platform-coverage).
 
 Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
 `PORTING-ARM64-M-SILICON-OSX.md`.
