@@ -354,8 +354,11 @@ lconstant macro isabs = "isstring";
 ;;;     ARM32 for general displacement checks.
 
 define lconstant is_small_disp(disp);
+    ;;; fits a RISC-V signed 12-bit immediate / load-store offset (-2048..2047).
+    ;;; Use a symmetric (-2047..2047) range so the negated form (sub -> addi
+    ;;; with -imm) also fits.
     lvars disp;
-    isinteger(disp) and disp > -256 and disp < 256;
+    isinteger(disp) and disp > -2048 and disp < 2048;
 enddefine;
 
 ;;; can_defer_opnd:
@@ -888,35 +891,40 @@ enddefine;
 
 define lconstant gen_op_3(src1, src2, dst, opcode);
     lvars src1, src2, dst, opcode, op1, op2, dreg;
-    ;;; Logical ops (orr/and/eor/bic/...) on AArch64 require the immediate
-    ;;; to encode as a bitmask -- arbitrary integers must be loaded to a
-    ;;; register first.  Fall back to register form for non-bitmask values.
-    if member(opcode, ["orr" "and" "eor" "bic"])
-       and is_int_opd(src1) and not(is_aarch64_bitmask_imm(src1))
+    ;;; Map AArch64 mnemonics to RISC-V base names.
+    if     opcode == "orr" then "or"  -> opcode
+    elseif opcode == "eor" then "xor" -> opcode
+    endif;
+    ;;; destination register
+    if isreg(dst) then dst -> dreg; false -> dst else R1 -> dreg endif;
+    ;;; first source always in a register
+    load_to_reg(src1, R1) -> op1;
+    if (isinteger(src2) or isbiginteger(src2)) and is_small_disp(src2)
+       and opcode /== "bic"
     then
-        load_to_reg(src1, R5) -> op2;
-        load_to_reg(src2, R1) -> op1;
-    elseif member(opcode, ["orr" "and" "eor" "bic"])
-       and is_int_opd(src2) and not(is_aarch64_bitmask_imm(src2))
-    then
-        load_to_reg(src1, R1) -> op1;
+        ;;; immediate form: addi / addi-negated / andi / ori / xori
+        lvars imm = src2;
+        if     opcode == "add" then asm_emit("addi", dreg, op1, imm, 4)
+        elseif opcode == "sub" then asm_emit("addi", dreg, op1, negate(imm), 4)
+        elseif opcode == "and" then asm_emit("andi", dreg, op1, imm, 4)
+        elseif opcode == "or"  then asm_emit("ori",  dreg, op1, imm, 4)
+        elseif opcode == "xor" then asm_emit("xori", dreg, op1, imm, 4)
+        else
+            ;;; no immediate form for this op -- materialise and use R-type
+            load_to_reg(src2, R5) -> op2;
+            asm_emit(opcode, dreg, op1, op2, 4);
+        endif;
+    else
+        ;;; register (or out-of-range immediate) second operand
         load_to_reg(src2, R5) -> op2;
-    else
-        get_operands_r(src1, src2) -> (op2, op1);
+        if opcode == "bic" then
+            ;;; RISC-V base has no and-not: complement op2, then and
+            asm_emit("not", R5, op2, 3);     ;;; not = xori rd,rs,-1 (pseudo)
+            asm_emit("and", dreg, op1, R5, 4);
+        else
+            asm_emit(opcode, dreg, op1, op2, 4);
+        endif;
     endif;
-    ;;; sp cannot appear as the Xm operand for arithmetic/logical
-    ;;; instructions on AArch64.  Move it into a scratch register first.
-    if op2 == "sp" then
-        asm_emit("mov", R5, "sp", 3);
-        R5 -> op2
-    endif;
-    if isreg(dst) then
-        dst -> dreg;
-        false -> dst;
-    else
-        R1 -> dreg;
-    endif;
-    asm_emit(opcode, dreg, op1, op2, 4);
     if dst then
         gen_reg_store(dreg, dst, R5);
     endif;
