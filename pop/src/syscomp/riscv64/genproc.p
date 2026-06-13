@@ -976,17 +976,40 @@ define lconstant m_parith(opcode);
     gen_op_3(src1, src2, dst, opcode);
 enddefine;
 
+;;; m_parith_test: opcode is "adds"/"subs" -- the overflow-CHECKED POP-int add /
+;;; subtract.  arm64 set the V flag with adds/subs and branched b.vs/b.vc.
+;;; RISC-V has no overflow flag, so we compute the 64-bit signed-overflow bit by
+;;; hand (the same condition the V flag encodes), push the result, then branch on
+;;; OVF/NOVF.  For r = a <op> b the signed overflow is:
+;;;     add:  (r < a) XOR (b < 0)        sub:  (a < r) XOR (b < 0)
+;;; (clearing src1's POP-int tag first, exactly as the non-test path does).
 define lconstant m_parith_test(opcode);
-    lvars gen_p, (, src1, src2, test, lab) = explode(m_instr);
+    lvars (, src1, src2, test, lab) = explode(m_instr);
+    lvars baseop = if opcode == "subs" then "sub" else "add" endif;
+    ;;; a = src1 with the POP-int tag cleared, in R1
     if isintegral(src1) then
-        src1 - 3 -> src1;
+        asm_emit("li", R1, src1 - 3, 3);
     else
-        load_to_reg(src1, R5) -> src1;
-        asm_emit("addi", R5, src1, -3, 4);
-        R5 -> src1;
+        load_to_reg(src1, R1) -> src1;
+        asm_emit("addi", R1, src1, -3, 4);
     endif;
-    gen_op_3(src1, src2, -_USP, opcode);
-    gen_branch('b.' >< testop(test), lab);
+    ;;; b = src2 (tagged) in R5
+    load_to_reg(src2, R5) -> src2;
+    ;;; r = a <baseop> b in R12
+    asm_emit(baseop, R12, R1, R5, 4);
+    ;;; signed-overflow bit -> R16
+    if baseop == "sub" then
+        asm_emit("slt", R16, R1, R12, 4)          ;;; a < r
+    else
+        asm_emit("slt", R16, R12, R1, 4)          ;;; r < a
+    endif;
+    asm_emit("slti", R5, R5, 0, 4);               ;;; (b < 0); b now dead
+    asm_emit("xor", R16, R16, R5, 4);             ;;; R16 = overflow (0/1)
+    ;;; push the result on the user stack (R1 is free again -- not used by a push)
+    gen_reg_store(R12, -_USP, R1);
+    ;;; OVF -> branch when set; NOVF -> branch when clear
+    asm_emit(if test == "OVF" then "bne" else "beq" endif,
+             R16, "x0", get_jump_addr(lab), 4);
 enddefine;
 
 ;;; ptr_arith:
@@ -2074,6 +2097,8 @@ define lconstant outinst(instr);
             elseif opcode == "mov" then "mv"   -> rvop;  ;;; reg moves (imm uses li)
             elseif opcode == "blr" then "jalr" -> rvop;  ;;; indirect call
             elseif opcode == "b"   then "j"    -> rvop;  ;;; unconditional branch
+            elseif opcode == "br"  then "jr"   -> rvop;  ;;; indirect branch (jalr x0)
+            elseif opcode == "mvn" then "not"  -> rvop;  ;;; bitwise-NOT move (xori -1)
             endif;
             asmf_printf(rvop, '\t%p\t');
             unless n == 1 then

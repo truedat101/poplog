@@ -417,35 +417,34 @@ enddefine;
 
 /*
  *  Exfunc closure code -- jump to subroutine _exfunc_clos_action (aextern.s)
- *  with exfunc_closure record address in a reg, etc. This procedure is
- *  passed the label of _exfunc_clos_action. The code generated must be
- *  padded to exactly 4 xwords (32 bytes on AArch64).
- *  It must preserve argument registers and call-preserved registers.
- *  On AArch64 we can use x16/x17 (intra-procedure-call scratch registers).
- *  We compute the address of the closure record (this code's own address)
- *  using adr, then load and branch to the action routine.
+ *  with the exfunc_closure record address in a scratch register. This
+ *  procedure is passed the label of _exfunc_clos_action. The code generated
+ *  must be padded to exactly 4 xwords (32 bytes).
+ *  It must preserve the C argument registers (a0-a7), so it uses only the
+ *  caller-saved temporaries t1/t2 (x6/x7).
+ *
+ *  RISC-V layout (offsets from the closure/stub base, which is 8-aligned):
+ *      0   auipc t1, 0       ;;; t1 = &stub  (PC of this auipc == closure addr)
+ *      4   ld    t2, 24(t1)  ;;; t2 = _exfunc_clos_action (literal at base+24)
+ *      8   jr    t2          ;;; tail-jump; t1 carries the closure address
+ *     12   nop
+ *     16   nop
+ *     20   nop
+ *     24   .quad action_lab  ;;; 8 bytes  -> total 32 (4 xwords)
+ *  _exfunc_clos_action (aextern.s, P4) recovers the exfunc_closure record from
+ *  t1.  We deliberately use a fixed 24(t1) displacement rather than the
+ *  PC-relative `ld rd, sym` pseudo (which is auipc+ld == 8 bytes and would
+ *  overflow the fixed 4-xword size).
  */
 
 define asm_gen_exfunc_clos_code(action_lab);
     lvars action_lab, l = nextlab();
-    ;;; x16 = address of this closure code (PC-relative)
-    asmf_printf('\tadr x16, .-0\n');
-    ;;; Load _exfunc_clos_action address from literal
-    asmf_printf(l, '\tldr x17, %p\n');
-    ;;; Branch to action routine
-    asmf_printf('\tbr x17\n');
-    ;;; Pad to 32 bytes (4 xwords): 3 instructions = 12 bytes, then
-    ;;; 1 nop (4 bytes) + 1 xword (8 bytes) = 24+8 = 32 total
+    asmf_printf('\tauipc\tt1, 0\n');        ;;; t1 = closure base address
+    asmf_printf('\tld\tt2, 24(t1)\n');      ;;; t2 = action addr (literal below)
+    asmf_printf('\tjr\tt2\n');              ;;; tail-jump; t1 = closure address
     asmf_printf('\tnop\n');
-    ;;; 4 instructions = 16 bytes + 8 byte literal + 8 byte pad = 32
     asmf_printf('\tnop\n');
-#_IF DEF UNIX_MACHO
-    ;;; One more nop: the 5 instrs above are odd, so the rebasable action
-    ;;; literal below would land at a 4-mod-8 offset and dyld rejects it. With
-    ;;; 6 instrs (24 B) + the 8 B literal the closure is exactly 4 xwords (32 B,
-    ;;; as documented above) and the literal is 8-aligned.
     asmf_printf('\tnop\n');
-#_ENDIF
     asm_outlab(l);
     asm_outword(action_lab, 1);
 enddefine;
