@@ -153,6 +153,142 @@ copy_external_arguments(int n, uint64_t * ap, void * sp, reg_buff * rp,
     }
 }
 
+#elif defined(__riscv) && (__riscv_xlen == 64)
+
+/*
+ * RISC-V (rv64gc, LP64D) external call argument marshalling.
+ *
+ * RISC-V LP64D calling convention:
+ *   - 8 integer argument registers: a0-a7 (x10-x17, 64-bit)
+ *   - 8 FP argument registers: fa0-fa7 (f10-f17, 64-bit)
+ *   - Stack arguments are 8 bytes each, 16-byte aligned stack
+ *
+ * Like AArch64 there is no single/double interleaving -- each FP argument takes
+ * the next FP register.  The differences from the AArch64 marshaller are:
+ *   1. The register buffer's FP stride is 8 bytes (RISC-V's fa* registers are
+ *      64-bit; riscv64/aextern.s loads them with `fld` at an 8-byte stride),
+ *      so f_reg is a plain double[8] -- not AArch64's 16-byte q-register slots.
+ *   2. A single-precision value held in a 64-bit f register must be NaN-boxed
+ *      (upper 32 bits all ones); otherwise a callee that reads fa* as a single
+ *      sees a boxing violation and reads NaN.
+ */
+
+struct registers_buffer {
+    uint64_t i_reg[8];
+    double   f_reg[8];          /* 8-byte stride (fa0-fa7); cf. aextern.s `fld` */
+};
+
+typedef struct registers_buffer reg_buff;
+
+typedef struct arg_state { int ni; int fi; int si; } arg_state;
+
+static void
+store_single(arg_state * as, void * sp, reg_buff * rp, float val) {
+    int fi = as->fi;
+    if (fi < 8) {
+        /* NaN-box the single into the 64-bit FP slot (RISC-V LP64D requires the
+         * upper 32 bits to be all ones for a single in a wide f register). */
+        uint32_t bits;
+        uint64_t boxed;
+        memcpy(&bits, &val, sizeof(bits));
+        boxed = ((uint64_t)0xFFFFFFFFu << 32) | (uint64_t)bits;
+        memcpy(&rp->f_reg[fi], &boxed, sizeof(boxed));
+        as->fi++;
+    } else {
+        /* Spill to stack as an 8-byte slot */
+        uint64_t slot = 0;
+        memcpy(&slot, &val, sizeof(val));
+        *((uint64_t *)sp + as->si) = slot;
+        as->si++;
+    }
+}
+
+static void
+store_double(arg_state * as, void * sp, reg_buff * rp, double val) {
+    int fi = as->fi;
+    if (fi < 8) {
+        rp->f_reg[fi] = val;
+        as->fi++;
+    } else {
+        *((double *)((uint64_t *)sp + as->si)) = val;
+        as->si++;
+    }
+}
+
+static void
+store_int(arg_state * as, void * sp, reg_buff * rp, uint64_t val) {
+    int ni = as->ni;
+    if (ni < 8) {
+        rp->i_reg[ni] = val;
+        as->ni++;
+    } else {
+        *((uint64_t *)sp + as->si) = val;
+        as->si++;
+    }
+}
+
+/* Must agree with syscomp/wordflags.p */
+#define ET_DDEC 2
+
+/* Must agree with offset in syscomp/symdefs.p (LP64D == AArch64 layout): the
+ * key pointer points at K_FLAGS; K_EXTERN_TYPE is 2 ints + 10 fulls + 2 bytes
+ * = 90.  See the AArch64 branch above for the full derivation. */
+#define ET_OFF 90
+
+void
+copy_external_arguments(int n, uint64_t * ap, void * sp, reg_buff * rp,
+                        int fltsingle) {
+    int i;
+    arg_state as = {0, 0, 0};
+    ap += (n - 1);
+    for(i = 0; i < n; i++, fltsingle >>= 1) {
+        uint64_t ai = *ap;
+        ap--;
+        if (ai & 1) {
+            /* simple */
+            if (ai & 2) {
+                /* integer */
+                store_int(&as, sp, rp, (int64_t)ai >> 2);
+            } else {
+                /* single float - value is in upper bits minus tag */
+                uint32_t raw = (uint32_t)(ai - 1);
+                float fval;
+                memcpy(&fval, &raw, sizeof(fval));
+                if (fltsingle & 1) {
+                    store_single(&as, sp, rp, fval);
+                } else {
+                    double dval = fval;
+                    store_double(&as, sp, rp, dval);
+                }
+            }
+        } else {
+            unsigned char * ak = ((unsigned char * *)ai)[-1];
+            unsigned char et = *(ak + ET_OFF);
+            if (et == ET_DDEC) {
+                /* DDECIMAL: the double DD_1 lies two words back from the Pop
+                 * structure pointer (cf. the AArch64 branch). */
+                double dval;
+                memcpy(&dval, (char *)ai - 2 * sizeof(uint64_t), sizeof(double));
+                if (fltsingle & 1) {
+                    float fval = dval;
+                    store_single(&as, sp, rp, fval);
+                } else {
+                    store_double(&as, sp, rp, dval);
+                }
+            } else {
+                uint64_t val;
+                if (et == 0) {
+                    val = ai;
+                } else {
+                    /* External pointer or bignum: dereference */
+                    val = *(uint64_t *)ai;
+                }
+                store_int(&as, sp, rp, val);
+            }
+        }
+    }
+}
+
 #elif defined(__arm__)
 
 /*
