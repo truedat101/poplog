@@ -748,6 +748,9 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
         __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.pc;
 #elif defined(__arm__)
         __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.arm_pc;
+#elif defined(__riscv)
+        /* riscv64 glibc: mcontext_t.__gregs[REG_PC] (REG_PC==0) holds the PC */
+        __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.__gregs[REG_PC];
 #else
     __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.gregs[REG_PC];
 #endif
@@ -760,6 +763,8 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
         context->uc_mcontext.pc = (unsigned long) __pop_errsig;
 #elif defined(__arm__)
         context->uc_mcontext.arm_pc = (greg_t) __pop_errsig;
+#elif defined(__riscv)
+        context->uc_mcontext.__gregs[REG_PC] = (greg_t) __pop_errsig;
 #else
     context->uc_mcontext.gregs[REG_PC] = (greg_t) __pop_errsig;
 #endif
