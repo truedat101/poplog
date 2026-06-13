@@ -142,20 +142,13 @@ global constant macro (
 );
 #_ENDIF
 
-;;; 8-byte Poplog word: GNU as (AArch64 ELF) uses .xword; Mach-O/Clang uses .quad.
-;;; A whole conditional block -- #_IF cannot appear INSIDE a single
-;;; `constant macro ( ... )` declaration list.
-#_IF DEF UNIX_MACHO
+;;; 8-byte Poplog word: RISC-V GNU as uses the generic .quad (8 bytes).
+;;; (.xword is AArch64-only and is rejected by riscv64-linux-gnu-as;
+;;; .dword is the RISC-V-specific alias for the same 8 bytes.)
 global constant macro (
     $- ASM_DOUBLE_STR = '\t.quad\t',
     $- ASM_WORD_STR   = '\t.quad\t',
 );
-#_ELSE
-global constant macro (
-    $- ASM_DOUBLE_STR = '\t.xword\t',
-    $- ASM_WORD_STR   = '\t.xword\t',
-);
-#_ENDIF
 
 ;;; Procedure/code section. On Mach-O the Pop seed image must be dyld-rebasable:
 ;;; under mandatory PIE the absolute `.quad` pointer fields in procedure records
@@ -198,9 +191,10 @@ define asm_startfile(name);
     lvars name;
     dlocal pop_max_filename_len = ASM_MAX_FILENAME_LEN;
     asmf_printf(sysfileok(name), '\t.file\t"%p"\n');
-#_IF not(DEF UNIX_MACHO)
-    asmf_printf('\t.arch armv8-a\n');   ;;; GNU as; Clang/Mach-O uses -arch arm64
-#_ENDIF
+    ;;; RISC-V: select the rv64gc ISA.  `.option arch, rv64gc` is the modern
+    ;;; GNU-as form; the assembler is also invoked with -march=rv64gc, so this
+    ;;; is belt-and-braces.  (No AArch64-style `.arch armv8-a`.)
+    asmf_printf('\t.option arch, rv64gc\n');
 enddefine;
 sysprotect("pop_max_filename_len");
 
