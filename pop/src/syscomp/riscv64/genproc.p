@@ -142,58 +142,57 @@ constant macro USE_NEW_M_OPERANDS = true;
 ;;; === REGISTER USAGE ================================================
 
 /*
-   AArch64 register assignments for Poplog:
+   RISC-V (rv64gc / LP64D) register assignments for Poplog.  ABI name in
+   parentheses; we emit the xN form.
 
-   x0  - WK_REG/work/arg_reg_0    x1  - work/arg_reg_1
-   x2  - CHAIN_REG/arg_reg_2      x3  - WK_ADDR_REG_1
-   x4  - scratch                   x5  - secondary work reg (R5)
-   x6-x11 - scratch/caller-saved
-   x12 - WK_ADDR_REG_2 (caller-saved scratch, fine for this use)
-   x13-x15 - scratch
-   x16 - IP0 (intra-procedure scratch, used for indirect branches)
-   x17 - IP1 (intra-procedure scratch)
-   x18 - platform register (reserved, do not use)
-   x19 - USP (user stack pointer, callee-saved)
-   x20 - PB  (procedure base register, callee-saved)
-   x21 - pop register local (was r4, callee-saved)
-   x22 - pop register local (was r6, callee-saved)
-   x23 - nonpop register local (was r7, callee-saved)
-   x24 - nonpop register local (was r8, callee-saved)
-   x25 - nonpop register local (was r9, callee-saved)
-   x26-x28 - callee-saved (unused by Poplog)
-   x29 - FP (frame pointer, callee-saved)
-   x30 - LR (link register)
-   sp  - stack pointer (must be 16-byte aligned for access)
-   xzr/wzr - zero register
+   x0  (zero) - hardwired zero            x1  (ra)  - LR (return address)
+   x2  (sp)   - SP (control stack)        x3  (gp)  - reserved (global ptr)
+   x4  (tp)   - reserved (thread ptr)     x5  (t0)  - WK_ADDR_REG_1
+   x6  (t1)   - WK_ADDR_REG_2             x7  (t2)  - scratch (R4)
+   x8  (s0/fp)- (unused; frame ptr if needed)
+   x9  (s1)   - USP (user stack ptr, callee-saved)
+   x10 (a0)   - WK_REG/work/arg_reg_0     x11 (a1)  - work/arg_reg_1
+   x12 (a2)   - CHAIN_REG/arg_reg_2       x13-x17 (a3-a7) - args/scratch
+   x18 (s2)   - PB  (procedure base, callee-saved)
+   x19 (s3)   - pop register local        x20 (s4)  - pop register local
+   x21 (s5)   - nonpop register local     x22 (s6)  - nonpop register local
+   x23 (s7)   - nonpop register local     x24-x27 (s8-s11) - callee-saved spare
+   x28 (t3)   - secondary work reg (R5)   x29 (t4)  - scratch (R9)
+   x30 (t5)   - scratch for indirect branches   x31 (t6) - scratch
 
-   Key differences from ARM32:
-   - 64-bit word size (WORD_OFFS = 8)
-   - No conditional execution on most instructions (use cmp + b.cond)
-   - No stmfd/ldmfd; use stp/ldp pairs (16-byte aligned)
-   - PC not directly readable as a general register
-   - ret instruction replaces bx lr
-   - br/blr replace bx/blx for register targets
-   - Shifts are separate instructions (lsl, asr, lsr) not operand modifiers
-   - x16 used as scratch for indirect branches
+   Key differences from AArch64 (the port's reference backend):
+   - Return address is in x1/ra (saved into the frame), like arm64's x30/LR.
+   - No condition-codes register: compare two registers and branch in one
+     instruction (beq/bne/blt/bge/bltu/bgeu) -- no cmp + b.cond.
+   - No auto-index addressing: a user-stack push [USP,#-8]! / pop [USP],#8
+     becomes two instructions (addi + sd / ld + addi).
+   - Load/store syntax is off(reg), not [reg,#off]; ld/sd (8-byte), lw/sw,
+     lh/sh, lb/sb -- no separate 32-bit W register views.
+   - PC-relative addressing via auipc + %pcrel_hi/_lo (and the la/lla, call,
+     li, mv pseudo-ops).
+   - 12-bit signed immediates; larger need lui/li expansion.
 */
 
 lconstant
 
-    ;;; AArch64 register names and their usage
+    ;;; RISC-V (LP64D) register names and their Poplog usage.  Roles are the
+    ;;; same as the arm64 backend; only the physical register differs.  We emit
+    ;;; xN names (riscv64-as accepts both xN and the ABI names).  ABI name in
+    ;;; the comment.  See PORTING-RISCV64-LINUX.md "P3 transformation map".
 
-    R0 = "x0",    ;;; WK_REG/work reg/arg_reg_0
-    R1 = "x1",    ;;; principal work reg/arg_reg_1
-    R2 = "x2",    ;;; CHAIN_REG/arg_reg_2
-    R3 = "x3",    ;;; WK_ADDR_REG_1
-    R4 = "x4",    ;;; scratch
-    R5 = "x5",    ;;; secondary work reg
-    R9  = "x9",   ;;; scratch
-    R10 = "x19",  ;;; USP (callee-saved)
-    R11 = "x20",  ;;; PB  (callee-saved)
-    R12 = "x12",  ;;; WK_ADDR_REG_2 (caller-saved scratch)
-    R13 = "sp",   ;;; SP
-    LR = "x30",   ;;; LR (link register)
-    R16 = "x16",  ;;; IP0 - scratch for indirect branches
+    R0 = "x10",   ;;; a0  - WK_REG/work reg/arg_reg_0
+    R1 = "x11",   ;;; a1  - principal work reg/arg_reg_1
+    R2 = "x12",   ;;; a2  - CHAIN_REG/arg_reg_2
+    R3 = "x5",    ;;; t0  - WK_ADDR_REG_1
+    R4 = "x7",    ;;; t2  - scratch
+    R5 = "x28",   ;;; t3  - secondary work reg
+    R9  = "x29",  ;;; t4  - scratch
+    R10 = "x9",   ;;; s1  - USP (callee-saved)
+    R11 = "x18",  ;;; s2  - PB  (callee-saved)
+    R12 = "x6",   ;;; t1  - WK_ADDR_REG_2 (caller-saved scratch)
+    R13 = "x2",   ;;; sp  - SP (control stack)
+    LR = "x1",    ;;; ra  - link register (return address)
+    R16 = "x30",  ;;; t5  - scratch for indirect branches (was arm64 IP0/x16)
 ;
 
 constant
@@ -241,12 +240,12 @@ constant
     ;;; ii_USP  : not supported
 
     ;;; Lists of pop/non-pop registers for register locals
-    ;;; AArch64: pop regs are x21, x22 (callee-saved)
-    ;;;          nonpop regs are x23, x24, x25 (callee-saved)
+    ;;; RISC-V: pop regs are x19, x20 (s3, s4, callee-saved)
+    ;;;         nonpop regs are x21, x22, x23 (s5, s6, s7, callee-saved)
 
-    pop_registers = [[] 21 22],
+    pop_registers = [[] 19 20],
     ;;; pop_registers = [[]],
-    nonpop_registers = [[] 23 24 25],
+    nonpop_registers = [[] 21 22 23],
     ;;; nonpop_registers = [[]],
 ;
 
@@ -263,27 +262,21 @@ define reglabel = newassoc([]); enddefine;
 
 procedure();
         lvars n, l;
-        for n from 0 to 30 do
-                if n = 18 then
-                    ;;; x18 is platform-reserved, skip it
-                    nextloop;
-                endif;
+        ;;; RISC-V: 32 integer registers x0..x31, all usable here (none is
+        ;;; "platform-reserved" the way arm64's x18 was -- x0/zero, x1/ra,
+        ;;; x2/sp, x3/gp, x4/tp are simply assigned roles, not skipped).  No
+        ;;; 32-bit register sub-views exist, so no wN names.
+        for n from 0 to 31 do
                 consword('x' >< n) -> l;
                 n -> regnumber(l);
                 l -> reglabel(n);
-                ;;; W-form (32-bit view) of the same register; needed so
-                ;;; outopnd's isreg check accepts wN for ldrb/strb/sxtb etc.
-                consword('w' >< n) -> l;
-                n -> regnumber(l);
         endfor;
-        ;;; Add special register names
-        31 -> regnumber("sp");
-        "sp" -> reglabel(31);
-        ;;; Alias "wsp" to the SP slot too (32-bit view)
-        31 -> regnumber("wsp");
-        30 -> regnumber("x30");  ;;; LR is x30
-        ;;; Alias "lr" to x30's number
-        30 -> regnumber("lr");
+        ;;; ABI-name aliases so hand-written references resolve (canonical
+        ;;; reglabel stays "xN", which is what we emit).
+        2 -> regnumber("sp");           ;;; x2
+        1 -> regnumber("ra");           ;;; x1
+        1 -> regnumber("lr");           ;;; alias ra as lr
+        0 -> regnumber("zero");         ;;; x0
 endprocedure();
 
 ;;; Local register operands:
@@ -299,23 +292,19 @@ lconstant
 
 ;;; autoidreg:
 ;;;     indicates whether a register supports auto-indirection. All do
-;;;     on AArch64.
+;;;     on RISC-V (any x-register can be a base register).
 
 identof("regnumber") -> identof("autoidreg");
 
 ;;; as_wreg:
-;;;     Given an X-register name (e.g. "x21"), return the W-register name
-;;;     ("w21").  Required by ldrb/ldrh/strb/strh/sxtb/sxth/uxtb/uxth which
-;;;     accept only the 32-bit W form.  Pass through anything else (sp etc.).
+;;;     On arm64 this mapped an X-register to its 32-bit W view for byte/half
+;;;     ops.  RISC-V has no separate 32-bit register names -- byte/half/word
+;;;     loads and stores (lb/lh/lw, sb/sh/sw) use the full register -- so this
+;;;     is the identity, kept so existing call sites stay valid.
 
 define lconstant as_wreg(reg) -> wreg;
-    lvars reg, wreg, n;
-    regnumber(reg) -> n;
-    if isinteger(n) and n fi_>= 0 and n fi_<= 30 then
-        consword('w' >< n) -> wreg;
-    else
-        reg -> wreg;
-    endif;
+    lvars reg, wreg;
+    reg -> wreg;
 enddefine;
 
 
