@@ -178,6 +178,12 @@ case "$HOST_ARCH" in
   arm*)
       POP_arch=arm
         ;;
+  riscv64)
+      # RISC-V 64-bit (rv64gc/LP64D), Linux/ELF.  Codegen backend is WIP --
+      # see PORTING-RISCV64-LINUX.md; pop/src/syscomp/riscv64 does not exist
+      # yet, so a build will stop at stamp_popc until it lands.
+      POP_arch=riscv64
+        ;;
   x86_64)
       POP_arch="$HOST_ARCH"
         ;;
