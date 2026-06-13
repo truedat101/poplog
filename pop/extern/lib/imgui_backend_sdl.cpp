@@ -72,7 +72,11 @@ static SDL_Window   *g_window  = nullptr;
 static SDL_GLContext g_glctx   = nullptr;
 static bool          g_closed  = false;
 static bool          g_frame_active = false;
+#ifdef __APPLE__
+static const char   *g_glsl_version = "#version 150";   /* core profile */
+#else
 static const char   *g_glsl_version = "#version 130";
+#endif
 
 int pop_gfx_init(const char *title, int width, int height)
 {
@@ -83,9 +87,18 @@ int pop_gfx_init(const char *title, int width, int height)
         return 0;
     }
 
-    /* GL 3.0 / GLSL 130: works on GPUs and on Mesa llvmpipe (software). */
+    /* GL 3.0 / GLSL 130: works on GPUs and on Mesa llvmpipe (software).
+       macOS only exposes GL >= 3.2 through a CORE, forward-compatible
+       profile -- a 3.0 request fails to create a context there. */
+#ifdef __APPLE__
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
