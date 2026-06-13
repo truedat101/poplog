@@ -36,19 +36,21 @@ GFX_LINK_LDFLAGS = -lc++ -framework Metal -framework MetalKit -framework Cocoa \
 export POP_GFX_OBJECTS = ${GFX_LINK_OBJS}
 export POP_GFX_LDFLAGS = ${GFX_LINK_LDFLAGS}
 else ifeq (${GFX_CONF},imgui-sdl)
-# Experimental native graphics backend (Dear ImGui + SDL3 + OpenGL3, Linux/Unix);
-# the Linux sibling of the Metal block above.  SDL3 dlopen's Wayland/X11/kmsdrm
-# at run time, so NO X is linked.  Glue: pop/extern/lib/imgui_backend_sdl.cpp.
-# gen_link_command (syscomp/os_comms.p) folds $POP_GFX_OBJECTS/$POP_GFX_LDFLAGS
-# into the poplink command, exactly as on Darwin.
+# Experimental native graphics backend (Dear ImGui + SDL3 + OpenGL3).  Cross
+# platform: Linux/Unix (SDL3 dlopen's Wayland/X11/kmsdrm at run time -> no hard
+# X11 dependency) AND macOS (SDL3 over Cocoa, OpenGL core profile).  Glue:
+# pop/extern/lib/imgui_backend_sdl.cpp.  gen_link_command (syscomp/os_comms.p)
+# folds $POP_GFX_OBJECTS/$POP_GFX_LDFLAGS into the poplink command.
+# SDL3 + OpenGL compile/link flags are resolved by ./configure (pkg-config or
+# SDL3_CFLAGS/SDL3_LIBS, plus the OS-specific GL link), so no pkg-config here.
 XL_FLAG=-nox
 GFX_CXX        = c++
-GFX_INCLUDES   = -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib $(shell pkg-config --cflags sdl3)
+GFX_INCLUDES   = -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib @@GFX_SDL_CFLAGS@@
 GFX_LINK_OBJS  = ${popexlib}/imgui_backend_sdl.o ${popexlib}/imgui.o \
                  ${popexlib}/imgui_draw.o ${popexlib}/imgui_tables.o \
                  ${popexlib}/imgui_widgets.o ${popexlib}/imgui_impl_sdl3.o \
                  ${popexlib}/imgui_impl_opengl3.o
-GFX_LINK_LDFLAGS = $(shell pkg-config --libs sdl3) -lGL -lstdc++
+GFX_LINK_LDFLAGS = @@GFX_SDL_LIBS@@
 export POP_GFX_OBJECTS = ${GFX_LINK_OBJS}
 export POP_GFX_LDFLAGS = ${GFX_LINK_LDFLAGS}
 else

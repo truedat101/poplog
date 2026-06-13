@@ -89,10 +89,23 @@ There is now an **optional native graphics backend** built on
 [Dear ImGui](https://github.com/ocornut/imgui), selected at build time with
 `./configure --experimental-graphics` (it implies "no X"):
 
-* **macOS** — Metal + Cocoa: a native window with no X server or XQuartz.
-* **Linux / Unix** — SDL3 + OpenGL3.  SDL3 selects the display transport at run
-  time — **Wayland**, X11, or KMS/DRM — so there is **no hard X11 dependency**;
-  it also renders **headless** via Mesa software (llvmpipe) for CI.
+* **Metal + Cocoa** (macOS) — a native window with no X server or XQuartz.
+* **SDL3 + OpenGL3** (macOS *or* Linux/Unix) — SDL3 selects the display
+  transport at run time — **Wayland**, X11, or KMS/DRM — so there is **no hard
+  X11 dependency**; it also renders **headless** via Mesa software (llvmpipe)
+  for CI.
+
+The **backend is chosen at build time**, so you can pick one and explore:
+
+```sh
+./configure --experimental-graphics          # per-OS default: Metal on macOS, SDL elsewhere
+./configure --experimental-graphics=metal     # force Metal  (macOS only)
+./configure --experimental-graphics=sdl       # force SDL3 + OpenGL (macOS or Linux)
+```
+
+`=sdl` needs SDL3 (`pkg-config sdl3` — e.g. `brew install sdl3`; or point at a
+build with `SDL3_CFLAGS=… SDL3_LIBS=… ./configure --experimental-graphics=sdl`).
+The running backend (and GPU) is reported by `gfx_spec()`; see the badge below.
 
 The macOS **Metal** backend, live — `examples/cube3d.p`, a smooth vsync-paced
 spin with an on-screen stats badge (backend, GPU, live FPS):
