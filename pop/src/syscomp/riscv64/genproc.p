@@ -1458,51 +1458,30 @@ lvars
 ;;;     For an odd number of registers, we add an extra str/ldr for the last one.
 
 define lconstant emit_stp_push(reg_list);
-    ;;; Push registers onto sp using stp with pre-decrement.
-    ;;; Process in pairs from the end to maintain proper stack order.
+    ;;; RISC-V has no store-pair instruction: allocate a 16-byte-aligned block
+    ;;; then sd each register at 8-byte offsets.
     lvars regs = reg_list, len = listlength(regs), i;
     lvars regvec = {%applist(regs, identfn)%};
-    ;;; We push in pairs. Total space needed is len * 8, rounded up to 16.
     lvars total_space = ((len + 1) div 2) * 16;
-    ;;; First, allocate the stack space
-    asm_emit("sub", "sp", "sp", '#' >< total_space, 4);
-    ;;; Then store registers. stp uses [sp, #offset] form.
+    gen_sp_adjust(total_space, "sub");
     lvars offset = 0;
-    1 -> i;
-    while i + 1 <= len do
-        asm_emit("stp", f_subv(i, regvec), f_subv(i + 1, regvec),
-                 '[sp, #' >< offset >< ']', 4);
-        offset + 16 -> offset;
-        i + 2 -> i;
-    endwhile;
-    ;;; Handle odd register
-    if i <= len then
-        asm_emit("str", f_subv(i, regvec),
-                 '[sp, #' >< offset >< ']', 3);
-    endif;
+    for i from 1 to len do
+        asm_emit("sd", f_subv(i, regvec), offset >< '(sp)', 3);
+        offset fi_+ 8 -> offset;
+    endfor;
 enddefine;
 
 define lconstant emit_ldp_pop(reg_list);
-    ;;; Pop registers from sp using ldp with post-increment.
+    ;;; RISC-V has no load-pair: ld each register then free the block.
     lvars regs = reg_list, len = listlength(regs), i;
     lvars regvec = {%applist(regs, identfn)%};
     lvars total_space = ((len + 1) div 2) * 16;
-    ;;; Load registers. ldp uses [sp, #offset] form.
     lvars offset = 0;
-    1 -> i;
-    while i + 1 <= len do
-        asm_emit("ldp", f_subv(i, regvec), f_subv(i + 1, regvec),
-                 '[sp, #' >< offset >< ']', 4);
-        offset + 16 -> offset;
-        i + 2 -> i;
-    endwhile;
-    ;;; Handle odd register
-    if i <= len then
-        asm_emit("ldr", f_subv(i, regvec),
-                 '[sp, #' >< offset >< ']', 3);
-    endif;
-    ;;; Deallocate the stack space
-    asm_emit("add", "sp", "sp", '#' >< total_space, 4);
+    for i from 1 to len do
+        asm_emit("ld", f_subv(i, regvec), offset >< '(sp)', 3);
+        offset fi_+ 8 -> offset;
+    endfor;
+    gen_sp_adjust(total_space, "add");
 enddefine;
 
 
@@ -1522,20 +1501,23 @@ enddefine;
 ;;;     AArch64 add/sub take a 12-bit unsigned immediate, optionally shifted
 ;;;     left by 12.  nbytes is a multiple of 16 (STACK_ALIGN); cover the full
 ;;;     24-bit range with at most two instructions.
+;;; RISC-V: one addi sp,sp,+/-nbytes when nbytes fits the signed 12-bit
+;;; immediate (|n| <= 2047); otherwise materialise the delta in a scratch
+;;; register with li (NOT a PB-relative literal load -- see the M_UNWIND_SF
+;;; note above) and add it.  -opcode- "sub" allocates (negative), "add" frees.
 define lconstant gen_sp_adjust(nbytes, opcode);
-    lvars nbytes, opcode, low = nbytes && 16:FFF, high = nbytes && 16:FFF000;
+    lvars nbytes, opcode, delta;
     if nbytes < 0 then
         mishap(nbytes, 1, 'gen_sp_adjust: negative frame size');
-    elseif nbytes <= 16:FFF then
-        asm_emit(opcode, "sp", "sp", '#' >< nbytes, 4);
-    elseif (nbytes && 16:FFFFFF) == nbytes then
-        ;;; > 4095 bytes: emit the high (<<12) part, then any low 12 bits.
-        asm_emit(opcode, "sp", "sp", '#' >< (high >> 12) >< ', lsl #12', 4);
-        if low /== 0 then
-            asm_emit(opcode, "sp", "sp", '#' >< low, 4);
-        endif;
+    endif;
+    (if opcode == "sub" then negate(nbytes) else nbytes endif) -> delta;
+    if delta == 0 then
+        ;;; no adjustment needed
+    elseif is_small_disp(delta) then
+        asm_emit("addi", "sp", "sp", delta, 4);
     else
-        mishap(nbytes, 1, 'gen_sp_adjust: frame too large for direct immediate');
+        asm_emit("li", R16, delta, 3);
+        asm_emit("add", "sp", "sp", R16, 4);
     endif;
 enddefine;
 
