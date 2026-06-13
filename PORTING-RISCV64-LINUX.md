@@ -199,3 +199,75 @@ Suggested edit order within genproc: register layer (above) → the central
 operand formatter (load/store `off(reg)` + the push/pop split) → mnemonics in the
 `asm_emit` call sites → branch lowering → PC-relative loads → the procedure
 prologue/epilogue. Gate each against the validation loop.
+
+---
+
+## STATUS (P3 complete, P4 in progress)
+
+### Done
+- **P1/P2/P3 — codegen backend COMPLETE.** The entire `pop/src` library
+  compiles through `popc` to valid RISC-V ELF objects with **0 assembler
+  errors / 0 MISHAPs** (`riscv64-linux-gnu-as -march=rv64gc`). Files:
+  `syscomp/riscv64/{sysdefs,asmout,genproc}.p`. Includes the no-flags branch
+  lowering, the parith overflow path (hand-computed: add `(r<a)^(b<0)`, sub
+  `(a<r)^(b<0)` via slt/slti/xor), and the exfunc-closure stub
+  (`auipc t1,0`+`ld t2,24(t1)`+`jr t2`, fixed 4-xword size).
+- **P4 runtime `.s` (6 of 10) + the C marshaller:**
+  - `amain.s` — entry point / `_MAIN`.
+  - `asignals.s` — `_call_sys` / `_call_sys_se` / `__pop_errsig` (the C-call ABI
+    gateway).
+  - `aextern.s` — FFI trampoline (`_call_external`, `_exfunc_clos_action`,
+    `_pop_external_callback`). **8-byte FP buffer stride** (not arm64's 16).
+  - `alisp.s`, `amove.s` — Lisp stack + move/cmp/bitfield.
+  - `pop/extern/lib/ext_arm.c` — `__riscv` branch of `copy_external_arguments`
+    (8-byte FP stride + single-float **NaN-boxing**), cross-compiles clean.
+
+### Dev loop (validated)
+```
+# edit on the Mac, then:
+rsync -a pop/src/syscomp/riscv64/ dkords@red5buntu:.../pop/src/syscomp/riscv64/
+rsync -a pop/src/riscv64/         dkords@red5buntu:.../pop/src/riscv64/
+ssh red5buntu 'cd .../poplog && POPLOG=$PWD/poplog
+  make POP_arch=riscv64 stamp_popc            # rebuild popc if syscomp changed
+  # gate one or more .s/.p: a POP__as wrapper saves the emitted .s and runs
+  #   riscv64-linux-gnu-as -march=rv64gc; assembler errors are the to-do list.
+  (cd pop/src && POP__as=/tmp/save.sh "$POPLOG" popc -c -nosys -od /tmp riscv64/FOO.s)'
+```
+Reset a stale error log between runs — a left-over `/tmp/rverrors.log` once
+produced a phantom "23k binary-garbage errors" panic; the real count was 128.
+
+### Register remap gotcha (critical)
+arm64's general scratch `x0–x12` **overlaps RISC-V reserved registers**:
+`x0`=zero, `x2`=sp, `x3`=gp, `x4`=tp — and this port's `USP`=x9, `PB`=x18.
+So every hand-written-asm scratch must be remapped. Convention used in the
+runtime `.s`:
+
+| arm64 | riscv64 | role |
+|-------|---------|------|
+| `x19` USP | `x9` (s1) | user stack pointer |
+| `x20` PB  | `x18` (s2) | procedure base |
+| `x0–x2` (C args) | `a0–a2` (x10–x12) | C-ABI args/return |
+| `x3` scratch | `a3` (x13) | scratch |
+| `x5,x6` | `t1,t2` (x6,x7) | scratch |
+| `x9` scratch | `t3` (x28) | **NB x9 is USP here** |
+| `x10,x11,x12` | `t4,t5,t6` (x29,x30,x31) | scratch |
+| FP `d0–d7` | `fa0–fa7`, `fld`/`fsd`, **8-byte stride** | FP args |
+Pop register-locals (GC-scanned) = `x19,x20` (pop) + `x21,x22,x23` (nonpop).
+
+### Remaining P4/P5 work (the large next phase)
+- `aprolog.s`, `aarith.s`, `afloat.s`, `amisc.s`, `aprocess.s` — runtime `.s`.
+- `riscv64/{ass.p, array_cons.p, closure_cons.p, pdr_compose.p}` — arch `.p`.
+- **`ass.p` (2189 lines) is the RUNTIME ASSEMBLER** — a second code generator
+  that emits **binary instruction words** (`drop_w(_BLR _biset _shift(_WK,_5))`),
+  not text. Porting it means RISC-V instruction *encoding* (R/I/S/B/U/J formats),
+  not mnemonic mapping. Biggest single remaining piece; needs the P5 bootstrap
+  to actually test.
+- **ARCHITECTURAL ITEM — Prolog flags-return convention.** The `_prolog_*`
+  primitives in `aprolog.s` return their result *in the condition flags*
+  (`_prolog_unify_atom` leaves flags EQ; `fail.ret` sets carry-clear), and
+  `ass.p`'s `I_PLOG_IFNOT_ATOM` / `I_PLOG_TERM_SWITCH` consume them via
+  `drop_br_cond(_cc_NE/_HI/_CC, label)`. **RISC-V has no flags register**, so
+  `aprolog.s` and the RISC-V `ass.p` must be **co-designed**: have the routines
+  return 0/1/-1 in a register (e.g. `a0`), and have the `I_PLOG_*` handlers emit
+  a register test (`beqz`/`bnez`/`bltz`) instead of `drop_br_cond`. Do these two
+  together.
