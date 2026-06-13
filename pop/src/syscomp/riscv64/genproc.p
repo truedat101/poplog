@@ -679,12 +679,18 @@ define lconstant get_jump_addr(lab);
 enddefine;
 
 ;;; gen_branch:
-;;;     On AArch64, conditional branches use "b.cond" syntax.
-;;;     The opcode passed in is e.g. "b.eq", "b.ne", etc.
+;;;     Plant an UNCONDITIONAL branch.  RISC-V uses "j label".  (Conditional
+;;;     branches no longer come through here: gen_test_or_cmp plants a single
+;;;     compare-and-branch, since RISC-V has no condition-codes register.)
 
 define lconstant gen_branch(opcode, lab);
+    lvars opcode, lab;
     get_jump_addr(lab) -> lab;
-    asm_emit(opcode, lab, 2);
+    if opcode == "b" then
+        asm_emit("j", lab, 2);
+    else
+        asm_emit(opcode, lab, 2);   ;;; residual b.cond -- fixed at its call site
+    endif;
 enddefine;
 
 /*
@@ -1150,25 +1156,67 @@ enddefine;
 ;;;     test codes EQ, NEQ etc.
 ;;;     On AArch64: cmp/tst + b.cond
 
+;;; rv_cond:
+;;;     maps an M-code test code to a RISC-V compare-and-branch mnemonic for
+;;;     "branch if (op1 <test> op2)", plus a flag saying whether op1/op2 must be
+;;;     swapped (RISC-V has blt/bge/bltu/bgeu but no bgt/ble, so > and <= are
+;;;     done by swapping operands).  NEG/POS test the sign of op1-op2, i.e. the
+;;;     same as LT/GEQ.  OVF/NOVF (overflow) have no RISC-V flag and belong to
+;;;     the typed-arithmetic path, not here.
+define lconstant rv_cond(test) -> mnem -> swap;
+    lvars test, mnem, swap = false;
+    if     test == "EQ"   then "beq"
+    elseif test == "NEQ"  then "bne"
+    elseif test == "LT"   then "blt"
+    elseif test == "GEQ"  then "bge"
+    elseif test == "NEG"  then "blt"
+    elseif test == "POS"  then "bge"
+    elseif test == "GT"   then true -> swap; "blt"
+    elseif test == "LEQ"  then true -> swap; "bge"
+    elseif test == "ULT"  then "bltu"
+    elseif test == "UGEQ" then "bgeu"
+    elseif test == "UGT"  then true -> swap; "bltu"
+    elseif test == "ULEQ" then true -> swap; "bgeu"
+    else mishap(test, 1, 'rv_cond: unhandled test code (OVF/NOVF go via the arith path)')
+    endif -> mnem;
+enddefine;
+
+;;; to_branch_reg: force an operand into a register for a RISC-V branch
+;;; (immediate 0 -> the hardwired zero register x0; other values via load_to_reg).
+define lconstant to_branch_reg(src, tmp);
+    lvars src, tmp;
+    if (isinteger(src) or isbiginteger(src)) and src == 0 then
+        "x0"
+    else
+        load_to_reg(src, tmp)
+    endif;
+enddefine;
+
+;;; gen_test_or_cmp:
+;;;     plant a single RISC-V compare-and-branch (cmp) or and+branch (tst):
+;;;       cmp:  b<cond> op1, op2, lab     (op1 from src1, op2 from src2)
+;;;       tst:  and R5, op1, op2 ; beq/bne R5, x0, lab
+;;;     replacing arm64's flag-setting cmp/tst + b.cond (RISC-V has no flags).
+
 define lconstant gen_test_or_cmp(src1, src2, test, lab, cmp_or_test);
-    lvars src1, src2, test, lab, cmp_or_test, op1, op2;
-    ;;; tst is a logical instruction -- requires bitmask immediate;
-    ;;; arbitrary integers must be loaded to register form.
-    if cmp_or_test == "tst"
-       and is_int_opd(src2) and not(is_aarch64_bitmask_imm(src2))
-    then
+    lvars src1, src2, test, lab, cmp_or_test, op1, op2, mnem, swap;
+    if cmp_or_test == "tst" then
         load_to_reg(src1, R1) -> op1;
         load_to_reg(src2, R5) -> op2;
+        asm_emit("and", R5, op1, op2, 4);
+        ;;; the test for tst is EQ ((op1&op2)==0) or NEQ; branch R5 vs zero
+        rv_cond(test) -> (mnem, swap);
+        asm_emit(mnem, R5, "x0", get_jump_addr(lab), 4);
     else
-        get_operands(src1, src2) -> (op1, op2);
+        to_branch_reg(src1, R1) -> op1;
+        to_branch_reg(src2, R5) -> op2;
+        rv_cond(test) -> (mnem, swap);
+        if swap then
+            asm_emit(mnem, op2, op1, get_jump_addr(lab), 4)
+        else
+            asm_emit(mnem, op1, op2, get_jump_addr(lab), 4)
+        endif;
     endif;
-    ;;; sp cannot appear as Xm for cmp/tst -- mov to scratch first.
-    if op2 == "sp" then
-        asm_emit("mov", R5, "sp", 3);
-        R5 -> op2
-    endif;
-    asm_emit(cmp_or_test, op1, op2, 3);
-    gen_branch('b.' >< testop(test), lab);
 enddefine;
 
 define lconstant gen_cmp  = gen_test_or_cmp(% "cmp" %) enddefine;
