@@ -479,13 +479,13 @@ define lconstant get_addressable_op(opd, tmp);
             f_subv(1, opd) -> opd1;
             if isboolean(disp) then
                 ;;; Auto-index (USP push/pop): not a single RISC-V memory
-                ;;; operand -- it needs an explicit addi.
-                ;;;   disp == false  -> push (pre-decrement): used as a STORE
-                ;;;     destination.  Emit the decrement HERE and return 0(base);
-                ;;;     the caller's store (sd) then writes to the new top.
-                ;;;   disp == true   -> pop (post-increment): a load SOURCE,
-                ;;;     handled in load_to_reg before reaching here (the bump
-                ;;;     must follow the load), so it must not arrive here.
+                ;;; operand -- emit the explicit pointer bump here.
+                ;;;   disp == false -> push (pre-decrement): decrement the base
+                ;;;     and return 0(base); the caller's store writes the new top.
+                ;;;   disp == true  -> pop (post-increment): the access must read
+                ;;;     the CURRENT top and only then advance.  Save the current
+                ;;;     pointer in a scratch (R16), advance the base, and return
+                ;;;     0(scratch) so the caller's access uses the pre-bump top.
                 lvars size = 8;
                 if datalength(opd) == 3 then
                     f_subv(3, opd) && t_BASE_TYPE -> type;
@@ -494,10 +494,13 @@ define lconstant get_addressable_op(opd, tmp);
                         -> size;
                 endif;
                 if disp then
-                    mishap(opd, 1, 'get_addressable_op: USP pop must be split by load_to_reg');
+                    asm_emit("mv", R16, opd1, 3);          ;;; save current top
+                    asm_emit("addi", opd1, opd1, size, 4); ;;; advance (post-inc)
+                    return('0(' >< R16 >< ')');
+                else
+                    asm_emit("addi", opd1, opd1, -size, 4);  ;;; push: pre-decrement
+                    return('0(' >< opd1 >< ')');
                 endif;
-                asm_emit("addi", opd1, opd1, -size, 4);   ;;; push: pre-decrement
-                return('0(' >< opd1 >< ')');
             elseif disp == 0 then
                 return('0(' >< opd1 >< ')');
             elseif is_small_disp(disp) then
@@ -589,28 +592,19 @@ enddefine;
 ;;;     On AArch64: use str/strh/strb as appropriate for the type.
 
 define lconstant gen_reg_store(src, dst, tmp);
-    lvars src, dst, tmp, dst1, type, opcode, use_wreg = false;
+    lvars src, dst, tmp, dst1, type, opcode = "sd";
     get_addressable_op(dst, tmp) -> dst1;
-    "str" -> opcode;
     if isvector(dst) and datalength(dst) == 3 then
         f_subv(3, dst) && t_BASE_TYPE -> type;
-        ;;; NB: on LP64 (AArch64) t_WORD == t_DOUBLE, so a t_INT field is a
-        ;;; genuine 32-bit int and MUST be stored as a 32-bit (W-register)
-        ;;; store -- a 64-bit str would overrun into the adjacent field.
-        if type == t_INT then "str", true -> use_wreg
-        elseif type == t_SHORT then "strh", true -> use_wreg
-        elseif type == t_BYTE then "strb", true -> use_wreg
-        else
-            mishap(dst, 1, 'Unhandled operand type');
+        ;;; RISC-V stores the low N bits directly: sw/sh/sb -- no W-register
+        ;;; form and no overrun (a t_INT field is a genuine 32-bit store).
+        if type == t_INT then "sw"
+        elseif type == t_SHORT then "sh"
+        elseif type == t_BYTE then "sb"
+        else mishap(dst, 1, 'Unhandled operand type')
         endif -> opcode;
     endif;
-    ;;; sub-word stores (str/strh/strb of t_INT/t_SHORT/t_BYTE) require the
-    ;;; source register in W (32-bit) form.
-    if use_wreg then
-        asm_emit(opcode, as_wreg(src), dst1, 3);
-    else
-        asm_emit(opcode, src, dst1, 3);
-    endif;
+    asm_emit(opcode, src, dst1, 3);
 enddefine;
 
 ;;; push_operand / pop_operand:
@@ -1633,17 +1627,18 @@ define M_CREATE_SF();
     Nregs       -> sf_Nregs;
     frame_len   -> sf_frame_len;
 
-    ;;; PD_REGMASK bit-map (GC register scan). AArch64 register numbers would
-    ;;; overflow the 16-bit field, so aprocess.s expects this remap:
-    ;;;   x21 -> bit 4, x22 -> bit 6, x23 -> bit 7, x24 -> bit 8, x25 -> bit 9
+    ;;; PD_REGMASK bit-map (GC register scan): which register-local registers
+    ;;; this procedure uses.  Register numbers must map into the 16-bit field;
+    ;;; this is a CONTRACT with aprocess.s (process switch / GC register scan).
+    ;;; RISC-V register locals: pop x19,x20 (s3,s4); nonpop x21,x22,x23 (s5-s7).
     0 -> regmask;
     fast_for n in reg_locals do
         lvars bitpos;
-        if n == 21 then 4
-        elseif n == 22 then 6
-        elseif n == 23 then 7
-        elseif n == 24 then 8
-        elseif n == 25 then 9
+        if n == 19 then 0
+        elseif n == 20 then 1
+        elseif n == 21 then 2
+        elseif n == 22 then 3
+        elseif n == 23 then 4
         else mishap(n, 1, 'M_CREATE_SF: register not in PD_REGMASK map')
         endif -> bitpos;
         regmask || (1 << bitpos) -> regmask
@@ -2072,6 +2067,8 @@ define lconstant outinst(instr);
             ;;; li, mv etc. by the generators, so they never reach here.)
             lvars rvop = opcode;
             if     opcode == "str" then "sd"   -> rvop;
+            elseif opcode == "strh" then "sh"  -> rvop;  ;;; 16-bit store
+            elseif opcode == "strb" then "sb"  -> rvop;  ;;; 8-bit store
             elseif opcode == "ldr" then "ld"   -> rvop;
             elseif opcode == "bl"  then "call" -> rvop;
             elseif opcode == "mov" then "mv"   -> rvop;  ;;; reg moves (imm uses li)
