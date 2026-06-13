@@ -619,13 +619,17 @@ enddefine;
 define lconstant push_operand(opd);
     lvars opd;
     load_to_reg(opd, R1) -> opd;
-    asm_emit("str", opd, '[sp, #-16]!', 3);
+    ;;; push to the control stack (16-byte slot): pre-decrement then store
+    asm_emit("addi", "sp", "sp", -16, 4);
+    asm_emit("sd", opd, '0(sp)', 3);
 enddefine;
 
 define lconstant pop_operand(opd);
     lvars opd, reg;
     if isreg(opd) then opd else R1 endif -> reg;
-    asm_emit("ldr", reg, '[sp], #16', 3);
+    ;;; pop from the control stack: load then post-increment
+    asm_emit("ld", reg, '0(sp)', 3);
+    asm_emit("addi", "sp", "sp", 16, 4);
     returnif(opd == reg);
     gen_reg_store(reg, opd, R5);
 enddefine;
@@ -964,7 +968,7 @@ define lconstant m_parith(opcode);
         src1 - 3 -> src1;
     else
         load_to_reg(src1, R5) -> src1;
-        asm_emit("sub", R5, src1, 3, 4);
+        asm_emit("addi", R5, src1, -3, 4);
         R5 -> src1;
     endif;
     gen_op_3(src1, src2, dst, opcode);
@@ -976,7 +980,7 @@ define lconstant m_parith_test(opcode);
         src1 - 3 -> src1;
     else
         load_to_reg(src1, R5) -> src1;
-        asm_emit("sub", R5, src1, 3, 4);
+        asm_emit("addi", R5, src1, -3, 4);
         R5 -> src1;
     endif;
     gen_op_3(src1, src2, -_USP, opcode);
@@ -1110,33 +1114,34 @@ define M_ASH();
         load_to_reg(src2, R1) -> src2;
         if src1 < -63 then -63 -> src1 endif;
         if src1 > 63 then
-            asm_emit("mov", dreg, '#0', 3);
+            asm_emit("li", dreg, 0, 3);
         else
             if src1 < 0 then
-                asm_emit("asr", dreg, src2, '#' >< -src1, 4);
+                ;;; arithmetic shift right by immediate
+                asm_emit("srai", dreg, src2, -src1, 4);
             elseif src1 == 0 then
                 unless dreg = src2 then
-                    asm_emit("mov", dreg, src2, 3);
+                    asm_emit("mv", dreg, src2, 3);
                 endunless;
             else
-                asm_emit("lsl", dreg, src2, '#' >< src1, 4);
+                ;;; logical shift left by immediate
+                asm_emit("slli", dreg, src2, src1, 4);
             endif;
         endif;
     else
-        ;;; Variable shift amount: need two code paths
+        ;;; Variable shift amount: sign-test, then left or (negated) right shift
         load_to_reg(src1, R5) -> src1;
         load_to_reg(src2, R1) -> src2;
         lvars neg_lab = genlab();
         lvars done_lab = genlab();
-        asm_emit("cmp", src1, '#0', 3);
-        gen_branch('b.lt', neg_lab);
+        asm_emit("blt", src1, "x0", neg_lab, 4);   ;;; src1 < 0 -> right shift
         ;;; Positive or zero: left shift
-        asm_emit("lsl", dreg, src2, src1, 4);
-        gen_branch("b", done_lab);
-        ;;; Negative: right shift by negated amount
+        asm_emit("sll", dreg, src2, src1, 4);
+        asm_emit("j", done_lab, 2);
+        ;;; Negative: right shift by the negated amount
         asmLABEL(neg_lab);
-        asm_emit("neg", R5, src1, 3);
-        asm_emit("asr", dreg, src2, R5, 4);
+        asm_emit("neg", R5, src1, 3);              ;;; neg = sub rd,x0,rs (pseudo)
+        asm_emit("sra", dreg, src2, R5, 4);
         asmLABEL(done_lab);
     endif;
     if dst then
@@ -1163,22 +1168,27 @@ enddefine;
 ;;;     done by swapping operands).  NEG/POS test the sign of op1-op2, i.e. the
 ;;;     same as LT/GEQ.  OVF/NOVF (overflow) have no RISC-V flag and belong to
 ;;;     the typed-arithmetic path, not here.
-define lconstant rv_cond(test) -> mnem -> swap;
-    lvars test, mnem, swap = false;
-    if     test == "EQ"   then "beq"
-    elseif test == "NEQ"  then "bne"
-    elseif test == "LT"   then "blt"
-    elseif test == "GEQ"  then "bge"
-    elseif test == "NEG"  then "blt"
-    elseif test == "POS"  then "bge"
-    elseif test == "GT"   then true -> swap; "blt"
-    elseif test == "LEQ"  then true -> swap; "bge"
-    elseif test == "ULT"  then "bltu"
-    elseif test == "UGEQ" then "bgeu"
-    elseif test == "UGT"  then true -> swap; "bltu"
-    elseif test == "ULEQ" then true -> swap; "bgeu"
+define lconstant rv_cond(test);
+    lvars test;
+    if     test == "EQ"                 then "beq"
+    elseif test == "NEQ"                then "bne"
+    elseif test == "LT"  or test == "NEG" then "blt"
+    elseif test == "GEQ" or test == "POS" then "bge"
+    elseif test == "GT"                 then "blt"   ;;; with operand swap
+    elseif test == "LEQ"                then "bge"   ;;; with operand swap
+    elseif test == "ULT"                then "bltu"
+    elseif test == "UGEQ"               then "bgeu"
+    elseif test == "UGT"                then "bltu"  ;;; with operand swap
+    elseif test == "ULEQ"               then "bgeu"  ;;; with operand swap
     else mishap(test, 1, 'rv_cond: unhandled test code (OVF/NOVF go via the arith path)')
-    endif -> mnem;
+    endif;
+enddefine;
+
+;;; rv_swap: true for >, <=, u>, u<= -- RISC-V has no bgt/ble/bgtu/bleu, so
+;;; those are done by swapping the two branch operands.
+define lconstant rv_swap(test);
+    lvars test;
+    test == "GT" or test == "LEQ" or test == "UGT" or test == "ULEQ"
 enddefine;
 
 ;;; to_branch_reg: force an operand into a register for a RISC-V branch
@@ -1199,22 +1209,20 @@ enddefine;
 ;;;     replacing arm64's flag-setting cmp/tst + b.cond (RISC-V has no flags).
 
 define lconstant gen_test_or_cmp(src1, src2, test, lab, cmp_or_test);
-    lvars src1, src2, test, lab, cmp_or_test, op1, op2, mnem, swap;
+    lvars src1, src2, test, lab, cmp_or_test, op1, op2;
     if cmp_or_test == "tst" then
         load_to_reg(src1, R1) -> op1;
         load_to_reg(src2, R5) -> op2;
         asm_emit("and", R5, op1, op2, 4);
         ;;; the test for tst is EQ ((op1&op2)==0) or NEQ; branch R5 vs zero
-        rv_cond(test) -> (mnem, swap);
-        asm_emit(mnem, R5, "x0", get_jump_addr(lab), 4);
+        asm_emit(rv_cond(test), R5, "x0", get_jump_addr(lab), 4);
     else
         to_branch_reg(src1, R1) -> op1;
         to_branch_reg(src2, R5) -> op2;
-        rv_cond(test) -> (mnem, swap);
-        if swap then
-            asm_emit(mnem, op2, op1, get_jump_addr(lab), 4)
+        if rv_swap(test) then
+            asm_emit(rv_cond(test), op2, op1, get_jump_addr(lab), 4)
         else
-            asm_emit(mnem, op1, op2, get_jump_addr(lab), 4)
+            asm_emit(rv_cond(test), op1, op2, get_jump_addr(lab), 4)
         endif;
     endif;
 enddefine;
@@ -1313,29 +1321,32 @@ define lconstant gen_switch(src, labs, else_case, sysint);
     lvars sreg = src;
     ;;; clear pop bits when POP integer
     if not(sysint) then
-        asm_emit("sub", R0, src, 3, 4);
+        asm_emit("addi", R0, src, -3, 4);
         R0 -> sreg;
     endif;
     ;;; Check it's in range: an unsigned comparison takes care of both the
     ;;; too large and too small cases.
-    lvars opd2;
-    get_operand2(if sysint then ncases else popint(ncases) - 3 endif) -> opd2;
-    asm_emit("cmp", sreg, opd2, 3);
-    gen_branch('b.hi', else_lab);
-    ;;; Compute table entry address and jump
-    ;;; On AArch64: table entries are 8 bytes (.xword) each
+    ;;; Bounds check: if sreg > limit (unsigned) take the else case.  RISC-V
+    ;;; compares two registers, so load the limit and use bltu (sreg > limit
+    ;;; <=> limit < sreg).
+    lvars limit = if sysint then ncases else popint(ncases) - 3 endif;
+    lvars limreg = to_branch_reg(limit, R5);
+    asm_emit("bltu", limreg, sreg, else_lab, 4);
+    ;;; Compute table-entry address (entries are 8 bytes) and jump.  RISC-V has
+    ;;; no scaled-index addressing: shift, add to the table base (lla), load.
     if sysint then
-        ;;; sreg is a system integer; multiply by 8 (lsl #3) for table index
-        asm_emit("adr", R16, table_lab, 3);
-        asm_emit("ldr", R16, '[' >< R16 >< ', ' >< sreg >< ', lsl #3]', 3);
+        asm_emit("lla", R16, table_lab, 3);
+        asm_emit("slli", R0, sreg, 3, 4);          ;;; index * 8
+        asm_emit("add", R16, R16, R0, 4);
+        asm_emit("ld", R16, '0(' >< R16 >< ')', 3);
     else
-        ;;; sreg (R0) has popint with tag removed: value * 4
-        ;;; Table entries are 8 bytes, so we need value * 8 = sreg * 2
-        asm_emit("lsl", R0, sreg, '#1', 4);
-        asm_emit("adr", R16, table_lab, 3);
-        asm_emit("ldr", R16, '[' >< R16 >< ', ' >< R0 >< ']', 3);
+        ;;; sreg has popint with tag removed (value*4); entries 8 bytes -> *2
+        asm_emit("slli", R0, sreg, 1, 4);
+        asm_emit("lla", R16, table_lab, 3);
+        asm_emit("add", R16, R16, R0, 4);
+        asm_emit("ld", R16, '0(' >< R16 >< ')', 3);
     endif;
-    asm_emit("br", R16, 2);
+    asm_emit("jr", R16, 2);
     ;;; Plant the table; it begins with -else_lab- to account for the 0 case
     asmALIGN();
     asmLABEL(table_lab);
@@ -1343,8 +1354,9 @@ define lconstant gen_switch(src, labs, else_case, sysint);
     ;;; Plant the else case
     asmLABEL(else_lab);
     if not(else_case) then
-        ;;; Push src onto user stack for error reporting
-        asm_emit("str", src, '[x19, #-8]!', 3);
+        ;;; Push src onto the user stack (USP=R10) for error reporting
+        asm_emit("addi", R10, R10, -8, 4);
+        asm_emit("sd", src, '0(' >< R10 >< ')', 3);
     endif;
 enddefine;
 
@@ -1868,8 +1880,9 @@ define M_CLOSURE();
         lconstant frozval_offset = field_##("PD_CLOS_FROZVALS").wof;
         lvars i;
         for i from 0 to nfroz - 1 do
-            asm_emit("ldr", R1, '[x0, #' >< (frozval_offset + i*8) >< ']', 3);
-            asm_emit("str", R1, '[x19, #-8]!', 3)
+            asm_emit("ld", R1, (frozval_offset + i*8) >< '(' >< R0 >< ')', 3);
+            asm_emit("addi", R10, R10, -8, 4);
+            asm_emit("sd", R1, '0(' >< R10 >< ')', 3)
         endfor;
         if not(pdpart_opd) then
             {% R0, field_##("PD_CLOS_PDPART").wof %} -> pdpart_opd;
@@ -1905,7 +1918,7 @@ define M_SETSTKLEN();
     ;;; subtract 3 to account for popint bits
     load_to_reg(sl, R0) -> wreg;
     if offs == 0 then
-        asm_emit("sub", R1, wreg, 3, 4);
+        asm_emit("addi", R1, wreg, -3, 4);
     else
         gen_op_commute("add", wreg, offs - 3, R1);
     endif;
@@ -2053,6 +2066,9 @@ define lconstant outinst(instr);
             if     opcode == "str" then "sd"   -> rvop;
             elseif opcode == "ldr" then "ld"   -> rvop;
             elseif opcode == "bl"  then "call" -> rvop;
+            elseif opcode == "mov" then "mv"   -> rvop;  ;;; reg moves (imm uses li)
+            elseif opcode == "blr" then "jalr" -> rvop;  ;;; indirect call
+            elseif opcode == "b"   then "j"    -> rvop;  ;;; unconditional branch
             endif;
             asmf_printf(rvop, '\t%p\t');
             unless n == 1 then
