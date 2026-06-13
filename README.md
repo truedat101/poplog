@@ -94,6 +94,11 @@ There is now an **optional native graphics backend** built on
   time — **Wayland**, X11, or KMS/DRM — so there is **no hard X11 dependency**;
   it also renders **headless** via Mesa software (llvmpipe) for CI.
 
+The macOS **Metal** backend, live — `examples/cube3d.p`, a smooth vsync-paced
+spin with an on-screen stats badge (backend, GPU, live FPS):
+
+![Spinning 3D cube on the macOS Metal backend](docs/images/cube3d-metal.gif)
+
 The classic `rc_graphic` turtle library and `rc_mouse` are ported onto it, so
 existing Pop-11 graphics code runs unchanged.  Graphics are strictly **opt-in**:
 the default build (and `nix build .#poplog`) is console-only.
