@@ -443,19 +443,21 @@ define lconstant position_or_add(opd, lst);
 enddefine;
 
 ;;; get_literal_addr:
-;;;     returns an operand string for accessing a literal from the
-;;;     procedure's literal pool via PB.
-;;;     On AArch64: each literal is 8 bytes (.xword), so offset = 8*(disp + lit_offset)
+;;;     returns a RISC-V memory operand "off(PB)" for accessing a literal from
+;;;     the procedure's literal pool via PB.  Each literal is 8 bytes, so
+;;;     offset = 8*(disp + lit_offset).
+;;;     (TODO: literal pools larger than 4 KB exceed the 12-bit ld offset and
+;;;     will need an auipc/add fixup; small pools are fine for now.)
 
 define lconstant get_literal_addr(lit);
     lvars lit, disp, tmp;
     position_or_add(lit, new_literals) -> (disp, new_literals);
-    return('[' >< PB >< ', #' >< (8*(disp + lit_offset)) >< ']');
+    return((8*(disp + lit_offset)) >< '(' >< PB >< ')');
 enddefine;
 
 define lconstant load_literal(lit, tmp);
     lvars lit, tmp;
-    asm_emit("ldr", tmp, get_literal_addr(lit), 3);
+    asm_emit("ld", tmp, get_literal_addr(lit), 3);
 enddefine;
 
 ;;; get_addressable_op:
@@ -465,48 +467,47 @@ enddefine;
 
 define lconstant get_addressable_op(opd, tmp);
     lvars opd, disp, opd1, type;
-    returnif(isreg(opd))(opd);
+    returnif(isreg(opd))('0(' >< opd >< ')');   ;;; bare reg base -> 0(reg)
     if isvector(opd) then
         if datalength(opd) = 1 then
-            return( '[' >< f_subv(1, opd) >< ']');
+            return('0(' >< f_subv(1, opd) >< ')');
         elseif datalength(opd) >= 2 then
             f_subv(2, opd) -> disp;
             f_subv(1, opd) -> opd1;
-            if disp = 0 then
-                    ;;; Already OK
-            elseif is_small_disp(disp) then
-                    opd1 >< ', #' >< disp -> opd1;
-            elseif isboolean(disp) then
-                ;;; Auto-increment/decrement for user stack operations
-                ;;; On AArch64: word size is 8 bytes
-                '8' -> tmp;
+            if isboolean(disp) then
+                ;;; Auto-index (USP push/pop): not a single RISC-V memory
+                ;;; operand -- it needs an explicit addi.
+                ;;;   disp == false  -> push (pre-decrement): used as a STORE
+                ;;;     destination.  Emit the decrement HERE and return 0(base);
+                ;;;     the caller's store (sd) then writes to the new top.
+                ;;;   disp == true   -> pop (post-increment): a load SOURCE,
+                ;;;     handled in load_to_reg before reaching here (the bump
+                ;;;     must follow the load), so it must not arrive here.
+                lvars size = 8;
                 if datalength(opd) == 3 then
                     f_subv(3, opd) && t_BASE_TYPE -> type;
-                    if type == t_INT then '4'
-                    elseif type == t_SHORT then '2'
-                    elseif type == t_BYTE then '1'
-                    else
-                        mishap(opd, 1, 'Unhandled operand type');
-                    endif -> tmp;
+                    if type == t_INT then 4 elseif type == t_SHORT then 2
+                    elseif type == t_BYTE then 1 else mishap(opd,1,'type') endif
+                        -> size;
                 endif;
                 if disp then
-                    ;;; post-increment (pop): [base], #size
-                    '[' >< opd1 >< '], #' >< tmp
-                else
-                    ;;; pre-decrement (push): [base, #-size]!
-                    '[' >< opd1 >< ', #-' >< tmp >< ']!'
-                endif -> opd1;
-                return(opd1);
+                    mishap(opd, 1, 'get_addressable_op: USP pop must be split by load_to_reg');
+                endif;
+                asm_emit("addi", opd1, opd1, -size, 4);   ;;; push: pre-decrement
+                return('0(' >< opd1 >< ')');
+            elseif disp == 0 then
+                return('0(' >< opd1 >< ')');
+            elseif is_small_disp(disp) then
+                return(disp >< '(' >< opd1 >< ')');
             elseif isinteger(disp) then
-                ;;; Displacement too large for immediate offset;
-                ;;; load into a scratch register and use register offset.
-                ;;; On AArch64, use x16 as scratch (IP0).
+                ;;; displacement too large for the 12-bit ld/sd offset:
+                ;;; materialise base+disp in a scratch register.
                 load_literal(disp, R16);
-                opd1 >< ', ' >< R16 -> opd1;
+                asm_emit("add", R16, opd1, R16, 4);
+                return('0(' >< R16 >< ')');
             else
                 mishap(opd, 1, 'Unhandled operand in get_addressable_op');
             endif;
-            return('[' >< opd1 >< ']');
         endif;
         mishap(opd, 1, 'Unhandled operand in get_addressable_op');
     endif;
@@ -518,7 +519,7 @@ define lconstant get_addressable_op(opd, tmp);
         return(get_literal_addr(opd1));
     elseif isstring(opd) then
         load_literal(opd, tmp);
-        return('[' >< tmp >< ']');
+        return('0(' >< tmp >< ')');
     endif;
     mishap(opd, 1, 'Unhandled operand in get_addressable_op');
 enddefine;
@@ -531,63 +532,52 @@ enddefine;
 ;;;     - Typed sub-word loads use ldrh/ldrb with sign extension via sxth/sxtb
 
 define lconstant load_to_reg(opd, tmp);
-    lvars opd, tmp, opd1, opcode, type, rawtype, n, use_wreg = false;
-    ;;; sp is "isreg" but can't appear as source operand of most arithmetic
-    ;;; or store instructions on AArch64.  Move it into the requested
-    ;;; scratch register first so callers can use it freely.
-    if opd == "sp" then
-        asm_emit("mov", tmp, "sp", 3);
-        return(tmp);
-    endif;
+    lvars opd, tmp, opd1, opcode, type, rawtype, base, size;
+    ;;; sp (x2) is a normal register on RISC-V -- usable directly -- so no
+    ;;; arm64-style "move sp out first" special case is needed.
     returnif(isreg(opd))(opd);
     if isinteger(opd) or isbiginteger(opd) then
         if is_small_disp(opd) then
-            asm_emit("mov", tmp, '#' >< opd, 3);
+            ;;; li handles the lui/addi expansion for any 32-bit immediate
+            asm_emit("li", tmp, opd, 3);
             return(tmp);
         else
             load_literal(opd, tmp);
             return(tmp);
         endif;
     endif;
+    ;;; USP auto-index pop (post-increment): load from 0(base), then bump base.
+    if isvector(opd) and datalength(opd) fi_>= 2 and isboolean(f_subv(2, opd)) then
+        f_subv(1, opd) -> base;
+        8 -> size;
+        if datalength(opd) == 3 then
+            f_subv(3, opd) && t_BASE_TYPE -> type;
+            if type == t_INT then 4 elseif type == t_SHORT then 2
+            elseif type == t_BYTE then 1 else mishap(opd, 1, 'type') endif -> size;
+        endif;
+        asm_emit("ld", tmp, '0(' >< base >< ')', 3);
+        asm_emit("addi", base, base, size, 4);
+        return(tmp);
+    endif;
     get_addressable_op(opd, tmp) -> opd1;
-    "ldr" -> opcode;
+    "ld" -> opcode;
     if isvector(opd) and datalength(opd) == 3 then
         f_subv(3, opd) -> rawtype;
         rawtype && t_BASE_TYPE -> type;
-        ;;; NB: on LP64 (AArch64) t_WORD == t_DOUBLE, so a t_INT field is a
-        ;;; genuine 32-bit int and must be loaded as 32 bits (a 64-bit ldr
-        ;;; would pull in the adjacent field's bytes).  Signed -> ldrsw
-        ;;; (sign-extends into X); unsigned -> ldr into W (zero-extends X).
+        ;;; RISC-V loads extend into the 64-bit register directly: lw/lh/lb
+        ;;; sign-extend, lwu/lhu/lbu zero-extend -- no separate sxt fixup, and
+        ;;; no 32-bit register sub-view.  (ld = full 8-byte word.)
         if type == t_INT then
-            if (rawtype && tv_SIGNED) /== 0 then "ldrsw"
-            else "ldr", true -> use_wreg
-            endif
-        elseif type == t_SHORT then "ldrh", true -> use_wreg
-        elseif type == t_BYTE then "ldrb", true -> use_wreg
+            if (rawtype && tv_SIGNED) /== 0 then "lw" else "lwu" endif
+        elseif type == t_SHORT then
+            if (rawtype && tv_SIGNED) /== 0 then "lh" else "lhu" endif
+        elseif type == t_BYTE then
+            if (rawtype && tv_SIGNED) /== 0 then "lb" else "lbu" endif
         else
             mishap(opd, 1, 'Unhandled operand type');
         endif -> opcode;
     endif;
-    ;;; ldrb/ldrh (and the unsigned 32-bit ldr of a t_INT) require the
-    ;;; destination register in W (32-bit) form.
-    if use_wreg then
-        asm_emit(opcode, as_wreg(tmp), opd1, 3);
-    else
-        asm_emit(opcode, tmp, opd1, 3);
-    endif;
-    ;;; Sign extension for sub-word ldrh/ldrb signed types on AArch64.
-    ;;; (t_INT is handled above via ldrsw; the unsigned ldr-into-W path
-    ;;; already zero-extends, so no fix-up is needed here.)
-    if opcode == "ldrh" or opcode == "ldrb" then
-        if (rawtype && tv_SIGNED) /== 0 then
-            ;;; sxtb/sxth: destination Xd, source Wn (sign-extend low byte/half)
-            if type == t_SHORT then
-                asm_emit("sxth", tmp, as_wreg(tmp), 3);
-            elseif type == t_BYTE then
-                asm_emit("sxtb", tmp, as_wreg(tmp), 3);
-            endif;
-        endif;
-    endif;
+    asm_emit(opcode, tmp, opd1, 3);
     return(tmp);
 enddefine;
 
@@ -1951,9 +1941,16 @@ define lconstant outopnd(opd);
     if isreg(opd) then
         asmf_printf(opd, '%p');
     elseif isimm(opd) then
-        asmf_printf(immval(opd), '#%p');
+        ;;; RISC-V immediates are bare (no AArch64 '#').
+        asmf_printf(immval(opd), '%p');
     elseif isabs(opd) then
-        asmf_printf(opd, '%p');
+        ;;; Much arm64 code builds immediate operands as '#' >< n strings;
+        ;;; RISC-V wants the bare number, so strip a leading '#'.
+        if isstring(opd) and datalength(opd) fi_>= 1 and subscrs(1, opd) == `#` then
+            asmf_printf(allbutfirst(1, opd), '%p');
+        else
+            asmf_printf(opd, '%p');
+        endif;
     elseif isvector(opd) then
         mishap(opd, 1, 'outopnd: unhandled operand\n');
     else
