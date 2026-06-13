@@ -21,6 +21,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <cstdio>
 
 #include "imgui.h"
 #include "imgui_impl_metal.h"
@@ -68,11 +69,27 @@ static bool g_closed = false;
 - (BOOL)windowShouldClose:(NSWindow *)sender { (void)sender; g_closed = true; return NO; }
 @end
 
+/* --- Metal-backed view ------------------------------------------------- *
+ * A plain NSView whose backing layer is a CAMetalLayer that WE manage.  We
+ * deliberately do NOT use MTKView: MTKView only advances/recycles its drawable
+ * pool inside its own draw() cycle, which an externally-driven loop like ours
+ * (Poplog owns the loop; the view is never asked to draw) never enters -- so
+ * the pool drains and currentDrawable stalls on its ~1s timeout, which is the
+ * animation "freeze".  A plain CAMetalLayer + nextDrawable recycles correctly
+ * under fully manual control.  See NOTES-METAL-GRAPHICS-MACOS.md. */
+@interface PopGfxMetalView : NSView
+@end
+@implementation PopGfxMetalView
+- (CALayer *)makeBackingLayer { return [CAMetalLayer layer]; }
+@end
+
 /* --- backend state ----------------------------------------------------- */
 static id<MTLDevice>            g_device   = nil;
 static id<MTLCommandQueue>      g_queue    = nil;
 static NSWindow                *g_window   = nil;
-static MTKView                 *g_view     = nil;
+static NSView                  *g_view     = nil;   /* a PopGfxMetalView        */
+static CAMetalLayer            *g_layer    = nil;   /* its backing layer        */
+static id<CAMetalDrawable>      g_drawable = nil;   /* this frame's drawable    */
 static PopGfxWindowDelegate    *g_delegate = nil;
 static MTLRenderPassDescriptor *g_rpd      = nil;
 static bool                     g_frame_active = false;
@@ -97,9 +114,12 @@ int pop_gfx_init(const char *title, int width, int height)
             backing:NSBackingStoreBuffered defer:NO];
         [g_window setTitle:[NSString stringWithUTF8String:(title ? title : "Poplog")]];
 
-        g_view = [[MTKView alloc] initWithFrame:frame device:g_device];
-        g_view.paused = YES;                           /* we draw on demand     */
-        g_view.enableSetNeedsDisplay = NO;
+        g_view = [[PopGfxMetalView alloc] initWithFrame:frame];
+        g_view.wantsLayer = YES;                        /* -> CAMetalLayer       */
+        g_layer = (CAMetalLayer *)g_view.layer;
+        g_layer.device = g_device;
+        g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        g_layer.framebufferOnly = YES;
         g_window.contentView = g_view;
 
         g_delegate = [[PopGfxWindowDelegate alloc] init];
@@ -139,23 +159,34 @@ int pop_gfx_should_close(void) { return g_closed ? 1 : 0; }
 int pop_gfx_frame_begin(void)
 {
     pop_gfx_poll();
-    MTLRenderPassDescriptor *rpd = g_view.currentRenderPassDescriptor;
-    if (rpd == nil)
-        return 0;                                      /* no drawable this tick */
-    g_rpd = rpd;
+    @autoreleasepool {
+        const CGSize sz = g_view.bounds.size;
+        CGFloat scale = g_window.screen.backingScaleFactor;
+        if (scale <= 0) scale = 1.0;
+        g_layer.contentsScale = scale;
+        g_layer.drawableSize  = CGSizeMake(sz.width * scale, sz.height * scale);
 
-    ImGuiIO &io = ImGui::GetIO();
-    const CGSize sz = g_view.bounds.size;
-    io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
-    CGFloat scale = g_view.window.screen.backingScaleFactor;
-    if (scale <= 0) scale = 1.0;
-    io.DisplayFramebufferScale = ImVec2((float)scale, (float)scale);
+        id<CAMetalDrawable> drawable = [g_layer nextDrawable];
+        if (drawable == nil)
+            return 0;                                  /* no drawable this tick */
+        g_drawable = drawable;                         /* held until present     */
 
-    ImGui_ImplMetal_NewFrame(rpd);
-    ImGui_ImplOSX_NewFrame(g_view);
-    ImGui::NewFrame();
-    canvas_replay();                                   /* retained drawing      */
-    g_frame_active = true;
+        g_rpd = [MTLRenderPassDescriptor renderPassDescriptor];
+        g_rpd.colorAttachments[0].texture     = drawable.texture;
+        g_rpd.colorAttachments[0].loadAction  = MTLLoadActionClear;
+        g_rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+        g_rpd.colorAttachments[0].clearColor  = MTLClearColorMake(0.10, 0.10, 0.12, 1.0);
+
+        ImGuiIO &io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
+        io.DisplayFramebufferScale = ImVec2((float)scale, (float)scale);
+
+        ImGui_ImplMetal_NewFrame(g_rpd);
+        ImGui_ImplOSX_NewFrame(g_view);
+        ImGui::NewFrame();
+        canvas_replay();                               /* retained drawing      */
+        g_frame_active = true;
+    }
     return 1;
 }
 
@@ -168,16 +199,15 @@ void pop_gfx_frame_end(void)
     @autoreleasepool {
         ImGui::Render();
         id<MTLCommandBuffer> cb = [g_queue commandBuffer];
-        g_rpd.colorAttachments[0].clearColor = MTLClearColorMake(0.10, 0.10, 0.12, 1.0);
         id<MTLRenderCommandEncoder> enc =
             [cb renderCommandEncoderWithDescriptor:g_rpd];
         ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cb, enc);
         [enc endEncoding];
-        id<CAMetalDrawable> drawable = g_view.currentDrawable;
-        if (drawable != nil)
-            [cb presentDrawable:drawable];
+        if (g_drawable != nil)
+            [cb presentDrawable:g_drawable];
         [cb commit];
         g_rpd = nil;
+        g_drawable = nil;
     }
 }
 
@@ -189,6 +219,7 @@ void pop_gfx_shutdown(void)
         ImGui::DestroyContext();
         [g_window orderOut:nil];
         g_window.delegate = nil;
+        g_drawable = nil; g_layer = nil;
         g_window = nil; g_view = nil; g_delegate = nil;
         g_queue = nil; g_device = nil;
         g_canvas.clear();
@@ -255,3 +286,23 @@ float pop_gfx_mouse_x(void) { return ImGui::GetIO().MousePos.x; }
 float pop_gfx_mouse_y(void) { return ImGui::GetIO().MousePos.y; }
 int   pop_gfx_mouse_down(int button)
 { return (button >= 0 && button < 5 && ImGui::GetIO().MouseDown[button]) ? 1 : 0; }
+
+/* --- introspection / stats --------------------------------------------- */
+float pop_gfx_fps(void)
+{
+    /* ImGui reports FLT_MAX until it has accumulated frame timing; clamp that
+       (and any NaN/inf) to 0 so callers never see a value that overflows a
+       single-float Pop decimal. */
+    float f = ImGui::GetIO().Framerate;
+    return (f > 0.0f && f < 1.0e5f) ? f : 0.0f;
+}
+
+const char *pop_gfx_spec(void)
+{
+    static char s[192] = {0};
+    if (s[0] == '\0') {
+        const char *dev = g_device ? [[g_device name] UTF8String] : "unknown GPU";
+        snprintf(s, sizeof s, "Metal (CAMetalLayer) - %s", dev ? dev : "unknown GPU");
+    }
+    return s;
+}

@@ -303,3 +303,24 @@ float pop_gfx_mouse_x(void) { return ImGui::GetIO().MousePos.x; }
 float pop_gfx_mouse_y(void) { return ImGui::GetIO().MousePos.y; }
 int   pop_gfx_mouse_down(int button)
 { return (button >= 0 && button < 5 && ImGui::GetIO().MouseDown[button]) ? 1 : 0; }
+
+/* --- introspection / stats --------------------------------------------- */
+float pop_gfx_fps(void)
+{
+    /* ImGui reports FLT_MAX until it has accumulated frame timing; clamp that
+       (and any NaN/inf) to 0 so callers never see a value that overflows a
+       single-float Pop decimal. */
+    float f = ImGui::GetIO().Framerate;
+    return (f > 0.0f && f < 1.0e5f) ? f : 0.0f;
+}
+
+const char *pop_gfx_spec(void)
+{
+    static char s[224] = {0};
+    if (s[0] == '\0') {
+        const char *r = (const char *)glGetString(GL_RENDERER);
+        const char *v = (const char *)glGetString(GL_VERSION);
+        snprintf(s, sizeof s, "SDL3 + OpenGL - %s (%s)", r ? r : "?", v ? v : "?");
+    }
+    return s;
+}

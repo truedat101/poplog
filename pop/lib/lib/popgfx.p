@@ -42,6 +42,8 @@ exload popgfx []
         pop_gfx_mouse_x()                           :float,
         pop_gfx_mouse_y()                           :float,
         pop_gfx_mouse_down(b)                       :int,
+        pop_gfx_fps()                               :float,
+        pop_gfx_spec()                              :exptr,
     ;
 endexload;
 
@@ -96,6 +98,10 @@ enddefine;
 ;;; canvas mark/rewind: undo drawing added since the mark
 define gfx_mark();        exacc pop_gfx_mark()    enddefine;
 define gfx_rewind(m);     exacc pop_gfx_rewind(m) enddefine;
+
+;;; stats / config introspection (for HUD badges etc.)
+define gfx_fps();   exacc pop_gfx_fps() enddefine;          ;;; smoothed frames/sec
+define gfx_spec();  exacc_ntstring(exacc pop_gfx_spec()) enddefine;  ;;; backend+GPU
 
 ;;; one frame: pump + draw; false once the window has been closed
 define gfx_step();

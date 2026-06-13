@@ -1,8 +1,9 @@
 /* examples/cube3d.p -- a spinning 3D wireframe cube, projected to 2D.
  *
  * Eight vertices, twelve edges; each frame rotates them about two axes,
- * applies a perspective projection, and redraws.  Demonstrates per-frame
- * animation on the retained canvas (gfx_clear / gfx_step).
+ * applies a perspective projection, and redraws, with a live stats badge
+ * (graphics backend, GPU, FPS).  Demonstrates per-frame animation on the
+ * retained canvas (gfx_clear / gfx_step) plus gfx introspection.
  *
  * Needs a graphics build (./configure --experimental-graphics, or
  * `nix build .#poplog-gfx`).  Run from the Poplog source tree with:
@@ -40,7 +41,24 @@ define lconstant project(v, ay, ax);
     CY - y2 * f * SCALE                             ;;; sy (screen +y is down)
 enddefine;
 
-lvars angle = 20, i, e, pts;
+;;; --- live stats badge ----------------------------------------------------
+lconstant spec = gfx_spec();              ;;; backend + GPU, constant for the run
+lconstant hud  = gfx_rgb(180, 185, 195);
+lconstant hot  = gfx_rgb(120, 255, 140);
+define lconstant badge(frame);
+    lvars frame;
+    gfx_fill_rect(10, 10, 440, 58, gfx_rgb(18, 20, 26));    ;;; backdrop
+    gfx_rect(10, 10, 440, 58, gfx_rgb(70, 80, 95), 1);
+    gfx_text(20, 17, hud, spec);
+    gfx_text(20, 36, hot,
+        'FPS ' >< round(gfx_fps()) >< '    frame ' >< frame
+            >< '    ' >< W >< 'x' >< H)
+enddefine;
+
+;;; Smooth spin: the backend paces the loop on the display refresh (Metal via
+;;; nextDrawable back-pressure, SDL via the blocking SwapWindow), so no sleep
+;;; is needed -- a fixed step per frame gives constant angular velocity.
+lvars angle = 20.0, i, e, pts, k = 0;
 repeat
     gfx_clear();
     {% for i from 1 to 8 do project(verts(i), angle, 25) endfor %} -> pts;
@@ -48,9 +66,10 @@ repeat
         lvars a = e(1), b = e(2);
         gfx_line(pts(a*2-1), pts(a*2), pts(b*2-1), pts(b*2), fg, 2)
     endfor;
+    badge(k);
     quitunless(gfx_step());
-    angle + 2 -> angle;
-    syssleep(3)
+    angle + 1.0 -> angle;  k + 1 -> k;
+    if angle >= 360.0 then angle - 360.0 -> angle endif
 endrepeat;
 
 gfx_shutdown();

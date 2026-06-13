@@ -66,6 +66,10 @@ float pop_gfx_mouse_x(void);
 float pop_gfx_mouse_y(void);
 int   pop_gfx_mouse_down(int button);  /* 0=left 1=right 2=middle; 1 if down */
 
+/* --- introspection / stats --------------------------------------------- */
+float       pop_gfx_fps(void);   /* smoothed frames/sec (ImGui's running avg) */
+const char *pop_gfx_spec(void);  /* one-line backend + renderer/GPU spec      */
+
 #ifdef __cplusplus
 }
 #endif
