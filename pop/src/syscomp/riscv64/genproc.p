@@ -1915,6 +1915,30 @@ enddefine;
 ;;;     write out an operand/instruction. These differ considerably
 ;;;     depending on the assembler type
 
+;;; mem_operand:
+;;;     Translate a residual AArch64 memory-operand string into RISC-V form:
+;;;       "[reg]"        -> "0(reg)"
+;;;       "[reg, #off]"  -> "off(reg)"   (off may be negative)
+;;;     Structural forms -- auto-index "[reg,#-8]!", post-index "[reg], #8",
+;;;     indexed "[reg, reg2, lsl #3]" -- cannot be a single RISC-V operand and
+;;;     are converted at their emit sites; leave them unchanged here so a missed
+;;;     one surfaces as an assembler error rather than being silently mangled.
+;;;     Non-"[" strings (labels, "off(reg)" already done) pass straight through.
+define lconstant mem_operand(s) -> out;
+    lvars s, out = s, inner, p, n = datalength(s);
+    returnunless(n fi_>= 2 and subscrs(1, s) == `[` and subscrs(n, s) == `]`);
+    returnif(issubstring('!', s));        ;;; pre-decrement push
+    returnif(issubstring('], ', s));      ;;; post-increment pop
+    returnif(issubstring('lsl', s));      ;;; scaled/indexed
+    substring(2, n fi_- 2, s) -> inner;   ;;; strip the [ and ]
+    if issubstring(', #', inner) ->> p then
+        substring(p fi_+ 3, datalength(inner) fi_- (p fi_+ 2), inner)
+            >< '(' >< substring(1, p fi_- 1, inner) >< ')' -> out;
+    else
+        '0(' >< inner >< ')' -> out;
+    endif;
+enddefine;
+
 define lconstant outopnd(opd);
     lvars opd;
     if ispair(opd) then
@@ -1927,9 +1951,12 @@ define lconstant outopnd(opd);
         asmf_printf(immval(opd), '%p');
     elseif isabs(opd) then
         ;;; Much arm64 code builds immediate operands as '#' >< n strings;
-        ;;; RISC-V wants the bare number, so strip a leading '#'.
+        ;;; RISC-V wants the bare number, so strip a leading '#'.  Otherwise
+        ;;; translate any residual "[reg,#off]" memory operand to "off(reg)".
         if isstring(opd) and datalength(opd) fi_>= 1 and subscrs(1, opd) == `#` then
             asmf_printf(allbutfirst(1, opd), '%p');
+        elseif isstring(opd) then
+            asmf_printf(mem_operand(opd), '%p');
         else
             asmf_printf(opd, '%p');
         endif;
@@ -1962,12 +1989,24 @@ define lconstant outinst(instr);
             ;;; here is never consumed by printf and leaks onto the user stack
             ;;; (one per `#` comment instruction, i.e. per procedure), which was
             ;;; the source of the `items-left after file` stack leak.
-            asmf_printf('\t//');
+            ;;; RISC-V GAS uses '#' for line comments (not arm64's '//').
+            asmf_printf('\t#');
             for i from 2 to n do
                 asmf_printf(f_subv(i, instr), '\s%p');
             endfor;
         else
-            asmf_printf(opcode, '\t%p\t');
+            ;;; Translate the unambiguous residual AArch64 load/store/branch
+            ;;; mnemonics to RISC-V.  ldr->ld covers both a normal load (with an
+            ;;; off(reg) operand) AND a PC-relative load "ldr rd, sym": RISC-V
+            ;;; GAS reads "ld rd, sym" as an auipc/%pcrel pseudo.  (Sub-word and
+            ;;; immediate forms are already emitted directly as ld/lw/lh/lb,
+            ;;; li, mv etc. by the generators, so they never reach here.)
+            lvars rvop = opcode;
+            if     opcode == "str" then "sd"   -> rvop;
+            elseif opcode == "ldr" then "ld"   -> rvop;
+            elseif opcode == "bl"  then "call" -> rvop;
+            endif;
+            asmf_printf(rvop, '\t%p\t');
             unless n == 1 then
                 outopnd(f_subv(2, instr));
                 for i from 3 to n do
