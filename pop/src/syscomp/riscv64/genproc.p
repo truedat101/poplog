@@ -1037,15 +1037,19 @@ define lconstant m_parith_test(opcode);
     ;;; added garbage -- every overflow-checked +/- returned a bogus value (the
     ;;; bug that made 1+1 and multi-digit literals print as a heap SYSTEM_OBJECT).
     load_to_reg(src2, R5) -> src2;
-    ;;; r = a <baseop> b in R12
-    asm_emit(baseop, R12, R1, src2, 4);
-    ;;; signed-overflow bit -> R16
+    ;;; Poplog M-op convention: dst = src2 OP src1, with src1's tag cleared (R1).
+    ;;; For SUB that is src2 - R1 (NOT R1 - src2): only "minuend_tagged -
+    ;;; subtrahend_detagged" yields a validly-tagged pop-int -- the reversed order
+    ;;; produces (x-y)<<2 - 3, a corrupt tag that crashed every "a - b".
     if baseop == "sub" then
-        asm_emit("slt", R16, R1, R12, 4)          ;;; a < r
+        asm_emit("sub", R12, src2, R1, 4);        ;;; r = src2 - src1   (minuend - subtrahend)
+        asm_emit("slt", R16, src2, R12, 4);       ;;; (minuend < r)
+        asm_emit("slti", R5, R1, 0, 4);           ;;; (subtrahend < 0); R1 now dead
     else
-        asm_emit("slt", R16, R12, R1, 4)          ;;; r < a
+        asm_emit("add", R12, R1, src2, 4);        ;;; r = a + b
+        asm_emit("slt", R16, R12, R1, 4);         ;;; (r < a)
+        asm_emit("slti", R5, src2, 0, 4);         ;;; (b < 0); b now dead
     endif;
-    asm_emit("slti", R5, src2, 0, 4);             ;;; R5 = (b < 0); b now dead
     asm_emit("xor", R16, R16, R5, 4);             ;;; R16 = overflow (0/1)
     ;;; push the result on the user stack (R1 is free again -- not used by a push)
     gen_reg_store(R12, -_USP, R1);
