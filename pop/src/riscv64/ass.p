@@ -560,39 +560,51 @@ define lconstant Check_br_range(_delta);
     endif;
 enddefine;
 
-;;; drop_br_cond: emit a RISC-V compare-and-branch to a known code offset, using
-;;; the operands stashed by the preceding compare.  _cc is an abstract condition
-;;; code (arm64 values); _target_off is the absolute target byte offset.
+;;; drop_br_cond: emit a conditional branch to _target_off, using the operands
+;;; stashed by the preceding compare.  _cc is an abstract condition code (arm64
+;;; values); _target_off is the absolute target byte offset.
+;;;
+;;; RISC-V B-type branches reach only +-4KB -- far too small: a single Lisp/ML
+;;; reader procedure easily spans >4KB between a branch and its target.  So we
+;;; ALWAYS lower to the relaxed two-instruction form
+;;;     b.!cc  lhs, rhs, +8      ; skip the jump when the condition is FALSE
+;;;     j      target            ; (condition true) jump -- J-type reaches +-1MB
+;;; which is a FIXED 8-byte size regardless of distance, so the measure and the
+;;; planting pass always agree on offsets (the whole point -- a distance-
+;;; dependent size would desync the two passes for forward branches whose target
+;;; is unresolved during measurement).  (>+-1MB would need auipc+jalr; not yet.)
+;;; The inverted funct3 = f3 XOR 1 flips beq<->bne, blt<->bge, bltu<->bgeu.
 define drop_br_cond(_cc, _target_off);
-    lvars _cc, _target_off, _f3, _swap = false, _delta;
+    lvars _cc, _target_off, _f3, _swap = false, _delta, _lhs, _rhs;
     if _cmp_kind == "tst" then
-        ;;; and WK, lhs, rhs ; beq/bne WK, x0, target
+        ;;; and WK, lhs, rhs ; then test WK against zero
         drop_w(_rv_r(_OP_REG, _7, _F7_0, _WK, _cmp_lhs, _cmp_rhs));
-        _target_off _sub _asm_code_offset -> _delta;
-        Check_br_range(_delta);
         if _cc == _cc_EQ then _0 else _1 endif -> _f3;
-        drop_w(_rv_b(_OP_BRANCH, _f3, _WK, _ZERO, _delta));
-        return();
+        _WK -> _lhs; _ZERO -> _rhs;
+    else
+        if     _cc == _cc_EQ then _0 -> _f3;
+        elseif _cc == _cc_NE then _1 -> _f3;
+        elseif _cc == _cc_CS then _7 -> _f3;            ;;; bgeu (unsigned >=)
+        elseif _cc == _cc_CC then _6 -> _f3;            ;;; bltu (unsigned <)
+        elseif _cc == _cc_HI then _6 -> _f3; true -> _swap;   ;;; bltu, swapped
+        elseif _cc == _cc_LS then _7 -> _f3; true -> _swap;   ;;; bgeu, swapped
+        elseif _cc == _cc_GE then _5 -> _f3;            ;;; bge (signed >=)
+        elseif _cc == _cc_LT then _4 -> _f3;            ;;; blt (signed <)
+        elseif _cc == _cc_GT then _4 -> _f3; true -> _swap;   ;;; blt, swapped
+        elseif _cc == _cc_LE then _5 -> _f3; true -> _swap;   ;;; bge, swapped
+        elseif _cc == _cc_MI then _4 -> _f3;            ;;; blt (n-m < 0)
+        elseif _cc == _cc_PL then _5 -> _f3;            ;;; bge
+        else mishap(_pint(_cc), 1, 'drop_br_cond: unhandled condition code');
+        endif;
+        if _swap then _cmp_rhs -> _lhs; _cmp_lhs -> _rhs;
+        else        _cmp_lhs -> _lhs; _cmp_rhs -> _rhs;
+        endif;
     endif;
+    ;;; inverted short branch over the jump (8 bytes ahead = past the J below)
+    drop_w(_rv_b(_OP_BRANCH, _f3 _bixor _1, _lhs, _rhs, _8));
+    ;;; unconditional J to the real target (recompute delta from the J's slot)
     _target_off _sub _asm_code_offset -> _delta;
-    Check_br_range(_delta);
-    if     _cc == _cc_EQ then _0 -> _f3;
-    elseif _cc == _cc_NE then _1 -> _f3;
-    elseif _cc == _cc_CS then _7 -> _f3;            ;;; bgeu (unsigned >=)
-    elseif _cc == _cc_CC then _6 -> _f3;            ;;; bltu (unsigned <)
-    elseif _cc == _cc_HI then _6 -> _f3; true -> _swap;   ;;; bltu, swapped
-    elseif _cc == _cc_LS then _7 -> _f3; true -> _swap;   ;;; bgeu, swapped
-    elseif _cc == _cc_GE then _5 -> _f3;            ;;; bge (signed >=)
-    elseif _cc == _cc_LT then _4 -> _f3;            ;;; blt (signed <)
-    elseif _cc == _cc_GT then _4 -> _f3; true -> _swap;   ;;; blt, swapped
-    elseif _cc == _cc_LE then _5 -> _f3; true -> _swap;   ;;; bge, swapped
-    elseif _cc == _cc_MI then _4 -> _f3;            ;;; blt (n-m < 0)
-    elseif _cc == _cc_PL then _5 -> _f3;            ;;; bge
-    else mishap(_pint(_cc), 1, 'drop_br_cond: unhandled condition code');
-    endif;
-    if _swap then drop_w(_rv_b(_OP_BRANCH, _f3, _cmp_rhs, _cmp_lhs, _delta));
-    else drop_w(_rv_b(_OP_BRANCH, _f3, _cmp_lhs, _cmp_rhs, _delta));
-    endif;
+    drop_w(_rv_j(_OP_JAL, _ZERO, _delta));
 enddefine;
 
 ;;; drop_br_uncond: J to a known code offset (unconditional, +-1MB).
@@ -1384,18 +1396,19 @@ define I_SWITCH();
     drop_cmp_reg(_reg, _X1);
 
     ;;; Compute the offset from the start of the procedure code to the end
-    ;;; of the jump offset table.  After this point we plant NINE 4-byte
-    ;;; instructions = 36 bytes before the table:
-    ;;;   srai, slli, b.cond,            (3 -- the popint->byte-offset + range br)
+    ;;; of the jump offset table.  After this point we plant TEN 4-byte
+    ;;; instructions = 40 bytes before the table:
+    ;;;   b.!cc, j,                      (2 -- drop_br_cond is now the relaxed pair)
+    ;;;   srai, slli,                    (2 -- popint index -> 8-byte byte offset)
     ;;;   auipc, addi,                   (2 -- drop_adr + drop_add_imm, the ADR pair)
     ;;;   add, ld,                       (2 -- drop_ldr_reg expands to add then ld)
     ;;;   add, jr                        (2 -- drop_add_reg + drop_br_reg)
     ;;; Then (_ncases + 1) * 8 bytes of 64-bit offset entries.
-    ;;; (Earlier "28" still undercounted: drop_adr is auipc+addi and drop_ldr_reg
-    ;;; is add+ld -- two instrs each, not one -- so the table position and the
-    ;;; out-of-range target landed 8 bytes short, jumping into the last table
-    ;;; entry (data) -> SIGILL on any jump-table go_on.)
-    _asm_code_offset _add _36 _add _int((_ncases + 1) * 8) -> _tabend;
+    ;;; (drop_br_cond is 2 instrs since branch relaxation; drop_adr is auipc+addi
+    ;;; and drop_ldr_reg is add+ld -- the older "28"/"36" undercounted, landing
+    ;;; the out-of-range target inside table data -> SIGILL.)  The auipc-to-table
+    ;;; distance is still 24 bytes (the relaxed branch sits BEFORE the auipc).
+    _asm_code_offset _add _40 _add _int((_ncases + 1) * 8) -> _tabend;
 
     ;;; If the argument was out of range, jump to after the table (unsigned
     ;;; comparison catches both negative and too large).  This MUST come before
