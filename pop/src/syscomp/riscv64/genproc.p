@@ -552,16 +552,29 @@ define lconstant load_to_reg(opd, tmp);
             return(tmp);
         endif;
     endif;
-    ;;; USP auto-index pop (post-increment): load from 0(base), then bump base.
+    ;;; Auto-index pop (post-increment): load from 0(base), then bump base.  The
+    ;;; LOAD WIDTH must match the operand type (a typed `ptr!(b)++` reads ONE
+    ;;; byte, not a word) -- size alone is not enough; the load opcode too.
     if isvector(opd) and datalength(opd) fi_>= 2 and isboolean(f_subv(2, opd)) then
         f_subv(1, opd) -> base;
         8 -> size;
+        "ld" -> opcode;
         if datalength(opd) == 3 then
-            f_subv(3, opd) && t_BASE_TYPE -> type;
-            if type == t_INT then 4 elseif type == t_SHORT then 2
-            elseif type == t_BYTE then 1 else mishap(opd, 1, 'type') endif -> size;
+            f_subv(3, opd) -> rawtype;
+            rawtype && t_BASE_TYPE -> type;
+            if type == t_INT then
+                4 -> size;
+                if (rawtype && tv_SIGNED) /== 0 then "lw" else "lwu" endif -> opcode
+            elseif type == t_SHORT then
+                2 -> size;
+                if (rawtype && tv_SIGNED) /== 0 then "lh" else "lhu" endif -> opcode
+            elseif type == t_BYTE then
+                1 -> size;
+                if (rawtype && tv_SIGNED) /== 0 then "lb" else "lbu" endif -> opcode
+            else mishap(opd, 1, 'type')
+            endif;
         endif;
-        asm_emit("ld", tmp, '0(' >< base >< ')', 3);
+        asm_emit(opcode, tmp, '0(' >< base >< ')', 3);
         asm_emit("addi", base, base, size, 4);
         return(tmp);
     endif;
