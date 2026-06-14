@@ -548,6 +548,12 @@ enddefine;
 ;;; a real procedure needs it.
 define lconstant Check_br_range(_delta);
     lvars _delta;
+    ;;; On the measurement pass (_asm_pass truthy -- 0) a FORWARD branch's target
+    ;;; label has not been resolved yet (I_LABEL fills its offset only when the
+    ;;; label is reached later in the same pass), so _delta here is meaningless
+    ;;; garbage.  Only enforce the +-4KB reach on the planting pass (_asm_pass
+    ;;; false), when every label offset is final.
+    returnif(_asm_pass);
     if _delta _sgreq _16:1000 or _delta _slt _negate(_16:1000) then
         mishap(_pint(_delta), 1,
             'drop_br_cond: branch target out of +-4KB range (needs relaxation)');
