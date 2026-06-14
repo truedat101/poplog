@@ -375,41 +375,26 @@ define asm_gen_poplink_code(outlabs, nfroz, jmplab);
     lvars outlabs, nfroz, jmplab, l, offs;
     ;;; plant exec labels
     outlabs();
-    ;;; Push nfroz frozvals (last nfroz xwords planted)
-    ;;; x19 is the user stack pointer
+    ;;; Push nfroz frozvals (the last nfroz xwords planted).  USP = x9.
     asm_outlab(nextlab() ->> l);
     fast_for offs from nfroz*8 by -8 to 8 do
-#_IF DEF UNIX_MACHO
-        ;;; Mach-O's ld rejects the (l - offs)@PAGE addend relocation
-        ;;; (ARM64_RELOC_ADDEND + PAGE21), so materialise l with no addend and
-        ;;; subtract offs as a real instruction. This is 5 instrs/frozval --
-        ;;; exactly the size reserved by the (nfroz*5+6) result below (the ELF
-        ;;; path emits 4 and leaves the 5th slot as slack).
-        asmf_printf(l, ADRP_X16_FMT);
-        asmf_printf(l, ADDLO_X16_FMT);
-        asmf_printf(offs, '\tsub x16, x16, #%p\n');
-#_ELSE
-        asmf_printf(asm_expr(l, "-", offs), ADRP_X16_FMT);
-        asmf_printf(asm_expr(l, "-", offs), ADDLO_X16_FMT);
-#_ENDIF
-        asmf_pr('\tldr x17, [x16]\n');
-        asmf_pr('\tstr x17, [x19, #-8]!\n');
+        ;;; ld t6, (l-offs)  -- load the frozval value directly (PC-relative
+        ;;; pseudo = auipc+ld; the assembler accepts the label-offset addend);
+        ;;; then push it on the user stack.  4 instrs/frozval.
+        asmf_printf(asm_expr(l, "-", offs), '\tld\tt6, %p\n');
+        asmf_pr('\taddi\tx9, x9, -8\n');
+        asmf_pr('\tsd\tt6, 0(x9)\n');
     endfast_for;
-    ;;; Jump to -jmplab-
+    ;;; Jump to -jmplab- (stored as a .quad at l): ld t5, l (the target) ; jr t5
     nextlab() -> l;
-    asmf_printf(l, ADRP_X16_FMT);
-    asmf_printf(l, ADDLO_X16_FMT);
-    asmf_pr('\tldr x16, [x16]\n');
-    asmf_pr('\tbr x16\n');
-    ;;; 8-align the jmplab pointer word. On Mach-O the frozval loop is 5 instrs
-    ;;; each (odd), so for odd nfroz the jmplab .quad lands at a 4-mod-8 offset
-    ;;; and dyld rejects the rebase ("pointer not aligned"). This just moves the
-    ;;; padding the asm_align_word() below would add anyway -- total size is
-    ;;; unchanged -- and is a no-op on ELF (4 instrs/frozval keeps it aligned).
+    asmf_printf(l, '\tld\tt5, %p\n');
+    asmf_pr('\tjr\tt5\n');
+    ;;; 8-align the jmplab pointer word (the jump is 3 instrs = odd, so pad).
     asm_align_word();
     asm_outlab(l);
     asm_outword(jmplab, 1);
-    ;;; Return the number of xwords planted
+    ;;; Return an UPPER BOUND on the xwords planted (the actual RISC-V stub is
+    ;;; nfroz*4 + 3 jump + 2 quad instr-words; reuse arm64's generous nfroz*5+6).
     asm_align_word();
     (nfroz*5+6);
 enddefine;
