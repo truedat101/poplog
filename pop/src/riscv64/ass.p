@@ -146,8 +146,12 @@ lconstant
     _F7_SUB     = _16:20,       ;;; sub / sra (with the OP_REG/SRA funct3)
     _F7_MULDIV  = _1,           ;;; M extension: mul/div/rem
 
-    ;;; Register codes (RISC-V 5-bit numbers)
-    _X0  = _0,  _X1  = _1,  _X2  = _2,  _X3  = _3,  _X4  = _4,
+    ;;; Register codes (RISC-V 5-bit numbers).  NB: the handlers use _X0.._X3 as
+    ;;; WORKING registers (arm64 had general x0-x3 there); on RISC-V x0-x3 are
+    ;;; zero/ra/sp/gp, so _X0.._X3 are remapped to the work registers a0-a3
+    ;;; (x10-x13), matching genproc R0-R3.  _X4.._X31 keep their literal numbers
+    ;;; (used only in the named-register / identifier definitions).
+    _X0  = _10, _X1  = _11, _X2  = _12, _X3  = _13, _X4  = _4,
     _X5  = _5,  _X6  = _6,  _X7  = _7,  _X8  = _8,  _X9  = _9,
     _X10 = _10, _X11 = _11, _X12 = _12, _X13 = _13, _X14 = _14,
     _X15 = _15, _X16 = _16, _X17 = _17, _X18 = _18, _X19 = _19,
@@ -176,10 +180,10 @@ lconstant
 
     ;;; NAMED REGISTERS (RISC-V numbers, consistent with genproc.p)
 
-    _SP     = _X2,              ;;; hardware stack pointer (x2) -- the call frame
+    _SP     = _2,               ;;; hardware stack pointer (x2) -- the call frame
     _USP    = _X9,              ;;; user stack pointer (s1)
     _PB     = _X18,             ;;; procedure base register (s2)
-    _LR     = _X1,              ;;; link register (ra)
+    _LR     = _1,               ;;; link register (ra = x1)
 
     _ARG_REG_0  = _X10,         ;;; a0 -- subroutine arguments
     _CHAIN_REG  = _X12,         ;;; a2 -- chaining targets
@@ -1454,6 +1458,9 @@ define I_PLOG_IFNOT_ATOM();
     if asm_instr!INST_ARGS[_1] /== I_BRCOND then
         mishap(0, 'I_PLOG_IFNOT_ATOM with unexpected arguments');
     endif;
+    ;;; RISC-V no-flags convention: _prolog_unify_atom returns a0 = 0 if the atom
+    ;;; unified, non-zero if not.  Branch to -fail- when not unified.
+    drop_cmp_reg(_X0, _ZERO);
     drop_br_cond(_cc_NE, _int(fast_front(asm_instr!INST_ARGS[_0])));
 enddefine;
 
@@ -1464,8 +1471,13 @@ define I_PLOG_TERM_SWITCH();
        asm_instr!INST_ARGS[_3] /== I_BRCOND then
         mishap(0, 'I_PLOG_TERM_SWITCH with unexpected arguments');
     endif;
-    drop_br_cond(_cc_HI, _int(fast_front(asm_instr!INST_ARGS[_2])));
-    drop_br_cond(_cc_CC, _int(fast_front(asm_instr!INST_ARGS[_0])));
+    ;;; RISC-V no-flags convention: _prolog_term_switch / _prolog_pair_switch
+    ;;; return a0 = +1 (unbound var -> var_label), 0 (matched term -> fall
+    ;;; through), -1 (mismatch -> fail_label).
+    drop_cmp_reg(_X0, _ZERO);
+    drop_br_cond(_cc_GT, _int(fast_front(asm_instr!INST_ARGS[_2])));  ;;; a0 > 0 -> var
+    drop_cmp_reg(_X0, _ZERO);
+    drop_br_cond(_cc_LT, _int(fast_front(asm_instr!INST_ARGS[_0])));  ;;; a0 < 0 -> fail
 enddefine;
 
 
