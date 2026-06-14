@@ -891,31 +891,42 @@ define lconstant gen_op_3(src1, src2, dst, opcode);
     endif;
     ;;; destination register
     if isreg(dst) then dst -> dreg; false -> dst else R1 -> dreg endif;
-    ;;; first source always in a register
-    load_to_reg(src1, R1) -> op1;
-    if (isinteger(src2) or isbiginteger(src2)) and is_small_disp(src2)
-       and opcode /== "bic"
-    then
-        ;;; immediate form: addi / addi-negated / andi / ori / xori
-        lvars imm = src2;
-        if     opcode == "add" then asm_emit("addi", dreg, op1, imm, 4)
-        elseif opcode == "sub" then asm_emit("addi", dreg, op1, negate(imm), 4)
-        elseif opcode == "and" then asm_emit("andi", dreg, op1, imm, 4)
-        elseif opcode == "or"  then asm_emit("ori",  dreg, op1, imm, 4)
-        elseif opcode == "xor" then asm_emit("xori", dreg, op1, imm, 4)
+    ;;; Poplog M-op convention: dst = src2 OP src1 (cf. M_PADD "dest = src2 +
+    ;;; src1"), exactly as arm64's get_operands_r swap.  For the commutative ops
+    ;;; (add/and/or/xor) src2 OP src1 == src1 OP src2, but sub/bic must subtract
+    ;;; in the right order.
+    if opcode == "sub" then
+        ;;; dst = src2 - src1
+        if (isinteger(src1) or isbiginteger(src1)) and is_small_disp(src1) then
+            ;;; src2 - imm  ->  addi dst, src2, -imm
+            load_to_reg(src2, R1) -> op2;
+            asm_emit("addi", dreg, op2, negate(src1), 4);
         else
-            ;;; no immediate form for this op -- materialise and use R-type
+            load_to_reg(src1, R1) -> op1;
             load_to_reg(src2, R5) -> op2;
-            asm_emit(opcode, dreg, op1, op2, 4);
+            asm_emit("sub", dreg, op2, op1, 4);
         endif;
-    else
-        ;;; register (or out-of-range immediate) second operand
+    elseif opcode == "bic" then
+        ;;; dst = src2 & ~src1  (RISC-V base has no and-not: not + and)
+        load_to_reg(src1, R1) -> op1;
         load_to_reg(src2, R5) -> op2;
-        if opcode == "bic" then
-            ;;; RISC-V base has no and-not: complement op2, then and
-            asm_emit("not", R5, op2, 3);     ;;; not = xori rd,rs,-1 (pseudo)
-            asm_emit("and", dreg, op1, R5, 4);
+        asm_emit("not", R16, op1, 3);     ;;; not = xori rd,rs,-1 (pseudo)
+        asm_emit("and", dreg, op2, R16, 4);
+    else
+        ;;; commutative op: load src1, then immediate or register form.
+        load_to_reg(src1, R1) -> op1;
+        if (isinteger(src2) or isbiginteger(src2)) and is_small_disp(src2) then
+            lvars imm = src2;
+            if     opcode == "add" then asm_emit("addi", dreg, op1, imm, 4)
+            elseif opcode == "and" then asm_emit("andi", dreg, op1, imm, 4)
+            elseif opcode == "or"  then asm_emit("ori",  dreg, op1, imm, 4)
+            elseif opcode == "xor" then asm_emit("xori", dreg, op1, imm, 4)
+            else
+                load_to_reg(src2, R5) -> op2;
+                asm_emit(opcode, dreg, op1, op2, 4);
+            endif;
         else
+            load_to_reg(src2, R5) -> op2;
             asm_emit(opcode, dreg, op1, op2, 4);
         endif;
     endif;
