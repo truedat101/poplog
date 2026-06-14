@@ -1274,10 +1274,24 @@ define lconstant gen_test_or_cmp(src1, src2, test, lab, cmp_or_test);
     lvars src1, src2, test, lab, cmp_or_test, op1, op2;
     if cmp_or_test == "tst" then
         load_to_reg(src1, R1) -> op1;
-        load_to_reg(src2, R5) -> op2;
-        asm_emit("and", R5, op1, op2, 4);
-        ;;; the test for tst is EQ ((op1&op2)==0) or NEQ; branch R5 vs zero
-        asm_emit(rv_cond(test), R5, "x0", get_jump_addr(lab), 4);
+        ;;; A tst (M_BIT tag test) must NOT disturb op1: the source operand is
+        ;;; frequently live past the test -- e.g. isboolean is
+        ;;;   "iscompound(item) and item!KEY == boolean_key", where the same item
+        ;;; register feeds both the tag test AND the following item!KEY load.
+        ;;; So compute item&mask into R16 (a dedicated scratch that is never a
+        ;;; live pop value and never aliases op1) and leave op1 untouched.  The
+        ;;; mask is a small immediate for every tag test (1/2/3), so andi needs
+        ;;; no second register; the rare register-mask case uses R4 (also a dead
+        ;;; scratch) to avoid the R5/op1 alias that collapses item&mask to
+        ;;; mask&mask.
+        if (isinteger(src2) or isbiginteger(src2)) and is_small_disp(src2) then
+            asm_emit("andi", R16, op1, src2, 4);
+        else
+            load_to_reg(src2, R4) -> op2;     ;;; R4: scratch that won't alias op1
+            asm_emit("and", R16, op1, op2, 4);
+        endif;
+        ;;; the test for tst is EQ ((op1&op2)==0) or NEQ; branch R16 vs zero
+        asm_emit(rv_cond(test), R16, "x0", get_jump_addr(lab), 4);
     else
         to_branch_reg(src1, R1) -> op1;
         to_branch_reg(src2, R5) -> op2;
