@@ -1384,30 +1384,34 @@ define I_SWITCH();
     drop_cmp_reg(_reg, _X1);
 
     ;;; Compute the offset from the start of the procedure code to the end
-    ;;; of the jump offset table.
-    ;;; After this point we plant 7 instrs = 28 bytes:
-    ;;;   ASR, LSL (popint->byte-offset), B.HI, ADR, LDR, ADD, BR
+    ;;; of the jump offset table.  After this point we plant NINE 4-byte
+    ;;; instructions = 36 bytes before the table:
+    ;;;   srai, slli, b.cond,            (3 -- the popint->byte-offset + range br)
+    ;;;   auipc, addi,                   (2 -- drop_adr + drop_add_imm, the ADR pair)
+    ;;;   add, ld,                       (2 -- drop_ldr_reg expands to add then ld)
+    ;;;   add, jr                        (2 -- drop_add_reg + drop_br_reg)
     ;;; Then (_ncases + 1) * 8 bytes of 64-bit offset entries.
-    ;;; (The old "20" undercounted: it listed 5 instrs and omitted the ADD,
-    ;;; so _tabend -- the out-of-range jump target and the table position --
-    ;;; was 8 bytes short, faulting on any jump-table switch.)
-    _asm_code_offset _add _28 _add _int((_ncases + 1) * 8) -> _tabend;
+    ;;; (Earlier "28" still undercounted: drop_adr is auipc+addi and drop_ldr_reg
+    ;;; is add+ld -- two instrs each, not one -- so the table position and the
+    ;;; out-of-range target landed 8 bytes short, jumping into the last table
+    ;;; entry (data) -> SIGILL on any jump-table go_on.)
+    _asm_code_offset _add _36 _add _int((_ncases + 1) * 8) -> _tabend;
+
+    ;;; If the argument was out of range, jump to after the table (unsigned
+    ;;; comparison catches both negative and too large).  This MUST come before
+    ;;; the asr/lsl below: unlike arm64 (where cmp sets flags the branch reads),
+    ;;; RISC-V has no flags, so drop_br_cond re-reads the stashed operand
+    ;;; REGISTERS at emit time -- scaling reg first would make the range test
+    ;;; compare n*8 against ncases (so e.g. go_on with n=2 wrongly took "else").
+    drop_br_cond(_cc_HI, _tabend);
 
     ;;; Convert the 2-bit popint index to a BYTE offset into the 8-byte table
     ;;; entries: i = popint asr 2, then i*8 = i lsl 3.  (drop_ldr_reg below is a
-    ;;; plain [Xn+Xm] with NO scale, so reg must already be the byte offset.  The
-    ;;; old code did asr #3 -- a 3-bit tag AND it left the value unscaled, so the
-    ;;; jump-table dispatch was wildly wrong for any switch with enough cases to
-    ;;; use a jump table.)  Neither SBFM nor UBFM touches the cmp flags from
-    ;;; above, so the out-of-range test still works.
+    ;;; plain [Xn+Xm] with NO scale, so reg must already be the byte offset.)
     ;;; srai reg, reg, #2  (recover integer index from the 2-bit-tagged popint)
     drop_asr_imm(_reg, _reg, _2);
     ;;; slli reg, reg, #3  (scale to the 8-byte table-entry byte offset)
     drop_lsl_imm(_reg, _reg, _3);
-
-    ;;; If the argument was out of range, jump to after the table
-    ;;; (unsigned comparison catches both negative and too large)
-    drop_br_cond(_cc_HI, _tabend);
 
     ;;; Use X1 to index into jump offset table.
     ;;; Each table entry is 8 bytes (64-bit offset from procedure start).
