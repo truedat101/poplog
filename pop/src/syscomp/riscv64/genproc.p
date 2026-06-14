@@ -993,9 +993,13 @@ define lconstant m_parith(opcode);
     if isintegral(src1) then
         src1 - 3 -> src1;
     else
-        load_to_reg(src1, R5) -> src1;
-        asm_emit("addi", R5, src1, -3, 4);
-        R5 -> src1;
+        ;;; Stage the detagged src1 in R4 (a dead scratch), NOT R5: gen_op_3's
+        ;;; sub/bic else-path loads op2 into R5, and load_to_reg(reg,..) returns an
+        ;;; already-resident register as-is -- so detagging into R5 makes op1 alias
+        ;;; op2 and the result collapses to "src2 - src2 = 0".
+        load_to_reg(src1, R4) -> src1;
+        asm_emit("addi", R4, src1, -3, 4);
+        R4 -> src1;
     endif;
     gen_op_3(src1, src2, dst, opcode);
 enddefine;
