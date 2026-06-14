@@ -552,9 +552,11 @@ define lconstant load_to_reg(opd, tmp);
             return(tmp);
         endif;
     endif;
-    ;;; Auto-index pop (post-increment): load from 0(base), then bump base.  The
-    ;;; LOAD WIDTH must match the operand type (a typed `ptr!(b)++` reads ONE
-    ;;; byte, not a word) -- size alone is not enough; the load opcode too.
+    ;;; Auto-index load.  The boolean disp field f_subv(2,opd) selects direction:
+    ;;;   disp == true  -> pop  / post-increment (`ptr!(t)++`): load at base, bump +size
+    ;;;   disp == false -> push / pre-decrement  (`ptr--!(t)`): bump -size, THEN load
+    ;;; Both arms must pick the LOAD WIDTH from the operand type (a typed
+    ;;; `ptr!(b)` reads ONE byte, not a word) -- size alone is not enough.
     if isvector(opd) and datalength(opd) fi_>= 2 and isboolean(f_subv(2, opd)) then
         f_subv(1, opd) -> base;
         8 -> size;
@@ -574,8 +576,15 @@ define lconstant load_to_reg(opd, tmp);
             else mishap(opd, 1, 'type')
             endif;
         endif;
-        asm_emit(opcode, tmp, '0(' >< base >< ')', 3);
-        asm_emit("addi", base, base, size, 4);
+        if f_subv(2, opd) then
+            ;;; post-increment: load, then advance
+            asm_emit(opcode, tmp, '0(' >< base >< ')', 3);
+            asm_emit("addi", base, base, size, 4);
+        else
+            ;;; pre-decrement: retreat, then load
+            asm_emit("addi", base, base, -size, 4);
+            asm_emit(opcode, tmp, '0(' >< base >< ')', 3);
+        endif;
         return(tmp);
     endif;
     get_addressable_op(opd, tmp) -> opd1;
