@@ -1030,17 +1030,22 @@ define lconstant m_parith_test(opcode);
         load_to_reg(src1, R1) -> src1;
         asm_emit("addi", R1, src1, -3, 4);
     endif;
-    ;;; b = src2 (tagged) in R5
+    ;;; b = src2 (tagged) -- load_to_reg returns the register actually holding it,
+    ;;; which may NOT be R5 (load_to_reg returns an already-resident register
+    ;;; as-is).  Use that register (src2), not a hardcoded R5: e.g. in Intgr_+
+    ;;; src2 stays in its caller register and R5 is stale, so "add R12,R1,R5"
+    ;;; added garbage -- every overflow-checked +/- returned a bogus value (the
+    ;;; bug that made 1+1 and multi-digit literals print as a heap SYSTEM_OBJECT).
     load_to_reg(src2, R5) -> src2;
     ;;; r = a <baseop> b in R12
-    asm_emit(baseop, R12, R1, R5, 4);
+    asm_emit(baseop, R12, R1, src2, 4);
     ;;; signed-overflow bit -> R16
     if baseop == "sub" then
         asm_emit("slt", R16, R1, R12, 4)          ;;; a < r
     else
         asm_emit("slt", R16, R12, R1, 4)          ;;; r < a
     endif;
-    asm_emit("slti", R5, R5, 0, 4);               ;;; (b < 0); b now dead
+    asm_emit("slti", R5, src2, 0, 4);             ;;; R5 = (b < 0); b now dead
     asm_emit("xor", R16, R16, R5, 4);             ;;; R16 = overflow (0/1)
     ;;; push the result on the user stack (R1 is free again -- not used by a push)
     gen_reg_store(R12, -_USP, R1);
