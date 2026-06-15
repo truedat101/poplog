@@ -147,15 +147,16 @@ deref.loop2:
     mv   t1, a0
     ld   a0, _PGV_CONT(a0)
     bne  a0, t1, deref.loop2
-    ;;; Unbound variable: push it, return +1 (var).
+    ;;; Unbound variable: push it, return a0 = 0 (var).
     addi USP, USP, -8
     sd   a0, 0(USP)
-    li   a0, 1
+    li   a0, 0
     ret
 deref.notvar2:
     ld   t1, plog.pair_key
     bne  t2, t1, fail.ret
-    li   a0, 0                    ;;; matched pair
+    ;;; matched pair: leave a0 = the derefed pair (a positive pointer) so the
+    ;;; following field-extraction can read its components.
     ret
 
 	.balign 8
@@ -172,10 +173,10 @@ deref.loop1:
     mv   t1, a0
     ld   a0, _PGV_CONT(a0)
     bne  a0, t1, deref.loop1
-    ;;; Unbound variable: push it, return +1 (var).
+    ;;; Unbound variable: push it, return a0 = 0 (var).
     addi USP, USP, -8
     sd   a0, 0(USP)
-    li   a0, 1
+    li   a0, 0
     ret
 deref.notvar:
     ld   t1, plog.term_key
@@ -185,7 +186,8 @@ deref.notvar:
     ld   t2, _PGT_LENGTH(a0)
     srai t4, a2, 2                ;;; integer arity from the popint
     bne  t2, t4, fail.ret
-    li   a0, 0                    ;;; matched term
+    ;;; matched term: leave a0 = the derefed term (a positive pointer) so the
+    ;;; following field-extraction can read its arguments.
     ret
 fail.ret:
     li   a0, -1                   ;;; mismatch (shared by pair_switch + term_switch)

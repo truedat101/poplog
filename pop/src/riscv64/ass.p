@@ -1495,10 +1495,15 @@ define I_PLOG_TERM_SWITCH();
         mishap(0, 'I_PLOG_TERM_SWITCH with unexpected arguments');
     endif;
     ;;; RISC-V no-flags convention: _prolog_term_switch / _prolog_pair_switch
-    ;;; return a0 = +1 (unbound var -> var_label), 0 (matched term -> fall
-    ;;; through), -1 (mismatch -> fail_label).
+    ;;; leave a0 = the DEREFED term/pair (a positive heap pointer) when matched,
+    ;;; because the field-extraction emitted immediately after needs it.  They
+    ;;; return a0 = 0 for an unbound var (pushed on the user stack) and a0 < 0
+    ;;; for a mismatch.  So: a0 == 0 -> var_label, a0 < 0 -> fail_label, else
+    ;;; fall through with a0 still holding the derefed term.
+    ;;; (The earlier port clobbered a0 with the 0/+1/-1 class code, so the
+    ;;; extraction read fields off address 0 -> garbage perm-var values.)
     drop_cmp_reg(_X0, _ZERO);
-    drop_br_cond(_cc_GT, _int(fast_front(asm_instr!INST_ARGS[_2])));  ;;; a0 > 0 -> var
+    drop_br_cond(_cc_EQ, _int(fast_front(asm_instr!INST_ARGS[_2])));  ;;; a0 == 0 -> var
     drop_cmp_reg(_X0, _ZERO);
     drop_br_cond(_cc_LT, _int(fast_front(asm_instr!INST_ARGS[_0])));  ;;; a0 < 0 -> fail
 enddefine;
