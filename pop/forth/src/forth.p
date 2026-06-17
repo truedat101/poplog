@@ -403,22 +403,18 @@ forth_prim('quit',      f_bye,       'f_bye');
 forth_prim('pop11',     f_bye,       'f_bye');     ;;; leave :forth, back to Pop-11
 
 ;;; ---- the interactive read-eval-print loop ----
+;;; Classic Forth style: no input prompt; print a trailing ` ok` after each
+;;; line is interpreted successfully (use `.s` to inspect the stack).
 define forth_repl();
     dlocal forth_repl_quit = false;
     lvars line;
-    pr('\nPoplog Forth REPL\n');
-    pr('  "words" lists the dictionary  |  "testbench" self-tests  |  "bye" quits\n\n');
+    pr('\nPoplog Forth.  words / testbench / bye\n');
     repeat
-        pr('forth> ');
         Read_line() -> line;
         quitif(line == termin);
         nextif(datalength(line) == 0);          ;;; skip blank lines
         if Trap_run(line) then
-            unless forth_repl_quit do
-                pr(' ok');
-                if stacklength() fi_> 0 then pr('   '); f_dots() endif;
-                cucharout(`\n`);
-            endunless;
+            unless forth_repl_quit do pr(' ok\n') endunless;
         endif;
         quitif(forth_repl_quit);
     endrepeat;
