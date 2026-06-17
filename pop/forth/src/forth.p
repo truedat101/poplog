@@ -78,7 +78,7 @@ define f_space();  cucharout(`\s`)    enddefine;
 define f_dots();
     lvars n = stacklength(), i;
     pr('<'); pr(n); pr('> ');
-    fast_for i from n by -1 to 1 do pr(subscr_stack(i)); pr(`\s`) endfor;
+    fast_for i from n by -1 to 1 do pr(subscr_stack(i)); cucharout(`\s`) endfor;
 enddefine;
 
 ;;; defining words (run in interpret mode; they read the next token themselves)
@@ -276,5 +276,152 @@ define forth_load(file);
     forth_run(consstring(n));
 enddefine;
 
+;;; ======================================================================
+;;; ---- milestone 3: interactive REPL, `words`, `testbench` ----
+;;; ======================================================================
+
+vars forth_repl_quit = false;       ;;; set by the `bye`/`quit` words
+
+;;; read one raw line from current input; termin at end of input
+define lconstant Read_line() -> line;
+    lvars c, n = 0;
+    repeat
+        charin() -> c;
+        if c == termin then
+            if n == 0 then return(termin -> line) endif;
+            quitloop;
+        endif;
+        quitif(c == `\n`);
+        c;  n fi_+ 1 -> n;          ;;; leave char on stack, count it
+    endrepeat;
+    consstring(n) -> line;          ;;; build the line from the n chars
+enddefine;
+
+;;; run a chunk of Forth, trapping any error so the REPL survives it.
+;;; returns true on success (Forth data left on the stack below the flag),
+;;; false on error (data stack cleared -- Forth ABORT semantics).
+define Trap_run(src);
+    dlocal pop_exception_handler;
+    define dlocal pop_exception_handler();
+        ;;; called as P(item1..itemN, N, mess, idstring, severity)
+        lvars sev = (), idstr = (), mess = (), n = ();
+        unless sev == `E` or sev == `R` do
+            ;;; info/warning: decline, leaving the culprits + false in place
+            return(false)
+        endunless;
+        if isvector(mess) then subscrv(1, mess) -> mess endif;
+        cucharout(`\n`); pr('*** '); pr(mess); cucharout(`\n`);
+        clearstack();               ;;; ABORT: empty the Forth data stack
+        false;                      ;;; Trap_run's result
+        exitfrom(Trap_run);
+    enddefine;
+    forth_run(src);
+    true;                           ;;; result sits on top of the Forth data
+enddefine;
+
+;;; snapshot the Forth data stack as a list, bottom-to-top
+define lconstant Stack_list() -> lst;
+    lvars n = stacklength(), i;
+    [] -> lst;
+    fast_for i from 1 to n do subscr_stack(i) :: lst -> lst endfor;
+enddefine;
+
+;;; `words` -- list every word in the dictionary, sorted, wrapped to ~72 cols
+define f_words();
+    lvars wl = [], w, s, col = 0;
+    appproperty(forth_proc,
+        procedure(w, v); lvars w, v; w :: wl -> wl endprocedure);
+    syssort(wl, alphabefore) -> wl;
+    cucharout(`\n`);
+    fast_for w in wl do
+        w >< nullstring -> s;
+        if col fi_+ datalength(s) fi_+ 1 fi_> 72 then cucharout(`\n`); 0 -> col endif;
+        pr(s); cucharout(`\s`);  col fi_+ datalength(s) fi_+ 1 -> col;
+    endfor;
+    cucharout(`\n`); pr(length(wl)); pr(' words\n');
+enddefine;
+
+;;; the built-in test bench:  [ source  expected-stack-bottom-to-top ] pairs
+lconstant forth_tests = [
+    ['1 2 +'                        [3]]
+    ['5 dup *'                      [25]]
+    ['1 2 3 rot'                    [2 3 1]]
+    ['1 2 over'                     [1 2 1]]
+    ['6 7 8 nip'                    [6 8]]
+    ['7 3 mod'                      [1]]
+    ['10 2 /'                       [5]]
+    ['-5 abs'                       [5]]
+    ['3 4 max  2 9 min'             [4 2]]
+    ['1 2 <'                        [-1]]
+    ['2 1 <'                        [0]]
+    ['0 0='                         [-1]]
+    ['5 0='                         [0]]
+    ['6 3 and'                      [2]]
+    ['3 2 >r 5 r> +'                [3 7]]
+    [': sq dup * ;  6 sq'           [36]]
+    [': cnt  0 5 0 do 1+ loop ;  cnt'            [5]]
+    [': tri  0 4 0 do  3 0 do 1+ loop  loop ;  tri'  [12]]
+    [': fct  1 swap begin dup 1 > while tuck * swap 1- repeat drop ;  5 fct'  [120]]
+    ['variable vv  9 vv !  vv @'    [9]]
+    ['42 constant ans  ans 1+'      [43]]
+];
+
+;;; `testbench` -- run the suite, report pass/fail
+define f_testbench();
+    lvars t, code, want, got, pass = 0, fail = 0;
+    cucharout(`\n`); pr('Forth testbench:\n');
+    fast_for t in forth_tests do
+        hd(t) -> code;  hd(tl(t)) -> want;
+        clearstack();
+        if Trap_run(code) then
+            Stack_list() -> got;
+            if got = want then
+                pass fi_+ 1 -> pass;
+            else
+                fail fi_+ 1 -> fail;
+                pr('  FAIL  '); pr(code);
+                pr('   got '); pr(got); pr(' want '); pr(want); cucharout(`\n`);
+            endif;
+        else
+            fail fi_+ 1 -> fail;
+            pr('  ERROR '); pr(code); cucharout(`\n`);
+        endif;
+    endfor;
+    clearstack();
+    pr(pass); pr(' passed, '); pr(fail); pr(' failed   ');
+    pr(if fail == 0 then 'ALL OK' else 'FAILURES' endif); cucharout(`\n`);
+enddefine;
+
+;;; `bye` / `quit` -- ask the REPL to stop (works mid-line too)
+define f_bye(); true -> forth_repl_quit enddefine;
+
+forth_prim('words',     f_words,     'f_words');
+forth_prim('testbench', f_testbench, 'f_testbench');
+forth_prim('bye',       f_bye,       'f_bye');
+forth_prim('quit',      f_bye,       'f_bye');
+
+;;; ---- the interactive read-eval-print loop ----
+define forth_repl();
+    dlocal forth_repl_quit = false;
+    lvars line;
+    pr('\nPoplog Forth REPL\n');
+    pr('  "words" lists the dictionary  |  "testbench" self-tests  |  "bye" quits\n\n');
+    repeat
+        pr('forth> ');
+        Read_line() -> line;
+        quitif(line == termin);
+        nextif(datalength(line) == 0);          ;;; skip blank lines
+        if Trap_run(line) then
+            unless forth_repl_quit do
+                pr(' ok');
+                if stacklength() fi_> 0 then pr('   '); f_dots() endif;
+                cucharout(`\n`);
+            endunless;
+        endif;
+        quitif(forth_repl_quit);
+    endrepeat;
+    pr('bye\n');
+enddefine;
+
 ;;; banner when loaded interactively
-';;; Poplog Forth loaded.  forth_run(\'2 3 + .\')  |  forth_load(\'prog.fth\')' =>
+';;; Poplog Forth loaded.  forth_repl()  |  forth_run(\'2 3 + .\')  |  forth_load(\'prog.fth\')' =>
