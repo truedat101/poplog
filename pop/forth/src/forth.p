@@ -421,6 +421,7 @@ define forth_repl();
         endif;
         quitif(forth_repl_quit);
     endrepeat;
+    clearstack();           ;;; don't leave Forth data on the shared stack
     pr('bye\n');
 enddefine;
 
