@@ -399,6 +399,7 @@ forth_prim('words',     f_words,     'f_words');
 forth_prim('testbench', f_testbench, 'f_testbench');
 forth_prim('bye',       f_bye,       'f_bye');
 forth_prim('quit',      f_bye,       'f_bye');
+forth_prim('pop11',     f_bye,       'f_bye');     ;;; leave :forth, back to Pop-11
 
 ;;; ---- the interactive read-eval-print loop ----
 define forth_repl();
@@ -422,6 +423,54 @@ define forth_repl();
     endrepeat;
     pr('bye\n');
 enddefine;
+
+;;; ======================================================================
+;;; ---- milestone 4: register Forth as a first-class Poplog subsystem ----
+;;; ======================================================================
+
+;;; The subsystem compiler.  The framework applies it to:
+;;;   - charin            (interactive ":forth" top level) -> run the REPL
+;;;   - a device/filename (compiling/loading a .fth file)  -> read all + run
+;;;   - a character repeater (procedure)                   -> read all + run
+;;; discin() copes with both a device and a filename, so batch input just
+;;; normalises to a character repeater.  Reading the whole source before
+;;; running means multi-line ": ... ;" definitions in files work.
+define forth_compile(input);
+    lvars input, rep, c, n = 0;
+    if input == charin then
+        ;;; interactive ":forth" -- reuse the polished REPL
+        forth_repl();
+        ;;; on `bye`, drop back to Pop-11 (only when really in the subsystem)
+        if subsystem == "forth" then "pop11" -> sys_compiler_subsystem(`c`) endif;
+    else
+        if isprocedure(input) then input else discin(input) endif -> rep;
+        repeat rep() -> c; quitif(c == termin); c; n fi_+ 1 -> n endrepeat;
+        forth_run(consstring(n));
+    endif;
+enddefine;
+
+;;; register (idempotently -- so recompiling forth.p in a live image is ok).
+;;; Trapped so the Forth *language* still loads even in a bare-bones image
+;;; where the subsystem builder libs aren't on the autoload path.
+define lconstant Register_subsystem();
+    dlocal pop_exception_handler;
+    define dlocal pop_exception_handler();
+        clearstack();
+        pr(';;; Forth: subsystem registration skipped '
+          >< '(subsystem libs not available)\n');
+        exitfrom(Register_subsystem);
+    enddefine;
+    unless is_subsystem_loaded(true, "forth") then
+        subsystem_add_new(
+            "forth",            ;;; SS_NAME
+            forth_compile,      ;;; SS_PROCEDURES (just the compiler)
+            '.fth',             ;;; SS_FILE_EXTN
+            'forth> ',          ;;; SS_PROMPT
+            [],                 ;;; SS_SEARCH_LISTS
+            'Poplog Forth');    ;;; SS_TITLE
+    endunless;
+enddefine;
+Register_subsystem();
 
 ;;; banner when loaded interactively
 ';;; Poplog Forth loaded.  forth_repl()  |  forth_run(\'2 3 + .\')  |  forth_load(\'prog.fth\')' =>
