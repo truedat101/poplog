@@ -16,9 +16,12 @@ vars forth_proc;     ;;; word -> procedure         (execution)
 vars forth_pname;    ;;; word -> pop11 src name     (compilation of colon-defs)
 vars forth_toks;     ;;; remaining token list
 vars forth_gensym;
+vars forth_rstack = [];   ;;; the Forth return stack (>r r@ r>)
 newproperty([], 300, false, "perm") -> forth_proc;
 newproperty([], 300, false, "perm") -> forth_pname;
 0 -> forth_gensym;
+
+constant procedure (forth_next);    ;;; forward (defined below; used by f_constant/f_variable)
 
 ;;; ---- primitives: open-stack Pop-11 procedures ----
 define f_dup(x);    x, x          enddefine;
@@ -78,6 +81,26 @@ define f_dots();
     fast_for i from n by -1 to 1 do pr(subscr_stack(i)); pr(`\s`) endfor;
 enddefine;
 
+;;; defining words (run in interpret mode; they read the next token themselves)
+define lconstant Push_val(v); v enddefine;
+define f_constant();
+    lvars val = (), name = forth_next();
+    Push_val(% val %) -> forth_proc(consword(name));
+enddefine;
+define f_variable();
+    lvars name = forth_next();
+    Push_val(% consref(0) %) -> forth_proc(consword(name));
+enddefine;
+;;; variables are Poplog refs: @ fetches, ! stores, ? prints
+define f_fetch(r);    fast_cont(r) enddefine;             ;;; @  ( addr -- v )
+define f_store(v, r); v -> fast_cont(r) enddefine;        ;;; !  ( v addr -- )
+define f_question(r); pr(fast_cont(r)); cucharout(`\s`) enddefine;  ;;; ? ( addr -- )
+
+;;; return stack
+define f_tor(x);   x :: forth_rstack -> forth_rstack enddefine;   ;;; >r ( x -- )
+define f_fromr() -> v; fast_destpair(forth_rstack) -> (v, forth_rstack) enddefine;  ;;; r>
+define f_rfetch(); fast_front(forth_rstack) enddefine;            ;;; r@ ( -- x )
+
 ;;; ---- dictionary registration ----
 define forth_prim(name, p, pname);
     lvars name, p, pname, w = consword(name);
@@ -108,6 +131,11 @@ forth_prim('xor',f_xor,'f_xor');        forth_prim('invert',f_invert,'f_invert')
 forth_prim('.',f_dot,'f_dot');          forth_prim('cr',f_cr,'f_cr');
 forth_prim('emit',f_emit,'f_emit');     forth_prim('space',f_space,'f_space');
 forth_prim('.s',f_dots,'f_dots');
+forth_prim('constant',f_constant,'f_constant'); forth_prim('variable',f_variable,'f_variable');
+forth_prim('@',f_fetch,'f_fetch');      forth_prim('!',f_store,'f_store');
+forth_prim('?',f_question,'f_question');
+forth_prim('>r',f_tor,'f_tor');         forth_prim('r>',f_fromr,'f_fromr');
+forth_prim('r@',f_rfetch,'f_rfetch');
 
 ;;; ---- tokeniser ----
 define lconstant Iswhite(c); c == `\s` or c == `\t` or c == `\n` or c == `\r` enddefine;
@@ -122,6 +150,12 @@ define forth_tokenize(s) -> toks;
         substring(start, i fi_- start, s) -> tok;
         if tok = '\\' then           ;;; \ line comment: skip to end of line
             while i fi_<= n and fast_subscrs(i,s) /== `\n` do i fi_+ 1 -> i endwhile;
+        elseif tok = '."' or tok = 's"' then    ;;; string literal: read raw to "
+            if i fi_<= n and Iswhite(fast_subscrs(i,s)) then i fi_+ 1 -> i endif;
+            i -> start;
+            while i fi_<= n and fast_subscrs(i,s) /== `"` do i fi_+ 1 -> i endwhile;
+            conspair(tok, substring(start, i fi_- start, s)) :: toks -> toks;
+            i fi_+ 1 -> i;           ;;; skip closing "
         else
             tok :: toks -> toks;
         endif;
@@ -141,29 +175,65 @@ define lconstant Skip_comment();
     repeat forth_next() -> tok; quitif(tok == false or tok = ')') endrepeat
 enddefine;
 
+;;; produce a Pop-11 source literal for a string (quoted + escaped)
+define lconstant Quote_str(s) -> q;
+    lvars s, i, c, n = datalength(s);
+    '\'' -> q;
+    fast_for i from 1 to n do
+        fast_subscrs(i, s) -> c;
+        if c == `'` or c == `\\` then q >< '\\' -> q endif;
+        q >< consstring(c, 1) -> q;
+    endfor;
+    q >< '\'' -> q;
+enddefine;
+
 ;;; ---- colon-definition compiler (transpile -> native) ----
 define lconstant Compile_colon();
     lvars name = forth_next(), tok, num;
     unless name then mishap(0, 'FORTH: : with no name') endunless;
     forth_gensym fi_+ 1 -> forth_gensym;
     lvars pname = 'FW_' >< forth_gensym;
-    lvars src = 'define ' >< pname >< '();\n';
+    lvars src = 'define ' >< pname >< '();\n', loop_ids = [], k;
     repeat
         forth_next() -> tok;
         unless tok then mishap(name, 1, 'FORTH: unterminated : definition') endunless;
-        quitif(tok = ';');
-        if     tok = 'if'     then src >< 'if f_flagtrue() then ' -> src;
+        unless ispair(tok) then quitif(tok = ';') endunless;
+        if ispair(tok) then            ;;; ." str  or  s" str
+            if front(tok) = '."' then src >< ('pr(' >< Quote_str(back(tok)) >< '); ') -> src;
+            else src >< (Quote_str(back(tok)) >< '; ') -> src;
+            endif;
+        elseif tok = 'if'     then src >< 'if f_flagtrue() then ' -> src;
         elseif tok = 'else'   then src >< ' else ' -> src;
         elseif tok = 'then'   then src >< ' endif; ' -> src;
         elseif tok = 'begin'  then src >< 'repeat ' -> src;
         elseif tok = 'until'  then src >< ' quitif(f_flagtrue()) endrepeat; ' -> src;
         elseif tok = 'while'  then src >< ' quitunless(f_flagtrue()); ' -> src;
         elseif tok = 'repeat' then src >< ' endrepeat; ' -> src;
+        elseif tok = 'do'     then       ;;; ( limit start -- )  index = start..limit-1
+            forth_gensym fi_+ 1 -> forth_gensym; forth_gensym -> k;
+            k :: loop_ids -> loop_ids;
+            src >< ('lvars fdoi' >< k >< ', fdon' >< k >< '; () -> fdoi' >< k
+                >< '; () -> fdon' >< k >< '; while fdoi' >< k >< ' fi_< fdon'
+                >< k >< ' do ') -> src;
+        elseif tok = 'loop'   then
+            if loop_ids == [] then mishap(0, 'FORTH: loop without do') endif;
+            fast_destpair(loop_ids) -> (k, loop_ids);
+            src >< (' fdoi' >< k >< ' fi_+ 1 -> fdoi' >< k >< '; endwhile; ') -> src;
+        elseif tok = 'i'      then
+            if loop_ids == [] then mishap(0, 'FORTH: i outside do-loop') endif;
+            src >< ('fdoi' >< hd(loop_ids) >< '; ') -> src;
+        elseif tok = 'j'      then
+            if loop_ids == [] or tl(loop_ids) == [] then
+                mishap(0, 'FORTH: j needs two enclosing do-loops') endif;
+            src >< ('fdoi' >< hd(tl(loop_ids)) >< '; ') -> src;
+        elseif tok = 'leave'  then src >< ' quitloop; ' -> src;
         elseif tok = 'recurse' then src >< pname >< '(); ' -> src;
         elseif tok = 'exit'   then src >< ' return(); ' -> src;
         elseif tok = '('      then Skip_comment();
         elseif strnumber(tok) ->> num then src >< (tok >< '; ') -> src;
         elseif forth_pname(consword(tok)) ->> num then src >< (num >< '(); ') -> src;
+        elseif forth_proc(consword(tok)) then   ;;; closure word (variable/constant): indirect
+            src >< ('forth_proc(consword(\'' >< tok >< '\'))(); ') -> src;
         else mishap(tok, 1, 'FORTH: unknown word in : definition');
         endif;
     endrepeat;
@@ -176,7 +246,9 @@ enddefine;
 ;;; ---- outer interpreter ----
 define forth_interp(tok);
     lvars tok, w, num, p;
-    if tok = ':' then Compile_colon();
+    if ispair(tok) then           ;;; string literal
+        if front(tok) = '."' then pr(back(tok)) else back(tok) endif;
+    elseif tok = ':' then Compile_colon();
     elseif tok = '(' then Skip_comment();
     elseif strnumber(tok) ->> num then num;            ;;; push number
     elseif forth_proc(consword(tok) ->> w) ->> p then p();   ;;; execute word

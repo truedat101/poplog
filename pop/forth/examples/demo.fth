@@ -21,3 +21,21 @@
 10 fib .      cr
 6  fact .     cr
 48 36 gcd .   cr
+
+\ --- variables (Poplog refs under the hood) ---
+variable counter
+: bump   counter @ 1+ counter ! ;
+bump bump bump   ." counter = "  counter @ .  cr
+
+\ --- counted loops + strings (loops live inside : definitions) ---
+: stars    ( n -- )   0 do ." *" loop cr ;
+: triangle ( -- )     6 1 do i stars loop ;
+triangle
+
+\ --- nested loops: a multiplication table ---
+: row    ( n -- )   4 1 do dup i * . loop drop cr ;
+: table  ( -- )     ." mult table:" cr  4 1 do i row loop ;
+table
+
+: greet  ." Hello from Poplog Forth!" cr ;
+greet
