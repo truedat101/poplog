@@ -285,6 +285,7 @@ vars forth_repl_quit = false;       ;;; set by the `bye`/`quit` words
 ;;; read one raw line from current input; termin at end of input
 define lconstant Read_line() -> line;
     lvars c, n = 0;
+    sysflush(pop_charout_device);       ;;; make the prompt/ok visible before we block
     repeat
         charin() -> c;
         if c == termin then
