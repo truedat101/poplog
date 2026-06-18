@@ -1,11 +1,33 @@
 # ARM64 bug: high-word corruption of a tail-position arithmetic result
 
-**Status:** deeply diagnosed (deterministic repro + both procedures disassembled
-+ root-cause localised to a 4-instruction window), **not yet fixed**. The final
-fix needs a single-step watch of the x19 user-stack top across the epilogue,
-which this environment couldn't drive (lldb can't unwind Poplog's custom frames,
-and the W^X/dual-map restore fights batch single-stepping). Found 2026-06-17/18
-on Apple M-silicon (native arm64 `basepop11`) while adding a Forth `bench` word.
+**Status:** root cause localised to the **macOS dual-map / W^X layer** (NOT
+codegen), **not yet fixed**. Found 2026-06-17/18 on Apple M-silicon while adding
+a Forth `bench` word.
+
+## ⭐ Decisive result: macOS-W^X-specific (RPi5 is clean)
+
+The exact same source, byte-for-byte:
+
+| platform                   | `(f6() >> 32) =>` |
+|----------------------------|-------------------|
+| **RPi5 / aarch64 Linux**   | `0`  (correct)    |
+| **Apple M-silicon / macOS**| `127` (0x7F, BUG) |
+
+Same arm64 ISA, same `arm64/ass.p` + genproc, **so the generated machine code is
+correct** — the corruption is purely in the **macOS-only runtime layer** (the
+dual-mapped W^X heap). **Consequences:** (1) the **riscv64 port (Linux, no W^X
+dual-map) does NOT inherit this bug**; (2) the fix belongs in `c_core.c` /
+`asmout.p` / `ass.p`'s macOS-gated bias canonicalisation, not in shared codegen.
+
+This is almost certainly another instance of the **+2^36 "view-bias"
+canonicalisation gap** documented in `PORTING-ARM64-M-SILICON-OSX.md`: Pop code
+executes at the RX view (`canon + 2^36`), so any PC-relative pointer computation
+yields a view-biased value that must be masked (`and reg, reg, #~bit36`). Several
+sites were fixed (`I_CREATE_SF`, `closure_cons`); a few are flagged **unfixed**
+(exfunc trampoline; `pdr_compose adr x20,.`). The bare-tail-arithmetic-return
+path appears to hit one more unfixed site. (Note: `_pop_wx_fixup`, the lazy
+exec-fault handler, is **not** called during `f6` — the view runs in steady
+state — so the fault path is not involved; it's the view-execution bias.)
 
 ## Symptom
 
@@ -106,16 +128,21 @@ is the alternative.
 
 ## Next steps
 
-1. **Single-step the 4-instruction window** (`blr` → `ret`) of `f6` watching
-   `*(long*)$x19`, using the project's W^X-aware lldb recipes (`process handle
-   SIGBUS SIGSEGV SIGILL -p true -s false -n false`; `--hardware` breakpoints;
-   ASLR-off addresses are deterministic). Identify exactly which instruction /
-   fault flips the high word to `0x7F`.
-2. **Discriminating arch test:** run the repro on **RPi5 / arm64 Linux** (no W^X
-   dual-map). If it does **not** reproduce there, the bug is macOS-W^X-specific
-   (look in `c_core.c` exec-fault / `_pop_wx_fixup` redirect path). If it **does**
-   reproduce, it's shared `ass.p`/genproc (and likely on riscv64 too).
-3. Add the minimal repro to `validate-*.sh`.
+1. ✅ **Discriminating arch test — DONE:** RPi5 / aarch64 Linux is clean ⇒
+   macOS-W^X-specific; riscv64 unaffected; codegen correct.
+2. **Find the unfixed +2^36 canonicalisation site.** Disassemble `f6` at its
+   *runtime* (view) address and look for a PC-relative computation (`adr`, or a
+   value derived from a view-biased PC/LR) on the bare-tail-return path whose
+   result reaches the integer being returned — then mask it (`and …,#~bit36`),
+   macOS-gated, the same way `I_CREATE_SF`/`closure_cons` were fixed. The
+   round-trip-through-a-frame-slot version (`-> r`) doesn't carry the biased
+   value out, which is why it's clean. A hardware watchpoint on the result's
+   x19 slot (set after reading x19 from a `gettimeofday`/`_pop_wx_fixup`
+   `ucontext`) will catch the write that sets the high word; lldb can't unwind
+   Poplog frames, so go via a C-symbol breakpoint + the `ucontext` register
+   image rather than `bt`.
+3. Once fixed, re-run on macOS (expect `0`) and add the minimal repro to
+   `validate-msilicon.sh`.
 
 ## Workaround (in use)
 
