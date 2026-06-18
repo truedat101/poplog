@@ -1,9 +1,21 @@
-# ARM64 bug: high-word corruption of a tail-position arithmetic result
+# ARM64/macOS bug: sys_microtime/sys_real_time high-word corruption (FIXED)
 
-**Status:** root cause traced end-to-end (lldb watchpoints) to the **macOS
-dual-map / W^X layer interacting with an `lstackmem` (stack-struct FFI) result
-in a bare-tail frame layout**, NOT codegen. **Not yet fixed.** Found 2026-06-17/18
-on Apple M-silicon while adding a Forth `bench` word.
+**Status: FIXED** (2026-06-18, commit `cc1f7db`). The earlier "view-bias /
+W^X" framing was wrong — the real cause is a **`struct timeval` layout
+mismatch**: macOS `tv_usec` is a 32-bit `int`, but the shared `TIMEVAL`
+record declared it as a 64-bit `-long`, so `sys_microtime`/`sys_real_time`
+read 4 bytes of uninitialised stack padding into the high word. The diff of
+two such reads gave the `0x7F<<32` corruption (`0x80-0x01` across two calls).
+**Fix:** DARWIN-gate `TIMEVAL` in `pop/src/syspop.ph` so `TIM_USEC` is a
+32-bit `int` (codegen now emits `ldr w`, not `ldr x`). Verified on Apple
+M-silicon: `(f6()>>32)==0`, correct elapsed µs, Forth testbench 21/21; RPi5
+unchanged (uses the `#_ELSE` branch — and so the riscv64 Linux port is also
+unaffected). The lldb watchpoint trace that found it is kept below.
+
+----
+
+## Original investigation (kept for the technique)
+
 
 ## ⭐⭐ Full root-cause trace (lldb watchpoints, deterministic ASLR-off image)
 

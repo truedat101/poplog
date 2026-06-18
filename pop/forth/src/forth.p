@@ -368,9 +368,8 @@ lconstant forth_tests = [
 ];
 
 ;;; `testbench` -- run the suite, report pass/fail (+ CPU time).
-;;; Timing uses systime() (CPU hundredths-of-a-second); 10ms resolution.
-;;; (NB: sys_microtime()'s ~1e15 value gets corrupted across a loop inside a
-;;; compiled procedure on this build, so we use the small-integer systime.)
+;;; Timing uses systime() (CPU hundredths-of-a-second; 10ms resolution) -- the
+;;; cleanest cross-platform metric, and CPU rather than wall time.
 define f_testbench();
     lvars t, code, want, got, pass = 0, fail = 0, t0 = systime();
     cucharout(`\n`); pr('Forth testbench:\n');
