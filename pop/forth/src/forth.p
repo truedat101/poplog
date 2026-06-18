@@ -367,9 +367,12 @@ lconstant forth_tests = [
     ['42 constant ans  ans 1+'      [43]]
 ];
 
-;;; `testbench` -- run the suite, report pass/fail
+;;; `testbench` -- run the suite, report pass/fail (+ CPU time).
+;;; Timing uses systime() (CPU hundredths-of-a-second); 10ms resolution.
+;;; (NB: sys_microtime()'s ~1e15 value gets corrupted across a loop inside a
+;;; compiled procedure on this build, so we use the small-integer systime.)
 define f_testbench();
-    lvars t, code, want, got, pass = 0, fail = 0;
+    lvars t, code, want, got, pass = 0, fail = 0, t0 = systime();
     cucharout(`\n`); pr('Forth testbench:\n');
     fast_for t in forth_tests do
         hd(t) -> code;  hd(tl(t)) -> want;
@@ -390,7 +393,45 @@ define f_testbench();
     endfor;
     clearstack();
     pr(pass); pr(' passed, '); pr(fail); pr(' failed   ');
-    pr(if fail == 0 then 'ALL OK' else 'FAILURES' endif); cucharout(`\n`);
+    pr(if fail == 0 then 'ALL OK' else 'FAILURES' endif);
+    pr('   ('); pr((systime() - t0) fi_* 10); pr(' ms)\n');
+enddefine;
+
+
+;;; `bench` -- time representative native workloads (cross-platform metric).
+;;; Forth colon-defs compile to native Pop-11, so these measure machine-code
+;;; speed: recursion/calls, loop iteration, and indexed arithmetic.
+;;; run `src`, return its CPU time in centiseconds (10ms units); print as ms
+define lconstant Bench1(label, src) -> cs;
+    lvars label, src, t0, t1, cs;
+    lvars sl = stacklength();       ;;; caller's stack depth (preserve it)
+    forth_run(src); setstacklength(sl);     ;;; warm-up, discard its results
+    systime() -> t0;
+    forth_run(src);
+    systime() -> t1;
+    setstacklength(sl);             ;;; discard timed results only
+    t1 - t0 -> cs;
+    pr('  '); pr(label); pr(cs fi_* 10); pr(' ms\n');
+enddefine;
+
+constant forth_bench_defs = [
+    ': bench_fib  dup 2 < if drop 1 else dup 1- recurse swap 2 - recurse + then ;'
+    ': bench_loop ( n -- n )   0 swap 0 do 1+ loop ;'
+    ': bench_sum  ( n -- sum ) 0 swap 0 do i + loop ;'
+];
+
+;;; sizes chosen so the run takes a few hundred ms natively (=> usable
+;;; resolution at systime's 10ms granularity) without being painful in
+;;; emulation.  The wall-time is the cross-platform comparison metric.
+define f_bench();
+    lvars d, tot = 0;
+    fast_for d in forth_bench_defs do forth_run(d) endfor;    ;;; compile (untimed)
+    cucharout(`\n`); pr('Forth performance -- CPU time of native colon defs:\n');
+    tot + Bench1('fib(32)             ', '32 bench_fib') -> tot;
+    tot + Bench1('count 50,000,000    ', '50000000 bench_loop') -> tot;
+    tot + Bench1('sum   50,000,000    ', '50000000 bench_sum') -> tot;
+    pr('  --------------------------\n');
+    pr('  total               '); pr(tot fi_* 10); pr(' ms\n');
 enddefine;
 
 ;;; `bye` / `quit` -- ask the REPL to stop (works mid-line too)
@@ -398,6 +439,7 @@ define f_bye(); true -> forth_repl_quit enddefine;
 
 forth_prim('words',     f_words,     'f_words');
 forth_prim('testbench', f_testbench, 'f_testbench');
+forth_prim('bench',     f_bench,     'f_bench');
 forth_prim('bye',       f_bye,       'f_bye');
 forth_prim('quit',      f_bye,       'f_bye');
 forth_prim('pop11',     f_bye,       'f_bye');     ;;; leave :forth, back to Pop-11

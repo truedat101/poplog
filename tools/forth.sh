@@ -5,6 +5,7 @@
 #   tools/forth.sh foo.fth         # load foo.fth, then drop into the REPL
 #   tools/forth.sh -c '2 3 + .'    # run one line of Forth and exit
 #   tools/forth.sh -t              # run the built-in testbench and exit
+#   tools/forth.sh -b              # run the performance benchmark and exit
 #
 # Inside the REPL:  words  testbench  bye   (bye / pop11 returns to Pop-11)
 
@@ -27,6 +28,8 @@ case "$1" in
     printf "uses forth;\nforth_run('%s');\n" "$2" | $POP ;;
   -t) # run the testbench
     printf "uses forth;\nforth_run('testbench');\n" | $POP ;;
+  -b) # run the performance benchmark
+    printf "uses forth;\nforth_run('bench');\n" | $POP ;;
   '') # interactive REPL: echo the setup, then hand the terminal to Forth via cat
     { echo 'uses forth; forth();'; cat; } | $POP ;;
   *)  # load a .fth file, then drop into the REPL
