@@ -1,8 +1,51 @@
 # ARM64 bug: high-word corruption of a tail-position arithmetic result
 
-**Status:** root cause localised to the **macOS dual-map / W^X layer** (NOT
-codegen), **not yet fixed**. Found 2026-06-17/18 on Apple M-silicon while adding
-a Forth `bench` word.
+**Status:** root cause traced end-to-end (lldb watchpoints) to the **macOS
+dual-map / W^X layer interacting with an `lstackmem` (stack-struct FFI) result
+in a bare-tail frame layout**, NOT codegen. **Not yet fixed.** Found 2026-06-17/18
+on Apple M-silicon while adding a Forth `bench` word.
+
+## ⭐⭐ Full root-cause trace (lldb watchpoints, deterministic ASLR-off image)
+
+Walked it backwards from the garbage to the source:
+
+1. **The corruption is the subtract proc's *correct* computation of `b - a`,
+   where input `a` is already garbage.** Watchpoint on f6's result slot
+   (`0x8000103ff8`) caught the bad value `0x1fc00016ca3` written by the `-`
+   proc's fast path (`sub x5,x22,#3; subs x1,x21,x5; str x1,[x19,#-8]!`). That
+   arithmetic is right — `a` (x22) is wrong. `0x1fc = 0x7f<<2` (pop-int tag
+   shift), i.e. `0x7f<<32` in the untagged value.
+2. **`a` = the FIRST `sys_microtime()` result, garbage in its high word from
+   the moment it's produced.** Watchpoint on a's frame slot: the very first
+   write is already `0x1952…`; watchpoint on a's push slot: `sys_microtime`
+   pushes `0x19520c63…` while the second call (b) is `0x19540c0d…`. The two
+   calls' `sec*1e6` high words differ by ~`0x200<<32` (~6 days) — impossible
+   10 ms apart, so the **first call's `sec` is wrong**.
+3. **`sec` comes from `sys_microtime`'s `lstackmem struct TIMEVAL`**
+   (`gettimeofday(_tvp); sec*1000000 + usec`; see `pop/src/sys_real_time.p`).
+   The `*1e6` multiply (disassembled at `0x1002bde98`) is correct; it just
+   receives a wrong `sec`.
+4. **It needs `lstackmem`.** Ordinary Pop procs returning the *same large
+   values* in the same bare-tail position are clean (the earlier `mv1/mv2`,
+   `Tc` tests); only `lstackmem`/FFI results (`sys_microtime`) corrupt. And it
+   needs the **bare-tail layout** (the `-> r` round-trip-through-a-frame-slot
+   form is clean) and the **macOS view** (RPi5 clean).
+5. f6 runs at the **+2^36 RX view** (pc `0x9000…`) and *does* canonicalise its
+   frame pointer (`and x20,x20,#~bit36` — the documented `I_CREATE_SF` fix),
+   yet `a` is still corrupted ⇒ a *different*, unfixed view/`lstackmem`
+   interaction (the stack-struct's address or its TIM_SEC read diverging
+   between the `gettimeofday` write and the Pop read under the bare-tail layout).
+
+**Net:** an `lstackmem` (C stack-struct) FFI result, consumed by a bare-tail
+arithmetic return at the +2^36 view, reads a corrupted high word. The fix is in
+the macOS-gated view/`lstackmem` stack-address handling — last micro-step: watch
+the TIMEVAL bytes (`gettimeofday`'s write vs `sys_microtime`'s read) on the first
+vs second call to see the diverging address. Addresses for the repro (ASLR-off):
+heap/user-stack base `0x8000104000`, result slot `0x8000103ff8`, the `-` proc at
+`0x1001bbce0`, `sys_microtime` multiply at `0x1002bde98`, f6 view code at
+`0x9000…d7f4`.
+
+## Status (original summary)
 
 ## ⭐ Decisive result: macOS-W^X-specific (RPi5 is clean)
 
