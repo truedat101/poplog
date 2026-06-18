@@ -1,120 +1,124 @@
-# ARM64 codegen bug: high-word corruption in a tail-position integer subtract
+# ARM64 bug: high-word corruption of a tail-position arithmetic result
 
-**Status:** characterised, not yet fixed. Found 2026-06-17 on Apple M-silicon
-(native arm64 `basepop11`) while adding a `bench` word to Poplog Forth.
-Arch-specificity (arm64-only vs upstream) **not yet confirmed** — see *Next steps*.
+**Status:** deeply diagnosed (deterministic repro + both procedures disassembled
++ root-cause localised to a 4-instruction window), **not yet fixed**. The final
+fix needs a single-step watch of the x19 user-stack top across the epilogue,
+which this environment couldn't drive (lldb can't unwind Poplog's custom frames,
+and the W^X/dual-map restore fights batch single-stepping). Found 2026-06-17/18
+on Apple M-silicon (native arm64 `basepop11`) while adding a Forth `bench` word.
 
 ## Symptom
 
-A compiled Pop-11 procedure that subtracts two large integers **in
-tail/return position**, where at least one operand came from an FFI /
-`lstackmem` procedure (`sys_microtime`), returns a value whose **high 32
-bits are corrupted to a constant `0x7F` (127)** while the **low 32 bits are
-correct**.
+A compiled Pop-11 procedure whose **last expression is an integer subtraction
+left on the stack as the result** returns a value whose **high 32 bits are
+corrupted to a constant `0x7F` (127)**; the **low 32 bits are correct**:
 
 ```
-result      = 545460857618        ;;; garbage
-low 32 bits = 11026               ;;; == the correct answer
-high bits   = 127  (0x7F)         ;;; garbage
+result == (0x7F << 32) | correct_value
 ```
-i.e. `result == (0x7F << 32) | correct_value`.
 
 The procedure runs without error — it just returns the wrong number.
 
-## Minimal reproduction
+## Deterministic reproduction (bare tail-expr fails; result-var works)
 
 ```pop11
-define Z();
-    lvars a = sys_microtime();                              ;;; (1) FFI/lstackmem call, large int
+;;; FAILS: result of `b - a` is the bare tail expression (left on the stack)
+define f6();
+    lvars a = sys_microtime();
     lvars i, s = 0;
-    fast_for i from 1 to 3000000 do i + s -> s endfor;      ;;; (2) accumulating loop
+    fast_for i from 1 to 3000000 do i + s -> s endfor;   ;;; accumulating loop
     lvars b = sys_microtime();
-    b - a                                                   ;;; (3) subtraction in TAIL position
+    b - a
 enddefine;
-Z() =>
-** 545460857860            ;;; WRONG (should be ~11000, i.e. the elapsed microseconds)
-```
+(f6() >> 32) =>     ** 127      ;;; WRONG (should be 0)
 
-Binding the result to a local first makes it correct:
-
-```pop11
-define S();
+;;; WORKS: identical, but the result is stored to a variable before returning
+define ok() -> r;
     lvars a = sys_microtime();
     lvars i, s = 0;
     fast_for i from 1 to 3000000 do i + s -> s endfor;
     lvars b = sys_microtime();
-    lvars d = b - a;          ;;; bind result, then return it
-    d
+    b - a -> r
 enddefine;
-S() => ** 11151              ;;; CORRECT
+(ok() >> 32) =>     ** 0        ;;; correct
 ```
 
-## Localisation matrix (all variants compiled via `define`)
+`lvars d = b - a; d` also works. The trigger needs **all** of: an FFI/`lstackmem`
+call (`sys_microtime`), the **accumulating loop** (empty loop / no loop don't
+trigger), a **large** value (> 2^32, else the high-word damage is invisible), and
+the subtraction as the **bare tail expression** (not stored to a local).
 
-| variant                                                        | result   |
-|----------------------------------------------------------------|----------|
-| `b - a` in tail, both operands from `sys_microtime()`          | GARBAGE  |
-| `lvars d = b - a; d`  (result bound before return)             | correct  |
-| both operands large **literals**                               | correct  |
-| both operands from ordinary Pop-11 procs (`mv1`/`mv2`)         | correct  |
-| both operands large **computed** values                        | correct  |
-| `a` literal, `b` = `sys_microtime()`                           | GARBAGE  |
-| `a` = `sys_microtime()`, `b` literal                           | GARBAGE  |
-| **empty** loop body (`do endfor`, no accumulator)              | correct  |
-| no loop at all                                                 | correct  |
-| only **one** `sys_microtime()` call (`b = a + 11215`)          | correct  |
-| `sys_microtime()` but values are small (e.g. `systime()`)      | correct* |
+## What was ruled out
 
-\* small values can't expose a high-32-bit corruption.
+- **Not the value / type.** `sys_microtime()` returns a *simple* integer
+  (`isbiginteger` = false); same magnitude as a literal. Large literals, ordinary
+  Pop-procedure results, and computed values all work in the same position.
+- **Not `popc`/`asmout.p`.** Compiling the same source with `popc` (text backend)
+  emits **correct** code. The bug is on the **interactive / in-memory assembler
+  path (`pop/src/arm64/ass.p`)** — same file as the earlier `lit_buff` bug.
+- **Not fresh-compile / I-cache.** `syssave` the procedure, restart, restore: the
+  bare-tail version **still** returns `0x7F` garbage; the result-var version is
+  still correct. So it is the *compiled code/behaviour*, not a first-touch flush.
+- **Not the subtract routine.** Both versions call the **same** `-` proc
+  (`identof` deref to the same code) and set up an **identical** x19 stack
+  (`[a, b]`) immediately before the call.
 
-## Trigger — all of these together are required
+## Disassembly — the only difference (both verified from one saved image)
 
-1. At least one operand value originates from an **FFI / `lstackmem`** proc
-   call. `sys_microtime` uses `lstackmem struct TIMEVAL _tvp; _extern
-   gettimeofday(_tvp, _NULL)` (see `pop/src/sys_real_time.p`). Ordinary
-   Pop-11 procs returning the same magnitude do **not** trigger it.
-2. An **accumulating loop** runs (register pressure). An empty loop body
-   does not trigger it; no loop does not trigger it.
-3. The subtraction is in **tail / return position**. Binding the result to
-   an `lvars` before returning fixes it.
-4. The operands are **large** (> 2^32) so the high-word corruption is
-   visible. (`systime()`, which returns small CPU-centisecond ints, is
-   unaffected — hence the Forth `bench`/`testbench` timing uses it.)
+Tail of the **failing** `f6` (result left on x19, then return):
+```
+    blr     x1                  ; subtract  ->  result pushed on x19 (user stack)
+    ldr     x30, [sp, #0x28]    ; epilogue (touches sp/x30/x20, NOT x19)
+    ldr     x20, [sp, #0x30]
+    add     sp, sp, #0x30
+    ret                         ; returns with the result still on x19
+```
+Tail of the **working** `ok` (`-> r`):
+```
+    blr     x1                  ; subtract  ->  result on x19
+    ldr     x0, [x19], #8       ; POP result
+    str     x0, [sp, #0x28]     ; store to r (frame slot)
+    ldr     x0, [sp, #0x28]     ; reload r
+    str     x0, [x19, #-8]!     ; RE-PUSH result
+    ldr     x30, [sp, #0x38]    ; epilogue
+    ...
+    ret
+```
 
-Both operands need not be FFI results — corrupting *either* operand's
-source to `sys_microtime` is enough, which argues the fault is in the
-**tail subtraction's result materialisation**, not in either input value
-(the inputs are demonstrably fine: the low 32 bits are always correct).
+Both leave the result on x19 as the return value; the working one merely
+**pops and re-pushes** it (round-trips through a 64-bit frame slot) first. The
+epilogues touch only the call stack (`sp`), never x19. **Statically the two are
+equivalent** — yet they behave differently, so the corruption is a *runtime*
+effect occurring between the subtract and the caller reading x19-top, in the
+window where `f6` does *nothing* but `ok` does the pop/re-push.
 
-## Hypothesis
+## Leading hypotheses (for the single-step)
 
-Register-allocation / value-tracking in the tail-return path fails to
-materialise the **high 32 bits** of a 64-bit pop-integer result when an
-`lstackmem`/FFI call's stack manipulation is live under loop register
-pressure. The constant `0x7F` looks like a stale register/stack-slot value
-rather than a shifted/truncated operand. Likely in
-`pop/src/syscomp/arm64/genproc.p` (instruction selection / frame / result
-return), the same area as the other documented arm64 codegen fixes.
-
-## Workaround (in use)
-
-- Bind the arithmetic result to an `lvars` before returning it.
-- For elapsed-time measurement specifically, use `systime()` (CPU
-  hundredths-of-a-second, small ints) instead of `sys_microtime()`
-  (~1e15 µs). This is what `pop/forth/src/forth.p` (`bench`, `testbench`)
-  does.
+The result on x19 is correct immediately after the subtract (the working version
+loads it and it is fine). Something corrupts x19-top's **high 32 bits** during
+`f6`'s epilogue/return that the round-trip in `ok` avoids. Most likely a
+**W^X dual-map / cross-procedure redirect-fault** or a signal that uses the x19
+user stack as scratch and leaves `0x7F` in the high word of the pending return
+slot; the working version re-materialises x19-top after that point. (The
+"~1 fault per cross-procedure call" dual-map handler is the prime suspect — see
+the M-silicon notes.) An optimiser/`ass.p` mis-step on the bare-tail-return path
+is the alternative.
 
 ## Next steps
 
-1. **Disassemble** `bad` vs `good`. `popc -nosys` rejects the standalone
-   snippet (syntax/`lstackmem` deps); needs compiling within the full
-   system or a different popc invocation to capture the emitted `.s`, then
-   diff the subtract/return sequence. The `0x7F` high word should point
-   straight at the offending instruction.
-2. **Arch-specificity:** reproduce on **x86_64** (upstream) and **riscv64**.
-   If arm64-only it's a port bug in `arm64/genproc.p`; the riscv64 backend
-   was retargeted from arm64 so it may share the fault — worth checking the
-   same minimal repro under qemu. This determines whether it's our port or
-   upstream Poplog.
-3. If confirmed arm64-port-specific, fix in `genproc.p` and add the minimal
-   repro to `validate-*.sh`.
+1. **Single-step the 4-instruction window** (`blr` → `ret`) of `f6` watching
+   `*(long*)$x19`, using the project's W^X-aware lldb recipes (`process handle
+   SIGBUS SIGSEGV SIGILL -p true -s false -n false`; `--hardware` breakpoints;
+   ASLR-off addresses are deterministic). Identify exactly which instruction /
+   fault flips the high word to `0x7F`.
+2. **Discriminating arch test:** run the repro on **RPi5 / arm64 Linux** (no W^X
+   dual-map). If it does **not** reproduce there, the bug is macOS-W^X-specific
+   (look in `c_core.c` exec-fault / `_pop_wx_fixup` redirect path). If it **does**
+   reproduce, it's shared `ass.p`/genproc (and likely on riscv64 too).
+3. Add the minimal repro to `validate-*.sh`.
+
+## Workaround (in use)
+
+Store the result to a local before returning (`-> r`, or `lvars d = expr; d`).
+For elapsed-time measurement, the Forth `bench`/`testbench` code uses `systime()`
+(small CPU-centisecond ints, never > 2^32) which never exposes the bug.
