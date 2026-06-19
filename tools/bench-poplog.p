@@ -3,8 +3,11 @@
 ;;; Protocol (matches tools/bench-baseline.{py,pl}):
 ;;;   * Timer: systime() -- process CPU time, centiseconds.  All three engines
 ;;;     measure CPU TIME (Pop systime, Python process_time, Perl times), so the
-;;;     metric is aligned AND robust to background load.  (Poplog's wall-clock
-;;;     sys_microtime is unreliable on the Darwin port -- see bench docs.)
+;;;     metric is aligned AND robust to background load.  (We use CPU time, not
+;;;     wall-clock sys_microtime, deliberately: CPU time is the comparable
+;;;     cross-engine metric.  The earlier Darwin sys_microtime tv_usec bug that
+;;;     made wall-clock unreliable is fixed -- see PORTING-ARM64-BUG-tail-
+;;;     subtract-highword.md -- but CPU time remains the right choice here.)
 ;;;   * Auto-calibration: each workload is repeated K times per timed batch,
 ;;;     K chosen so one batch >= BENCH_MINTIME (default 2 s) of CPU time -- so
 ;;;     the 10 ms systime resolution is a small fraction of each batch.
