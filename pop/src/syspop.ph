@@ -109,7 +109,17 @@ deftype
     s_stackbuff = short[460];
 
 struct TIMEVAL
+#_IF DEF DARWIN
+  ;;; Darwin/macOS: struct timeval.tv_usec is a 32-bit __darwin_suseconds_t
+  ;;; (int), NOT a 64-bit long as on Linux LP64.  Reading it as a -long picks
+  ;;; up 4 bytes of uninitialised stack padding in the high word, which then
+  ;;; leaks into sys_microtime()/sys_real_time() results (and the diff of two
+  ;;; such reads -- the "0x7F<<32" corruption).  Keep the record 16 bytes so
+  ;;; embedded use in ITIMERVAL stays correct.
+  { -long TIM_SEC; int TIM_USEC, _TIM_USEC_PAD; };
+#_ELSE
   { -long TIM_SEC, TIM_USEC; };
+#_ENDIF
 
 struct CODING_FUNCS
   { (code)  CDFN_ENCODE,    ;;; UNICODE -> something
