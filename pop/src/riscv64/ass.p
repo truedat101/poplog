@@ -1834,31 +1834,42 @@ define I_SETSTACKLENGTH();
     if asm_instr!INST_ARGS[_1] ->> _nresults then
         ;;; a known number of results (a popint):
         ;;; expand code for "_setstklen" inline
-        lvars _reg = load_fsrc_to_reg(_0, _X2);
+        ;;; MUST compute the target into t0 (x5) and use t1 (x6) as scratch --
+        ;;; the registers the hand-written _setstklen_diff (alisp.s) reads.  On
+        ;;; arm64 _X2/_X3 ARE x2/x3, the same registers its .s uses, so the inline
+        ;;; computed straight into them; the RISC-V remap made _X2/_X3 = x12/x13
+        ;;; (a2/a3) while alisp.s was ported to t0/t1 (x5/x6).  Computing into
+        ;;; _X2 here left the target in x12 but _setstklen_diff read a STALE t0
+        ;;; (x5) as the fill bound -> the nil-fill loop wrote over a live heap
+        ;;; object (ERROR's identifier), the wild store that blocked Lisp eval at
+        ;;; defs.lsp.  t0/t1 are free here (not genproc registers; the else-branch
+        ;;; _setstklen call already clobbers them).  _X5=x5=t0, _X6=x6=t1.
+        lvars _reg = load_fsrc_to_reg(_0, _X5);
         ;;; Expected USP = userhi - (saved_len + nresults) items * 8 bytes.
         ;;; popints are (k<<2)+3 (2-bit tag): saved + (nresults-6) = (s+n)<<2
         ;;; = items*4, then double to items*8.  (The old #14 magic assumed a
         ;;; 3-bit tag where popint already carried the <<3 word-scale.)
-        load_literal(_X3, _nresults _sub _6);
-        drop_add_reg(_X2, _reg, _X3);       ;;; X2 = (saved+nresults)*4
-        drop_add_reg(_X2, _X2, _X2);        ;;; X2 = (saved+nresults)*8 bytes
-        load_literal(_X3, ident _userhi);
-        drop_load_off(_X3, _X3, _0);
-        drop_sub_reg(_X2, _X3, _X2);
+        load_literal(_X6, _nresults _sub _6);
+        drop_add_reg(_X5, _reg, _X6);       ;;; t0 = (saved+nresults)*4
+        drop_add_reg(_X5, _X5, _X5);        ;;; t0 = (saved+nresults)*8 bytes
+        load_literal(_X6, ident _userhi);
+        drop_load_off(_X6, _X6, _0);
+        drop_sub_reg(_X5, _X6, _X5);        ;;; t0 = userhi - 8*items (target USP)
         ;;; If USP == expected, skip the call; else call _setstklen_diff.
-        ;;; AArch64 has no conditional BLR.  load_literal is VARIABLE length
-        ;;; (2 instrs MOVZ+MOVK for a 32-bit code address), so we must load WK
-        ;;; BEFORE the branch and have the B.EQ skip only the single BLR (+8).
-        ;;; The previous code loaded WK *after* a B.EQ +12: on the equal path
-        ;;; (USP==expected, the COMMON case) it branched straight onto the BLR
-        ;;; while skipping the WK load, so `BLR WK` jumped to a stale/garbage
-        ;;; address and smashed the heap -- the corruption that blocked Lisp
-        ;;; eval once the _setstklen underflow was fixed.  Loading WK first and
-        ;;; branching +8 (one instruction, the BLR) is robust to load_literal's
-        ;;; length and leaves WK valid on the fall-through.
+        ;;; RISC-V has no conditional jalr, so load WK first, then a cond branch
+        ;;; that skips the jalr on the equal path.  The skip distance must clear
+        ;;; the WHOLE branch + the jalr: drop_br_cond ALWAYS plants the relaxed
+        ;;; 2-instr form `b.!cc +8 ; j target` (8 bytes), and drop_blr is one
+        ;;; jalr (4 bytes), so the jalr sits at offset+8 and the instruction past
+        ;;; it at offset+12.  Hence the EQ target is +12 (NOT +8 -- that lands ON
+        ;;; the jalr and calls it anyway; with the t0 register fix above that put
+        ;;; the real target in the fill bound, the USP==target case then ran the
+        ;;; nil-fill loop with USP==t0, decrementing USP forever and smashing the
+        ;;; heap downward).  The arm64 original used +8 because its B.EQ is a
+        ;;; single 4-byte instruction; RISC-V's relaxed branch is 8 bytes.
         load_literal(_WK, _setstklen_diff);
-        drop_cmp_reg(_USP, _X2);
-        drop_br_cond(_cc_EQ, _asm_code_offset _add _8);
+        drop_cmp_reg(_USP, _X5);
+        drop_br_cond(_cc_EQ, _asm_code_offset _add _12);
         drop_blr(_WK);
     else
         ;;; general case, simply call _setstklen
@@ -1872,19 +1883,21 @@ enddefine;
 
 define I_LISP_TRUE();
     ;;; Replace a <false> on top of the user stack with nil; leave anything
-    ;;; else untouched.  No conditional STR on AArch64, so: load nil into X1
-    ;;; BEFORE the branch (load_literal is variable length -- 2 instrs for the
-    ;;; nil address), compare, then B.NE skips ONLY the single STR (+8).
-    ;;; The old code branched +12 and loaded nil AFTER the B.NE, so on the NE
-    ;;; path (top /== false, the common case) it jumped onto the STR with X1
-    ;;; still holding <false> and overwrote the live top-of-stack value with
-    ;;; <false> -- pervasive value corruption (I_LISP_TRUE backs every Lisp
-    ;;; boolean coercion).
+    ;;; else untouched.  No conditional store on RISC-V, so: load nil into X1
+    ;;; BEFORE the branch, compare, then on NE (top /== false) skip the store.
+    ;;; The skip target is +12, NOT +8: drop_br_cond plants the relaxed 8-byte
+    ;;; `b.!cc +8 ; j target` form and the store (drop_store_off) is one 4-byte
+    ;;; instruction after it, so the instruction past the store is at offset+12.
+    ;;; With +8 the NE branch lands ON the store and runs it anyway, overwriting
+    ;;; a live non-false top-of-stack with nil -- pervasive value corruption
+    ;;; (I_LISP_TRUE backs every Lisp boolean coercion).  The arm64 original used
+    ;;; +8 only because its B.NE is a single 4-byte instruction; RISC-V's relaxed
+    ;;; conditional branch is 8 bytes (see I_SETSTACKLENGTH for the same fix).
     load_literal(_X1, false);
     drop_load_off(_X0, _USP, _0);
     drop_cmp_reg(_X0, _X1);
     load_literal(_X1, nil);
-    drop_br_cond(_cc_NE, _asm_code_offset _add _8);
+    drop_br_cond(_cc_NE, _asm_code_offset _add _12);
     drop_store_off(_X1, _USP, _0);
     ;;; skip: (falls through here if not equal)
 enddefine;
