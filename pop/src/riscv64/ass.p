@@ -1882,23 +1882,31 @@ enddefine;
 ;;;     replace <false> result on top of stack by nil.
 
 define I_LISP_TRUE();
-    ;;; Replace a <false> on top of the user stack with nil; leave anything
-    ;;; else untouched.  No conditional store on RISC-V, so: load nil into X1
-    ;;; BEFORE the branch, compare, then on NE (top /== false) skip the store.
-    ;;; The skip target is +12, NOT +8: drop_br_cond plants the relaxed 8-byte
+    ;;; Replace a <false> on top of the user stack with nil; leave anything else
+    ;;; untouched.  Compare top against <false>, then on NE (top /== false) skip
+    ;;; the single store of nil.  TWO RISC-V-specific points:
+    ;;;
+    ;;; (1) The nil to be stored MUST go in a register OTHER than the compare's
+    ;;; rhs (X1 = <false>).  RISC-V has no condition flags: drop_cmp_reg only
+    ;;; RECORDS the operand registers and drop_br_cond re-reads them when it
+    ;;; plants the branch, so any write to X1 between the cmp and the branch
+    ;;; changes what is compared.  The arm64 original reused X1 for nil because
+    ;;; its CMP sets NZCV immediately; doing that here made the branch test
+    ;;; `top == nil` instead of `top == <false>`, so a pop11 <false> result
+    ;;; (top /== nil) was never converted to nil -- it leaked into Lisp as
+    ;;; #<FALSE> and read as truthy (every Lisp boolean coercion, incl. SYMBOLP,
+    ;;; via the "boolean" external result type).  So load nil into WK and keep X1.
+    ;;;
+    ;;; (2) The skip target is +12, NOT +8: drop_br_cond plants the relaxed 8-byte
     ;;; `b.!cc +8 ; j target` form and the store (drop_store_off) is one 4-byte
     ;;; instruction after it, so the instruction past the store is at offset+12.
-    ;;; With +8 the NE branch lands ON the store and runs it anyway, overwriting
-    ;;; a live non-false top-of-stack with nil -- pervasive value corruption
-    ;;; (I_LISP_TRUE backs every Lisp boolean coercion).  The arm64 original used
-    ;;; +8 only because its B.NE is a single 4-byte instruction; RISC-V's relaxed
-    ;;; conditional branch is 8 bytes (see I_SETSTACKLENGTH for the same fix).
+    ;;; (arm64 used +8 because its B.NE is a single 4-byte instruction.)
     load_literal(_X1, false);
     drop_load_off(_X0, _USP, _0);
     drop_cmp_reg(_X0, _X1);
-    load_literal(_X1, nil);
+    load_literal(_WK, nil);
     drop_br_cond(_cc_NE, _asm_code_offset _add _12);
-    drop_store_off(_X1, _USP, _0);
+    drop_store_off(_WK, _USP, _0);
     ;;; skip: (falls through here if not equal)
 enddefine;
 
