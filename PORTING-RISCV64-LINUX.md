@@ -74,25 +74,56 @@ back to single-stepping, infeasible here). The Lisp wild store was instead caugh
 with a **qemu-user 8.2 TCG memory-write plugin** (built on the x86-64 host) plus
 in-tree `_extern printf` instrumentation — see the memory file for the technique.
 
+## Fixed: closure churn + auto-GC → stale-I-cache SIGILL
+
+Found by `bench-poplog.p`'s `closures1M`; **fixed** by hardening the i-cache
+flush (commit `refs #12`).
+
+**Symptom.** Creating many short-lived closures while the GC runs SIGILLed on
+real silicon. A closure is *executable heap code*, and when an address is freed
+and re-used for a new closure the freshly written code was occasionally still
+stale in the I-cache at call time — the bytes in memory were a valid `auipc`,
+but the I-cache held something else. **Real-hardware-only**: QEMU re-translates
+self-modified code, so it never showed in emulation (exactly the `fence.i` /
+I-cache hazard flagged below). It never affected the four-language validation
+(`validate-riscv64.sh` = 14/14) — a closure-churn stress path, not a functional
+regression.
+
+**Diagnosis.** The flush *was* invoked: `CACHEFLUSH` is called from
+`consclosure`→`Flush_procedure` (procedure.p) and the post-GC flush (gcmain.p),
+and a probe in `Flush_procedure` confirmed the churned closures reached it. Yet
+the I-cache stayed stale, and the window was so timing-fragile that *any*
+instrumentation in the flush path masked it. Signature → a d-cache→i-cache
+**writeback/ordering race** on the JH7100 U74: the bare range `__clear_cache`
+invalidated the I-cache before the new code stores had drained to the point of
+unification, so a refetch could still see old bytes.
+
+**Fix.** `CACHEFLUSH` now calls `rv_cacheflush` (`pop/extern/lib/c_core.c`)
+instead of a bare `__clear_cache`:
+
+```c
+__asm__ volatile("fence rw, rw" ::: "memory");   /* drain code stores */
+__builtin___clear_cache(ptr, ptr + nbytes);      /* kernel range flush (all harts) */
+__asm__ volatile("fence.i" ::: "memory");         /* local belt-and-braces */
+```
+
+The leading `fence rw,rw` orders the code stores ahead of the invalidation; the
+trailing `fence.i` is a local backstop. (`pop/src/syscomp/riscv64/sysdefs.p`,
+`CACHEFLUSH`.)
+
+**Verified.** 1M closures × 20 runs and 10M × 5 runs — 150M churned closures,
+zero faults (the unhardened build crashed 5/5 at 1M). The full `closures1M`
+benchmark now completes (352 ms median on the VisionFive), and the fixed
+basepop11 rebuilds all four language images — including the JIT/closure-heavy
+clisp, which had been hanging — in seconds. A change to the flush path needs the
+**full ladder** rebuilt: `CACHEFLUSH` lives in the backend `sysdefs.p`, so
+`stamp_popc` must be rebuilt before `stamp_srclib` (so the new flush is baked
+into the `popc` that compiles `procedure.p`/`gcmain.p`), then `new_corepop`,
+`basepop11`, and the `.psv` images.
+
 ## Open issues
 
-* **Closure churn + auto-GC → stale-I-cache SIGILL** (found by `bench-poplog.p`'s
-  `closures1M`, not yet fixed). Creating many short-lived closures while the GC
-  runs SIGILLs on real silicon: a closure is *executable heap code*, and when an
-  address is freed and re-used for a new closure the fresh code doesn't reach the
-  I-cache (the bytes in memory are valid; the I-cache is stale). It is
-  **real-hardware-only** — QEMU re-translates self-modified code, so it never
-  shows in emulation. `CACHEFLUSH` is defined (`= __clear_cache`) and called from
-  both `consclosure`→`Flush_procedure` (procedure.p) and the post-GC flush
-  (gcmain.p), and all three flush primitives (`__clear_cache`, the
-  `riscv_flush_icache` syscall, a bare `fence.i`) pass an isolated reuse test —
-  so the flush is *invoked* and *works*, but isn't *covering* the GC-churned /
-  reused-address closures. It does **not** affect the four-language validation
-  (`validate-riscv64.sh` = 14/14) — it is a closure-churn stress bug, not a
-  functional regression. Next step: instrument `Flush_procedure` (dump the
-  flushed range) and check the copy-GC reuse path / `_lowest_garbageable`
-  coverage. See `BENCHMARKS.md` (the ⊗ note) and the `project_poplog_riscv64_port`
-  memory.
+None currently. (The closure-churn I-cache bug above is fixed.)
 
 ## Target
 

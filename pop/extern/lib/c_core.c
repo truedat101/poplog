@@ -2877,3 +2877,27 @@ linux_setper(int argc, char * * argv, char * * envp)
         problems with programs that use -malloc- to get space for
         double-float operations on SPARC etc).
  */
+
+/* rv_cacheflush -- robust instruction-cache sync for self-modifying code
+   (closures and other JIT-planted procedures) on RISC-V.
+
+   The Poplog runtime writes native code into the heap and then asks
+   CACHEFLUSH (see pop/src/syscomp/riscv64/sysdefs.p) to make it executable.
+   A bare range __clear_cache() proved insufficient on the StarFive
+   VisionFive (JH7100, dual SiFive U74): under heavy GC address reuse --
+   short-lived closures churned through collection so their addresses are
+   recycled -- freshly written closure code was occasionally still stale in
+   the i-cache at call time, faulting SIGILL on a perfectly valid `auipc`.
+
+   The fix brackets the kernel flush with fences: a leading `fence rw, rw`
+   drains the code stores to the point of unification before the i-cache is
+   invalidated, and a trailing local `fence.i` is a belt-and-braces barrier.
+   __builtin___clear_cache() still issues the kernel range flush (which
+   handles cross-hart invalidation). */
+int rv_cacheflush(unsigned long ptr, unsigned long nbytes)
+{
+    __asm__ volatile("fence rw, rw" ::: "memory");
+    __builtin___clear_cache((char*) ptr, (char*) (ptr + nbytes));
+    __asm__ volatile("fence.i" ::: "memory");
+    return 0;
+}

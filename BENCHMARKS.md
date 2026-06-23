@@ -141,7 +141,7 @@ clean throughout (no E-core scheduling spikes this time).
 | nfib29 (calls) | 14.5 ms | 13.2 ms | 24.9 ms | **8.83 ms** | 230 ms |
 | intloop10M | 61.5 ms | 52.2 ms | 124 ms | **42.4 ms** | 950 ms |
 | lists (alloc/GC) | 11.4 ms | 9.0 ms | 22.2 ms | **7.54 ms** | 308 ms |
-| closures1M | 22.0 ms | 45.1 ms ◊ | 33.5 ms | **27.3 ms** | ✗ ⊗ |
+| closures1M | 22.0 ms | 45.1 ms ◊ | 33.5 ms | **27.3 ms** | 352 ms |
 | gc20 | 20.4 ms | 28.4 ms ◊ | 48.1 ms | **12.0 ms** | 1.39 s |
 | strings | 2.15 ms | 1.94 ms | 4.12 ms | **0.767 ms** | 10.4 ms |
 | compile500 (→ machine code) | **66.7 ms ‡** | 9.0 ms | 13.5 ms | **5.52 ms** | 200 ms |
@@ -173,16 +173,22 @@ number. The *shape* still tracks the faster machines (compile-to-machine-code
 ≈ a call workload; `gc20` is the slowest row) and CoV is < 5 % throughout — the
 engine behaves correctly, just on slow silicon.
 
-**⊗ `closures1M` crashes on the StarFive (a real, open bug).** Heavy short-lived
-closure creation under auto-GC SIGILLs: closures are *executable heap objects*,
-and when the GC churns them an address gets reused for a new closure whose code
-never reaches the instruction cache (the memory holds valid code but the i-cache
-is stale). It is **real-hardware-only** — QEMU re-translates self-modified code,
-so it never appears in emulation (exactly the `fence.i` / i-cache hazard the port
-notes flag). It does **not** affect the four-language validation
-(`validate-riscv64.sh` = 14/14) — a closure-churn stress bug, not a functional
-regression — but it is a genuine robustness gap on silicon, under investigation
-(see `PORTING-RISCV64-LINUX.md`). The other six workloads complete cleanly.
+**`closures1M` on the StarFive — fixed an i-cache coherency bug.** This row
+originally crashed (SIGILL). Heavy short-lived closure creation under auto-GC is
+the trigger: closures are *executable heap objects*, and when the GC churns them
+an address is reused for a new closure whose freshly written code is still stale
+in the instruction cache at call time (memory holds a valid `auipc`; the i-cache
+does not). It was **real-hardware-only** — QEMU re-translates self-modified code,
+so it never appeared in emulation (exactly the `fence.i` / i-cache hazard the
+port notes flag). The four-language validation was always green
+(`validate-riscv64.sh` = 14/14); this was a closure-churn stress path, not a
+functional regression. **Fixed** by hardening the i-cache flush (`CACHEFLUSH` →
+`rv_cacheflush`: `fence rw,rw` + `__clear_cache` + `fence.i`) so the code stores
+drain to the point of unification before the i-cache is invalidated. Verified at
+1M closures × 20 runs and 10M × 5 runs (150M churned closures, zero faults; the
+unhardened build crashed 5/5 at 1M) — and the fixed build now rebuilds all four
+language images, including the JIT-heavy clisp, in seconds. See
+`PORTING-RISCV64-LINUX.md`.
 
 ## Cross-language baselines (same workloads)
 

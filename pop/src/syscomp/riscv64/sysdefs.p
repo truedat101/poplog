@@ -90,12 +90,17 @@ global constant macro (
             endif
         endprocedure],
 
-    ;;; Flush the instruction cache
+    ;;; Flush the instruction cache.
+    ;;; rv_cacheflush (extern/lib/c_core.c) = fence rw,rw + __clear_cache +
+    ;;; fence.i.  A bare range __clear_cache left freshly-written closure code
+    ;;; stale in the i-cache on the JH7100 U74 under heavy GC address reuse
+    ;;; (churned short-lived closures -> SIGILL on a valid auipc).  The leading
+    ;;; fence drains the code stores to the point of unification before the
+    ;;; kernel range flush, and the trailing fence.i is a local belt-and-braces.
     CACHEFLUSH = [
         procedure(_ptr, _nbytes);
             lvars _ptr, _nbytes;
-            ;;; __clear_cache is a Linux function
-            _extern __clear_cache(_ptr, _ptr _add _nbytes) -> ;
+            _extern rv_cacheflush(_ptr, _nbytes) -> ;
         endprocedure
     ],
 
