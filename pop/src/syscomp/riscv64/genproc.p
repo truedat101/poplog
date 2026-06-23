@@ -666,6 +666,19 @@ define lconstant gen_transfer(opcode, target);
     if isreg(target) then
         if opcode == "bl" then "blr" -> opcode; endif;
         if opcode == "b" then "br" -> opcode; endif;
+    elseif opcode == "b" then
+        ;;; A chain (tail-call) to a fixed procedure LABEL.  It must reach the
+        ;;; whole +-2GB image: emit `tail` (auipc x6 ; jalr x0), NOT `j`
+        ;;; (R_RISCV_JAL, only +-1MB), which overflowed when linking a full-VED
+        ;;; basepop11 -- a >1MB chain from vdinorout to aprocess's
+        ;;; swap_out_continue ("relocation truncated to fit: R_RISCV_JAL").
+        ;;; `bl` already maps to `call` (R_RISCV_CALL) for exactly this reason;
+        ;;; the linker relaxes both back to the 1-instr form when the target is
+        ;;; in range, so near chains cost nothing.  x6 (t1, the `tail` auipc
+        ;;; temp) is caller-saved scratch and dead at a tail-call -- no live Pop
+        ;;; value rides through a chain in it -- so clobbering it is safe.  Only
+        ;;; the register-target path uses `br` (jr); a LABEL target never does.
+        "tail" -> opcode;
     endif;
     asm_emit(opcode, target, 2);
 enddefine;
@@ -2153,10 +2166,11 @@ define lconstant outinst(instr);
             elseif opcode == "strh" then "sh"  -> rvop;  ;;; 16-bit store
             elseif opcode == "strb" then "sb"  -> rvop;  ;;; 8-bit store
             elseif opcode == "ldr" then "ld"   -> rvop;
-            elseif opcode == "bl"  then "call" -> rvop;
+            elseif opcode == "bl"  then "call" -> rvop;  ;;; call: +-2GB, relaxable
+            elseif opcode == "tail" then "tail" -> rvop; ;;; tail-call: +-2GB, relaxable
             elseif opcode == "mov" then "mv"   -> rvop;  ;;; reg moves (imm uses li)
             elseif opcode == "blr" then "jalr" -> rvop;  ;;; indirect call
-            elseif opcode == "b"   then "j"    -> rvop;  ;;; unconditional branch
+            elseif opcode == "b"   then "j"    -> rvop;  ;;; local uncond branch (+-1MB)
             elseif opcode == "br"  then "jr"   -> rvop;  ;;; indirect branch (jalr x0)
             elseif opcode == "mvn" then "not"  -> rvop;  ;;; bitwise-NOT move (xori -1)
             endif;
