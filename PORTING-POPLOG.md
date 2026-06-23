@@ -325,7 +325,9 @@ red.
 
 ## 9. Worked examples (the two axes)
 
-### RISC-V (RV64GC) Linux — **new ISA, reuse the OS**
+### RISC-V (RV64GC) Linux — **new ISA, reuse the OS** — ✅ done
+Completed and validated on a StarFive VisionFive — see `PORTING-RISCV64-LINUX.md`
+for the as-built backend and the bug list. The guidance below is what it took.
 Rewrite all of Part 3 (new `.s`, new `genproc.p`/`asmout.p`/`ass.p`); reuse Part 4
 (Linux/ELF/LP64). Watch for: **no condition flags at all** (every branch is
 compare-and-branch — Pitfall 5.4 reappears via the multi-instruction

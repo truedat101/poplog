@@ -1,6 +1,6 @@
 # Poplog engine micro-benchmarks
 
-**Revision 2026-06 (rigorous re-collection; Apple M5 Pro added 2026-06).** Micro-benchmarks of Poplog's runtime-core
+**Revision 2026-06 (rigorous re-collection; Apple M5 Pro and RISC-V StarFive VisionFive added 2026-06).** Micro-benchmarks of Poplog's runtime-core
 mechanics — procedure calls, integer arithmetic, allocation/GC, incremental
 compilation, closures, and string handling — with Python and Perl baselines on
 the same workloads. These characterise the *engine*, not applications, and are
@@ -29,12 +29,14 @@ deliberately small and single-threaded.
 | **M2** | Apple M2 (2022) | 8-core (4P+4E), ~3.5 GHz | 16 GiB; L1d 64 KiB, L2 4 MiB | macOS, arm64; no governor (P/E auto-sched) | This port, native `Mach-O … arm64` |
 | **Pi5** | Broadcom BCM2712 (Cortex-A76, 2023) | 4C, 2.4 GHz | 7.9 GiB; L2 2 MiB, L3 2 MiB | DietPi (Debian), arm64; `performance` | Native `ELF … arm64`, generic `armv8-a` |
 | **M5** | Apple M5 Pro (2025) | 18-core (6P+12E); clock not exposed by macOS | 48 GiB; L1d 64 KiB, L2 8 MiB | macOS 26.4, arm64; no governor (P/E auto-sched) | This port, native `Mach-O … arm64` |
+| **VF** | StarFive JH7100 (dual SiFive U74, 2021) | 2C, ~1.0 GHz, **in-order** | 7.0 GiB; L1d 32 KiB, L2 2 MiB | Ubuntu 24.04, riscv64 (kernel 6.5-starfive); no cpufreq governor | This port, native `ELF … RISC-V`, RV64GC |
 
-All four ran Poplog **version 160200**. Each engine's architecture was
+All five ran Poplog **version 160200**. Each engine's architecture was
 `file`-verified before benchmarking — on the i7 this caught a stray *aarch64*
 `basepop11` that would have run under qemu (the failure mode in
 [Threats to validity](#threats-to-validity)); the nix x86-64 build was used
-instead. Interpreter baselines: CPython **3.10.12** (distro) and **3.13.0rc2**
+instead. The **VF** binary was likewise confirmed `ELF … UCB RISC-V` running
+*native* on the board (not the x86-64 host under qemu-user). Interpreter baselines: CPython **3.10.12** (distro) and **3.13.0rc2**
 (uv, PGO/LTO standalone) on i7; **3.14.0** on M2 and M5; **3.13.5** on Pi5; Perl
 **5.34** (i7/M2/M5) and **5.40** (Pi5) — interpreter *build* matters as much as
 version (see [Analysis](#analysis)), so each is named.
@@ -45,7 +47,7 @@ not cross-machine ranking.
 
 ### Platform coverage
 
-The four machines above are what this report measures. For completeness, the
+The five machines above are what this report measures. For completeness, the
 full set of platforms Poplog targets (or has historically targeted) — including
 the ones not yet ported or benchmarked in this fork — is:
 
@@ -57,7 +59,7 @@ the ones not yet ported or benchmarked in this fork — is:
 | Linux | ARM32 (`armv6`/`armv7`, RPi 1–3) | ✅ Supported (long-standing) | — not benchmarked |
 | Solaris | x86 (i386) | ✅ Supported (upstream; Solaris 10) | — not benchmarked |
 | FreeBSD | x86-64 | ✅ Supported (upstream) | — not benchmarked |
-| Linux | RISC-V (`riscv64`, RV64GC) | 🚧 TODO — not yet ported | — TODO — |
+| Linux | RISC-V (`riscv64`, RV64GC) | ✅ Supported (this port; StarFive VisionFive) | ✅ VF |
 | Windows | x86-64 | 🚧 TODO — not yet ported | — TODO — |
 
 There are two tiers below the four benchmarked machines. **Supported but not
@@ -66,9 +68,10 @@ building Poplog ports (the 32-bit ARM backend `syscomp/arm` is long-standing;
 Solaris/i386 and FreeBSD/x86-64 are recent upstream additions by W. Hebisch,
 tested on Solaris 10 and x86-64 FreeBSD) — we simply have not run this harness
 on them, so their benchmark column is *not benchmarked* rather than a number.
-**Not yet ported:** RISC-V and x86-64 Windows read *TODO* throughout. RISC-V is
-the most actionable next port — a `qemu-system-riscv64 -M virt` (RV64GC) image
-gives a CI-friendly target before any board is on hand.
+**Newly ported and benchmarked:** RISC-V (RV64GC) is now a native port — all four
+languages self-host on a StarFive VisionFive and it is measured here as **VF**
+(see `PORTING-RISCV64-LINUX.md`). **Not yet ported:** x86-64 Windows alone reads
+*TODO* throughout (WSL2 runs the Linux build as an interim).
 
 ---
 
@@ -133,15 +136,15 @@ lower is better.** Coefficient of variation was **< 1 %** on every row except
 the two M2 rows marked ◊ (see below) and M5 `nfib29` (1.3 %); the M5 run was
 clean throughout (no E-core scheduling spikes this time).
 
-| Workload | i7 (x86-64) | M2 (arm64) | Pi 5 (arm64) | M5 Pro (arm64) |
-|---|---|---|---|---|
-| nfib29 (calls) | 14.5 ms | 13.2 ms | 24.9 ms | **8.83 ms** |
-| intloop10M | 61.5 ms | 52.2 ms | 124 ms | **42.4 ms** |
-| lists (alloc/GC) | 11.4 ms | 9.0 ms | 22.2 ms | **7.54 ms** |
-| closures1M | 22.0 ms | 45.1 ms ◊ | 33.5 ms | **27.3 ms** |
-| gc20 | 20.4 ms | 28.4 ms ◊ | 48.1 ms | **12.0 ms** |
-| strings | 2.15 ms | 1.94 ms | 4.12 ms | **0.767 ms** |
-| compile500 (→ machine code) | **66.7 ms ‡** | 9.0 ms | 13.5 ms | **5.52 ms** |
+| Workload | i7 (x86-64) | M2 (arm64) | Pi 5 (arm64) | M5 Pro (arm64) | VF (riscv64) |
+|---|---|---|---|---|---|
+| nfib29 (calls) | 14.5 ms | 13.2 ms | 24.9 ms | **8.83 ms** | 230 ms |
+| intloop10M | 61.5 ms | 52.2 ms | 124 ms | **42.4 ms** | 950 ms |
+| lists (alloc/GC) | 11.4 ms | 9.0 ms | 22.2 ms | **7.54 ms** | 308 ms |
+| closures1M | 22.0 ms | 45.1 ms ◊ | 33.5 ms | **27.3 ms** | ✗ ⊗ |
+| gc20 | 20.4 ms | 28.4 ms ◊ | 48.1 ms | **12.0 ms** | 1.39 s |
+| strings | 2.15 ms | 1.94 ms | 4.12 ms | **0.767 ms** | 10.4 ms |
+| compile500 (→ machine code) | **66.7 ms ‡** | 9.0 ms | 13.5 ms | **5.52 ms** | 200 ms |
 
 The M5 Pro is the fastest machine on every workload — vs the M2 (same port,
 prior Mac) roughly **1.2–1.5×** on the call/loop/alloc/compile rows and **~2×**
@@ -161,6 +164,25 @@ the only workload where the arm64 backend clearly beats x86-64.
 efficiency cores (no pinning without elevated privileges), so `closures1M` and
 `gc20` show CoV 4–5 % on the M2; their `min`s (39.6 ms / 26 ms) are the clean
 P-core times. All other M2 rows are < 1 % CoV.
+
+**VF (RISC-V / StarFive VisionFive).** The dual U74 is an **in-order ~1 GHz**
+core on an early, modest dev board, so it runs **~8–15× the Pi 5** on the
+call/loop/alloc/compile rows and **~30×** on the GC-bound `gc20` (1.39 s) — an
+absolute-floor "it runs natively on RISC-V silicon" data point, not a competitive
+number. The *shape* still tracks the faster machines (compile-to-machine-code
+≈ a call workload; `gc20` is the slowest row) and CoV is < 5 % throughout — the
+engine behaves correctly, just on slow silicon.
+
+**⊗ `closures1M` crashes on the StarFive (a real, open bug).** Heavy short-lived
+closure creation under auto-GC SIGILLs: closures are *executable heap objects*,
+and when the GC churns them an address gets reused for a new closure whose code
+never reaches the instruction cache (the memory holds valid code but the i-cache
+is stale). It is **real-hardware-only** — QEMU re-translates self-modified code,
+so it never appears in emulation (exactly the `fence.i` / i-cache hazard the port
+notes flag). It does **not** affect the four-language validation
+(`validate-riscv64.sh` = 14/14) — a closure-churn stress bug, not a functional
+regression — but it is a genuine robustness gap on silicon, under investigation
+(see `PORTING-RISCV64-LINUX.md`). The other six workloads complete cleanly.
 
 ## Cross-language baselines (same workloads)
 

@@ -47,14 +47,14 @@ Poplog builds and runs natively on a growing set of platforms
 | **Linux** | ARM32 (`armv6`/`armv7`) | ✅ Supported | Long-standing 32-bit ARM port (`pop/src/syscomp/arm`); Raspberry Pi 1–3 and other 32-bit ARM Linux.  Not benchmarked in this report |
 | **Solaris** | x86 (i386) | ✅ Supported | Upstream port (W. Hebisch); tested on Solaris 10 (`CC=gcc`, vendored `corepop_solaris.i386`).  Not benchmarked here |
 | **FreeBSD** | x86-64 | ✅ Supported | Upstream port (W. Hebisch); tested on x86-64.  Not benchmarked here |
-| **Linux** | RISC-V (`riscv64`) | 🚧 TODO | Not yet ported — dev target QEMU `qemu-system-riscv64 -M virt`; boards: StarFive VisionFive 2 / Milk-V Mars |
+| **Linux** | RISC-V (`riscv64`, RV64GC) | ✅ Supported | Native RV64GC/LP64D port, self-hosting on a **StarFive VisionFive** (dual SiFive U74) — all four languages, saved images, terminal VED, and the FFI float ABI.  `tools/validate-riscv64.sh` = 14/14.  See `PORTING-RISCV64-LINUX.md` |
 | **Windows** | x86-64 | 🚧 TODO | Not yet ported (WSL2 runs the Linux build as an interim) |
 
-"Supported" means it builds and runs.  The first three rows are validated *and*
-benchmarked in this fork; ARM32, Solaris/x86 and FreeBSD/x86-64 are existing
-Poplog ports (ARM32 long-standing; Solaris + FreeBSD recent upstream additions
-by W. Hebisch) that simply haven't been re-tested or benchmarked here.  The 🚧
-rows are genuinely not yet ported.  See the
+"Supported" means it builds and runs.  The first three rows plus RISC-V are
+validated *and* benchmarked in this fork; ARM32, Solaris/x86 and FreeBSD/x86-64
+are existing Poplog ports (ARM32 long-standing; Solaris + FreeBSD recent upstream
+additions by W. Hebisch) that simply haven't been re-tested or benchmarked here.
+The one remaining 🚧 row (Windows) is genuinely not yet ported.  See the
 [platform-coverage table in BENCHMARKS.md](BENCHMARKS.md#platform-coverage).
 
 Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and

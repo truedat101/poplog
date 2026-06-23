@@ -1,10 +1,98 @@
 # Porting Poplog to RISC-V (rv64gc / Linux)
 
-Status: **planning / Phase 0.** There is no RISC-V backend in the tree yet
-(`pop/src/syscomp/` has `arm`, `arm64`, `i386`, `x86_64`). This is a from-scratch
-code-generator port, the same class of work as the AArch64 / M-silicon port
-(`PORTING-ARM64-*.md`). This doc is the roadmap and the staging setup; the
-codegen backend itself is the multi-phase work that follows.
+Status: **COMPLETE (2026-06).** Poplog runs natively on 64-bit RISC-V. All four
+languages — **Pop-11, Common Lisp, Prolog, and Standard ML** — build natively and
+run on real hardware, plus a full terminal-VED `basepop11`. Validated on a
+**StarFive VisionFive** (JH7100, dual SiFive U74, RV64GC, Ubuntu 24.04):
+`tools/validate-riscv64.sh` = **14/14 gates PASS**. The backend lives in
+`pop/src/syscomp/riscv64/{sysdefs,asmout,genproc}.p` with the hand-written runtime
+in `pop/src/riscv64/*.s`. (The roadmap / phase content below is retained as the
+build-up reference; everything in it is done.)
+
+## As-built summary
+
+* **Self-hosting on silicon, no qemu:** the full ladder builds natively on the
+  StarFive — `corepop → popc → srclib → new_corepop → basepop11 → startup.psv →
+  {clisp,prolog,pml}.psv`. (Codegen was developed cross-emitting riscv64 `.s`
+  from an x86-64 host under qemu-user; the final build + validation are native.)
+* **Languages (all RUN-verified on hardware):** Pop-11 (`maplist`, closures,
+  `for…in_vector`), Common Lisp (`fact 12`, `mapcar`, `(symbolp …) → (T NIL T)`),
+  Prolog (recursive `append`, factorial, compound unify, clean error reporting),
+  Standard ML (`rev`, λ-application, type inference under a PTY).
+* **FFI float ABI (LP64D):** `tools/ffi-float-regression.p` passes
+  (`pow`/`atan2`/`hypot`/`cbrt` marshalled through `fa0–fa7`).
+* **Full terminal VED:** `basepop11` links with VED (no `-noved`); the editor
+  loads and renders. Needs the far-call fix (#17 below).
+
+## Build / run (native, on the RISC-V box)
+
+* Every invocation runs under **`setarch -R`** (ASLR off): Poplog restores its
+  `.psv` images — and `basepop11` its own saved state — at FIXED virtual
+  addresses, which collide with the program/stack mapping under ASLR.
+* `POP__as` points at a wrapper adding `-march=rv64gc`
+  (`#!/bin/sh` … `exec as -march=rv64gc "$@"`).
+* After a **genproc/asmout/sysdefs** change, rebuild `popc` FIRST
+  (`rm -f stamp_popc stamp_srclib stamp_new_corepop target/obj/src.{olb,wlb}`),
+  then srclib, then basepop11 — a stale `popc` / `src.olb` hides codegen fixes.
+  An `ass.p` / `*.s` (runtime-assembler) change is srclib-only (skip stamp_popc).
+* Validate: `./tools/validate-riscv64.sh [--rebuild]`.
+
+## Codegen / link bugs found & fixed (17)
+
+The recurring theme (as on arm64) is `load_to_reg` returning an already-resident
+register that a later load clobbers; plus several RISC-V-specific hazards from its
+**flagless compares** (the branch re-reads operand *registers* at emit time) and
+**relaxed branches** (the conditional form is a fixed 8-byte `b.!cc ; j`).
+
+1–12. Earlier bugs (commits up to `313735a`) — M-op operand order, auto-index
+load widths, the `gen_test` tag-test clobbers, `m_parith_test`, the runtime
+assembler's `Check_br_range` / `I_SWITCH` go_on table / B-type branch relaxation,
+and the `aprolog.s` term/pair switch (the Prolog blocker). See the
+`project_poplog_riscv64_port` memory and the commit log for each.
+13. **`_setstklen` register mismatch** (`5fd1a9a`) — the inline
+`I_SETSTACKLENGTH` computed the stack-fill bound into `_X2` (=x12) but the
+hand-written `_setstklen_diff` reads it from `t0` (=x5); a stale `t0` made the
+nil-fill loop overwrite `ERROR`'s identifier — the Lisp `defs.lsp:40` wild store
+that blocked the Lisp build for the whole port.
+14–15. **`I_SETSTACKLENGTH` / `I_LISP_TRUE` skip offset `+8 → +12`** (`5fd1a9a`,
+`2823ce0`) — `drop_br_cond` plants an 8-byte relaxed branch, so skipping the one
+4-byte instruction after it needs +12, not arm64's +8 (single 4-byte branch).
+16. **`I_LISP_TRUE` deferred-compare operand clobber** (`2823ce0`) — nil was
+loaded into the compare's rhs register between the cmp and the branch; with no
+flags the branch re-reads the (now-nil) register, so SYMBOLP / the "boolean"
+external coercion compared `top == nil` not `top == false` and leaked pop11
+`<false>` into Lisp as `#<FALSE>` (read as truthy).
+17. **R_RISCV_JAL far-call** (`1e0d22d`) — a chain (tail-call) to a procedure
+label emitted `j` (±1MB) and overflowed linking VED; it now emits `tail`
+(auipc+jalr, ±2GB, linker-relaxed back to `j` when in range), mirroring the
+`bl → call` the cross-compiler already used.
+
+## Hardware note
+
+The StarFive's kernel exposes **no hardware watchpoints** via ptrace (gdb falls
+back to single-stepping, infeasible here). The Lisp wild store was instead caught
+with a **qemu-user 8.2 TCG memory-write plugin** (built on the x86-64 host) plus
+in-tree `_extern printf` instrumentation — see the memory file for the technique.
+
+## Open issues
+
+* **Closure churn + auto-GC → stale-I-cache SIGILL** (found by `bench-poplog.p`'s
+  `closures1M`, not yet fixed). Creating many short-lived closures while the GC
+  runs SIGILLs on real silicon: a closure is *executable heap code*, and when an
+  address is freed and re-used for a new closure the fresh code doesn't reach the
+  I-cache (the bytes in memory are valid; the I-cache is stale). It is
+  **real-hardware-only** — QEMU re-translates self-modified code, so it never
+  shows in emulation. `CACHEFLUSH` is defined (`= __clear_cache`) and called from
+  both `consclosure`→`Flush_procedure` (procedure.p) and the post-GC flush
+  (gcmain.p), and all three flush primitives (`__clear_cache`, the
+  `riscv_flush_icache` syscall, a bare `fence.i`) pass an isolated reuse test —
+  so the flush is *invoked* and *works*, but isn't *covering* the GC-churned /
+  reused-address closures. It does **not** affect the four-language validation
+  (`validate-riscv64.sh` = 14/14) — it is a closure-churn stress bug, not a
+  functional regression. Next step: instrument `Flush_procedure` (dump the
+  flushed range) and check the copy-GC reuse path / `_lowest_garbageable`
+  coverage. See `BENCHMARKS.md` (the ⊗ note) and the `project_poplog_riscv64_port`
+  memory.
 
 ## Target
 
@@ -13,7 +101,7 @@ codegen backend itself is the multi-phase work that follows.
 | ISA | **RV64GC** = RV64IMAFDC (base + mul/div, atomics, single+double FP, compressed) — the Linux baseline |
 | ABI | **LP64D** — 64-bit `long`/pointer, doubles passed in FP regs |
 | OS / object format | Linux, **ELF**, GNU `as` syntax |
-| Hardware goal | a Scaleway RISC-V instance (rv64gc, ~4 cores, 8–16 GB); staged in QEMU until then |
+| Hardware (as built) | **StarFive VisionFive** (JH7100, dual SiFive U74, RV64GC, 7 GiB, Ubuntu 24.04) — native; codegen iterated cross-emitting under qemu-user from an x86-64 host |
 | Build | console / no-GUI (`--with_no_x`); graphics is out of scope for the port |
 
 ### RISC-V facts that matter for the backend
@@ -57,7 +145,10 @@ Plus, outside syscomp:
 * `configure`: recognise `riscv64` → `POP_arch=riscv64` (done in Phase 0).
 * A bootstrap `corepop` seed for riscv64 (see Bootstrap).
 
-## Phase plan (mirrors the arm64 port)
+## Phase plan (mirrors the arm64 port) — ✅ all phases complete
+
+> Historical roadmap. Phases 0–5 are done; the backend, bootstrap, and gate
+> suite all landed (see the as-built summary at the top).
 
 0. **Env + scaffolding** *(this session)* — QEMU staging (`tools/riscv-qemu.sh`),
    `configure` arch recognition, and the `sysdefs.p` skeleton.
