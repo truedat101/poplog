@@ -1,8 +1,9 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Poplog entry point for ARM
+   Purpose: Poplog entry point for AArch64
    Author:  Waldek Hebisch
+   AArch64 port by truedat101
 */
 
 
@@ -11,7 +12,7 @@
 #_INCLUDE 'declare.ph'
 
 lconstant macro (
-    USP         = "r10",
+    USP         = "x19",
     SAVED_USP   = [I_LAB(Sys$-Extern$- _saved_usp)],
 );
 
@@ -25,12 +26,35 @@ endsection;
 
 >_#
 
-    .arch armv8
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load: adrp ...@PAGE / add ...@PAGEOFF.
+    ;;; NB: backslashes are doubled because popc escape-processes .s text.
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+#_ELSE
+    .arch armv8-a
+    ;;; ELF PC-relative address load: adrp ... / add ... :lo12:...
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+#_ENDIF
     .file   "amain.s"
 
 ;;; Wrapping in POP object
-   .text
-   .word   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
+#_IF DEF UNIX_MACHO
+   .quad   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+#_ELSE
+   .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
+#_ENDIF
 Ltext_start:
 
 
@@ -40,25 +64,34 @@ Ltext_start:
 ;;; Call:
 ;;; main(argc, argv, envp)
 
-L1.0:   .word EXTERN_NAME(__pop_in_user_extern)
-L1.1:   .word I_LAB(Sys$- _init_args)
-L1.2:   .word SAVED_USP
 DEF_C_LAB (Sys$- _entry_point)
+#_IF DEF UNIX_MACHO
+    ;;; On Mach-O this code sits in the non-executable __POPSEED segment, so it
+    ;;; cannot be the process entry. The real `main` is the C loader
+    ;;; (pop_seed_loader.c, in __TEXT): it remaps __POPSEED's pages in place as
+    ;;; executable anon memory (same address -- nothing relocates), then calls
+    ;;; in here.
+    .globl _pop_seed_main
+_pop_seed_main:
+#_ELSE
     .globl  EXTERN_NAME(main)
 EXTERN_NAME(main):
-    ;;; To keep stack aligned need to store even number of
-    ;;; registers
-    stmfd sp!, {r4, r6, r11, lr}
+#_ENDIF
+    ;;; Save callee-saved registers and link register.
+    ;;; We save x19 (USP), x20 (PB), x21, x22 (Pop temp regs),
+    ;;; x29 (FP), x30 (LR).  stp pairs keep 16-byte alignment.
+    stp x29, x30, [sp, #-48]!
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    mov x29, sp
 
     ;;; Save pointer to argument vector (argv)
-    ldr r3, L1.1
-    str r1, [r3]
+    adr_l x3, I_LAB(Sys$- _init_args)
+    str  x1, [x3]
 
     ;;; Clear __pop_in_user_extern
-
-    ldr  r3, L1.0
-    mov  r0, #0
-    str  r0, [r3]
+    adr_l x3, EXTERN_NAME(__pop_in_user_extern)
+    str  xzr, [x3]
 
 #_IF DEF LINUX
 
@@ -68,31 +101,29 @@ EXTERN_NAME(main):
 
 #_ENDIF
 
-    ;;; Initialise the floating-point unit
-
-    ;;; call    fpu_init
-
     ;;; Set up a temporary user stack pointer
-
-    ldr USP, L1.2
-    ldr USP, [USP]
+    adr_l USP, SAVED_USP
+    ldr  USP, [USP]
 
     ;;; clear Pop registers
-    mov    r4, #3
-    mov    r6, r4
+    mov    x21, #3
+    mov    x22, x21
 
     ;;; Start the system
     bl  XC_LAB(setpop)
 
     ;;; Exit with 0
-
-    mov r0, #0
+    mov w0, #0
     bl  EXTERN_NAME(_exit)
 
     .align  3
 
 ;;; End wrapper: set sizes
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start
-

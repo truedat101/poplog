@@ -307,6 +307,22 @@ define lconstant Map_or_read(_paddr, _poffs, _fileoffs, _const, _share);
     #_ENDIF
 
     ;;; use mmap
+#_IF DEF DARWIN
+    ;;; Darwin: READ the segment into the existing heap memory instead of
+    ;;; mmapping the file over it.  The heap is dual-mapped (c_core.c): an RX
+    ;;; execution view aliases the canonical RW anon pages, and an mmap
+    ;;; MAP_FIXED here would replace the memory object underneath only the
+    ;;; canonical mapping -- the view would keep aliasing the old anon pages
+    ;;; and execute stale bytes (observed as SIGILL in the view after
+    ;;; restore).  read() fills the same physical pages both views share.
+    ;;; (Also avoids PROT_EXEC-on-file-mapping EPERM and keeps the const
+    ;;; segments writable -- acceptable for bring-up.)
+    Seek(_fileoffs);
+    if (_extern[NI] read(_sr_channel, _baddr, _blen) ->> _res) /== _blen then
+        Readerr_mishap(_sr_device, _res, 'ERROR READING SAVED IMAGE')
+    endif;
+    _baddr -> _res;
+#_ELSE
     lvars _prot = if _const then _M_PROT_NOWRITE else _M_PROT_ALL endif;
 
     _extern mmap(_baddr, _blen, _prot,  if _const and _share then
@@ -315,6 +331,7 @@ define lconstant Map_or_read(_paddr, _poffs, _fileoffs, _const, _share);
                                             _MAP_PRIVATE
                                         endif _biset _MAP_FIXED,
                     _sr_channel, _fileoffs) -> _res;
+#_ENDIF
 
     if _res _eq _-1 then
         Syserr_mishap(_sr_device, 1, 'ERROR MAPPING SAVED IMAGE')

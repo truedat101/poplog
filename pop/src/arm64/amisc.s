@@ -1,8 +1,9 @@
 /*
    Copyright Waldek Hebisch, you can distribute this file
    under terms of Free Poplog licence.
-   Purpose: Misc assembly routines for ARM
+   Purpose: Misc assembly routines for AArch64
    Author:  Waldek Hebisch
+   AArch64 port by truedat101
 */
 
 #_<
@@ -14,12 +15,12 @@ vars
     ;
 
 lconstant macro (
-    USP             = "r10",
-    PB              = "r11",
-    LR              = "lr",
-    W0              = "r0",
-    W1              = "r1",
-    CHAIN_REG       = "r2",
+    USP             = "x19",
+    PB              = "x20",
+    LR              = "x30",
+    W0              = "x0",
+    W1              = "x1",
+    CHAIN_REG       = "x2",
     _K_APPLY        = @@K_APPLY,
     _KEY            = @@KEY,
     _P_BACK         = @@P_BACK,
@@ -46,487 +47,675 @@ endsection;
 
 >_#
 
-    .arch armv8
+#_IF DEF UNIX_MACHO
+    ;;; Mach-O PC-relative address load (backslashes doubled: popc escapes .s).
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym@PAGE
+    add  \\reg, \\reg, \\sym@PAGEOFF
+    .endm
+    ;;; Mach-O: a conditional branch may NOT target an external symbol; invert
+    ;;; the test and reach it with an unconditional b (which may be external).
+    .macro beq_x t
+    b.ne 8f
+    b \\t
+8:
+    .endm
+    .macro bne_x t
+    b.eq 8f
+    b \\t
+8:
+    .endm
+#_ELSE
+    .arch armv8-a
+    .macro adr_l reg, sym
+    adrp \\reg, \\sym
+    add  \\reg, \\reg, :lo12:\\sym
+    .endm
+    .macro beq_x t
+    b.eq \\t
+    .endm
+    .macro bne_x t
+    b.ne \\t
+    .endm
+#_ENDIF
     .file   "amisc.s"
 
 ;;; Wrapping in POP object
-   .text
-   .word   Ltext_size, C_LAB(Sys$-objmod_pad_key)
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
+   .xword  Ltext_size, C_LAB(Sys$-objmod_pad_key)
 Ltext_start:
 
 ;;; _popenter: calling (applying) Pop object
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L1.p_key:
-    .word C_LAB(procedure_key)
+    .xword C_LAB(procedure_key)
 .L1.i_key:
-    .word C_LAB(integer_key) + _K_APPLY
+    .xword C_LAB(integer_key) + _K_APPLY
 .L1.d_key:
-    .word C_LAB(weakref decimal_key) + _K_APPLY
-    ;;; r0 constains called object
+    .xword C_LAB(weakref decimal_key) + _K_APPLY
+    ;;; x0 contains called object
 DEF_C_LAB (_popenter)
-    ldr r1, .L1.p_key
-    tst r0, #1
-    ldreq r3, [r0, #_KEY]
-    bne .L2.simple
-    cmp r1, r3
-    bne .L2.struct
-    ldr pc, [r0, #_PD_EXECUTE]
+    adr_l x1, .L1.p_key
+    ldr  x1, [x1]
+    tst  x0, #1
+    b.ne .L2.simple
+    ldr  x3, [x0, #_KEY]
+    cmp  x1, x3
+    b.ne .L2.struct
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
     ;;; simple object
 .L2.simple:
-    str r0, [USP, #-4]!
-    tst r0, #2
-    beq .L2.dec
+    str  x0, [USP, #-8]!
+    tst  x0, #2
+    b.eq .L2.dec
     ;;; integer
-    ldr r0, .L1.i_key
-    ldr r0, [r0]
-    ldr r0, [r0, #_RF_CONT]
-    ldr pc, [r0, #_PD_EXECUTE]
+    adr_l x0, .L1.i_key
+    ldr  x0, [x0]
+    ldr  x0, [x0]
+    ldr  x0, [x0, #_RF_CONT]
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
     ;;; decimal
 .L2.dec:
-    ldr r0, .L1.d_key
-    ldr r0, [r0]
-    ldr r0, [r0, #_RF_CONT]
-    ldr pc, [r0, #_PD_EXECUTE]
+    adr_l x0, .L1.d_key
+    ldr  x0, [x0]
+    ldr  x0, [x0]
+    ldr  x0, [x0, #_RF_CONT]
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
     ;;; composite, but not a procedure
 .L2.struct:
-    str r0, [USP, #-4]!
-    ldr r0, [r0, #_KEY]
-    ldr r0, [r0, #_K_APPLY]
-    ldr r0, [r0, #_RF_CONT]
-    ldr pc, [r0, #_PD_EXECUTE]
+    str  x0, [USP, #-8]!
+    ldr  x0, [x0, #_KEY]
+    ldr  x0, [x0, #_K_APPLY]
+    ldr  x0, [x0, #_RF_CONT]
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
+
 ;;; _popuenter: calling (applying) updater of Pop object
-;;; r0 contains the object
+;;; x0 contains the object
 DEF_C_LAB (_popuenter)
-    ldr r1, .L1.p_key
-    tst r0, #1
-    ldreq r3, [r0, #_KEY]
-    bne .L3.simple
-    cmp r1, r3
-    bne .L3.struct
+    adr_l x1, .L1.p_key
+    ldr  x1, [x1]
+    tst  x0, #1
+    b.ne .L3.simple
+    ldr  x3, [x0, #_KEY]
+    cmp  x1, x3
+    b.ne .L3.struct
     ;;; fall through
-;;; Unchecked entry into updater, assumes object in r0 is a procedure,
+
+;;; Unchecked entry into updater, assumes object in x0 is a procedure,
 ;;; but still checks for existence of updater
 DEF_C_LAB (_popuncenter)
-    mov r3, r0
-    ldr r0, [r0, #_PD_UPDATER]
-    ldr r1, .L.false
-    cmp r0, r1
-    ldrne pc, [r0, #_PD_EXECUTE]
-    str r3, [USP, #-4]!
-    ldr pc, .L3.nonpd
+    mov  x3, x0
+    ldr  x0, [x0, #_PD_UPDATER]
+    adr_l x1, .L.false
+    ldr  x1, [x1]
+    cmp  x0, x1
+    b.eq .L3.no_updater
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
+.L3.no_updater:
+    str  x3, [USP, #-8]!
+    adr_l x16, .L3.nonpd
+    ldr  x16, [x16]
+    br   x16
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L3.nonpd:
-    .word XC_LAB(-> Sys$-Exec_nonpd)
+    .xword XC_LAB(-> Sys$-Exec_nonpd)
     ;;; simple object
 .L3.simple:
-    str r0, [USP, #-4]!
-    tst r0, #2
-    beq .L3.dec
+    str  x0, [USP, #-8]!
+    tst  x0, #2
+    b.eq .L3.dec
     ;;; integer
-    ldr r0, .L1.i_key
-    ldr r0, [r0]
-    b .L3.call_upd
+    adr_l x0, .L1.i_key
+    ldr  x0, [x0]
+    ldr  x0, [x0]
+    b    .L3.call_upd
     ;;; decimal
 .L3.dec:
-    ldr r0, .L1.d_key
-    ldr r0, [r0]
-    b .L3.call_upd
+    adr_l x0, .L1.d_key
+    ldr  x0, [x0]
+    ldr  x0, [x0]
+    b    .L3.call_upd
     ;;; composite, but not a procedure
 .L3.struct:
-    str r0, [USP, #-4]!
-    ldr r0, [r0, #_KEY]
-    ldr r0, [r0, #_K_APPLY]
+    str  x0, [USP, #-8]!
+    ldr  x0, [x0, #_KEY]
+    ldr  x0, [x0, #_K_APPLY]
 .L3.call_upd:
-    ldr r0, [r0, #_RF_CONT]
-    ldr r0, [r0, #_PD_UPDATER]
-    ldr r1, .L.false
-    cmp r0, r1
-    ldrne pc, [r0, #_PD_EXECUTE]
-    ldr pc, .L3.nonpd
+    ldr  x0, [x0, #_RF_CONT]
+    ldr  x0, [x0, #_PD_UPDATER]
+    adr_l x1, .L.false
+    ldr  x1, [x1]
+    cmp  x0, x1
+    b.eq .L3.call_upd_no_updater
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
+.L3.call_upd_no_updater:
+    adr_l x16, .L3.nonpd
+    ldr  x16, [x16]
+    br   x16
 
 ;;; _erase_sp_1: erase 1 word from call stack, used for error
 ;;; recovery
 DEF_C_LAB (_erase_sp_1)
-    add sp, sp, #4
-    bx lr
+    add  sp, sp, #8
+    ret
 
 DEF_C_LAB (_nextframe)
-    ldr r0, [USP], #4
-    ldr r1, [r0, #_SF_OWNER]
-    ldrb r1, [r1, #_PD_FRAME_LEN]
-    mov r1, r1, asl #2
-    add r0, r0, r1
-    str r0, [USP, #-4]!
-    bx lr
+    ldr  x0, [USP], #8
+    ldr  x1, [x0, #_SF_OWNER]
+    ldrb w1, [x1, #_PD_FRAME_LEN]
+    lsl  x1, x1, #3
+    add  x0, x0, x1
+    str  x0, [USP, #-8]!
+    ret
 
 DEF_C_LAB (_unwind_frame)
-    ldrb r0, [PB, #_PD_FRAME_LEN]
-    mov r0, r0, asl #2
-    add r0, sp, r0
-    ldr CHAIN_REG, [r0, #-4]
-    str lr, [r0, #-4]
-    ldr pc, [PB, #_PD_EXIT]
+    ldrb w0, [PB, #_PD_FRAME_LEN]
+    lsl  x0, x0, #3
+    add  x0, sp, x0
+    ldr  CHAIN_REG, [x0, #-8]
+    str  x30, [x0, #-8]
+    ldr  x16, [PB, #_PD_EXIT]
+    br   x16
 
 DEF_C_LAB (_syschain_caller)
-    bl C_LAB (_unwind_frame)
-    ;;; Fall trough
+    bl   C_LAB (_unwind_frame)
+    ;;; Fall through
 DEF_C_LAB (_syschain)
-    ldr r0, [USP], #4
-    mov LR, CHAIN_REG
-    b C_LAB(_popenter)
+    ldr  x0, [USP], #8
+    mov  LR, CHAIN_REG
+    b    C_LAB(_popenter)
 
 DEF_C_LAB (_sysncchain_caller)
-    b C_LAB (_sysncchain_caller)
-    bl C_LAB (_unwind_frame)
-    ;;; Fall trough
+    bl   C_LAB (_unwind_frame)
+    ;;; Fall through
 DEF_C_LAB (_sysncchain)
-    ldr r0, [USP], #4
-    mov LR, CHAIN_REG
-    ldr pc, [r0, #_PD_EXECUTE]
-    ;;; ldr r3, [r0, #_PD_EXECUTE]
-    ;;; bx r3
+    ldr  x0, [USP], #8
+    mov  LR, CHAIN_REG
+    ldr  x16, [x0, #_PD_EXECUTE]
+    br   x16
 
 DEF_C_LAB (_iscompound)
-    b C_LAB (_iscompound)
-    ldr r0, [USP]
-    tst   r0, #1
-    ldreq r0, .L.true
-    ldrne r0, .L.false
-    str r0, [USP]
-    bx lr
+    ldr  x0, [USP]
+    tst  x0, #1
+    b.ne .Lcomp_false
+    adr_l x0, .L.true
+    ldr  x0, [x0]
+    str  x0, [USP]
+    ret
+.Lcomp_false:
+    adr_l x0, .L.false
+    ldr  x0, [x0]
+    str  x0, [USP]
+    ret
 
 DEF_C_LAB (_issimple)
-    ldr r0, [USP]
-    tst   r0, #1
-    ldrne r0, .L.true
-    ldreq r0, .L.false
-    str r0, [USP]
-    bx lr
+    ldr  x0, [USP]
+    tst  x0, #1
+    b.eq .Lsimp_false
+    adr_l x0, .L.true
+    ldr  x0, [x0]
+    str  x0, [USP]
+    ret
+.Lsimp_false:
+    adr_l x0, .L.false
+    ldr  x0, [x0]
+    str  x0, [USP]
+    ret
 
 DEF_C_LAB (_isinteger)
-    ldr r0, [USP], #4
-    tst   r0, #2
-    ldrne r0, .L.true
-    ldreq r0, .L.false
-    str r0, [USP, #-4]!
-    bx lr
+    ldr  x0, [USP], #8
+    tst  x0, #2
+    b.eq .Lisint_false
+    adr_l x0, .L.true
+    ldr  x0, [x0]
+    str  x0, [USP, #-8]!
+    ret
+.Lisint_false:
+    adr_l x0, .L.false
+    ldr  x0, [x0]
+    str  x0, [USP, #-8]!
+    ret
 
 DEF_C_LAB (_neg)
-    b C_LAB (_neg)
-    ldr     W0, [USP]
-    cmp     W0, #0
-    ldrlt   W0, .L.true
-    ldrge   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP]
+    cmp  W0, #0
+    b.ge .Lneg_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lneg_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB (_zero)
-    b C_LAB (_zero)
-    ldr    W0, [USP]
-    cmp    W0, #0
-    ldreq   W0, .L.true
-    ldrne   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP]
+    cmp  W0, #0
+    b.ne .Lzero_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lzero_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB (_not)
-    ldr     W0, .L.false
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldreq   W0, .L.true
-    str     W0, [USP]
-    bx      LR
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.ne .Lnot_done
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+.Lnot_done:
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 7 (_eq)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldreq   W0, .L.true
-    ldrne   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.ne .Leq_ne
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Leq_ne:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 7 (_neq)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrne   W0, .L.true
-    ldreq   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.eq .Lneq_eq
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lneq_eq:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_gr)
-    b C_LAB (_gr)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrhi   W0, .L.true
-    ldrls   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.ls .Lgr_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lgr_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_greq)
-    b C_LAB (_greq)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrcs   W0, .L.true
-    ldrcc   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.cc .Lgreq_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lgreq_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_lt)
-    b C_LAB (_lt)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrcc   W0, .L.true
-    ldrcs   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.cs .Llt_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Llt_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_lteq)
-    b C_LAB (_lteq)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrls   W0, .L.true
-    ldrhi   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.hi .Llteq_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Llteq_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_sgr)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrgt   W0, .L.true
-    ldrle   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.le .Lsgr_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lsgr_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_sgreq)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrge   W0, .L.true
-    ldrlt   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.lt .Lsgreq_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lsgreq_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 6 (_slt)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrlt   W0, .L.true
-    ldrge   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.ge .Lslt_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lslt_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L.false:
-    .word C_LAB(false)
+    .xword C_LAB(false)
 .L.true:
-    .word C_LAB(true)
+    .xword C_LAB(true)
 
 DEF_C_LAB 6 (_slteq)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    cmp     W1, W0
-    ldrle   W0, .L.true
-    ldrgt   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    cmp  W1, W0
+    b.gt .Lslteq_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lslteq_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB 4 (_bitst)
-    b C_LAB (_bitst)
-    ldr     W0, [USP], #4
-    ldr     W1, [USP]
-    tst     W1, W0
-    ldrne   W0, .L.true
-    ldreq   W0, .L.false
-    str     W0, [USP]
-    bx      LR
+    ldr  W0, [USP], #8
+    ldr  W1, [USP]
+    tst  W1, W0
+    b.eq .Lbitst_false
+    adr_l W0, .L.true
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
+.Lbitst_false:
+    adr_l W0, .L.false
+    ldr  W0, [W0]
+    str  W0, [USP]
+    ret
 
 DEF_C_LAB (_haskey)
-    ldr r0, [USP, #4]
-    ldr r1, [USP], #4
-    tst r0, #1
-    bne .L6.1
-    ldr r0, [r0, #_KEY]
-    cmp r0, r1
-    ldreq r0, .L.true
-.L6.1:
-    ldrne r0, .L.false
-    str r0, [USP]
-    bx lr
+    ldr  x0, [USP, #8]
+    ldr  x1, [USP], #8
+    tst  x0, #1
+    b.ne .L6.false
+    ldr  x0, [x0, #_KEY]
+    cmp  x0, x1
+    b.ne .L6.false
+    adr_l x0, .L.true
+    ldr  x0, [x0]
+    str  x0, [USP]
+    ret
+.L6.false:
+    adr_l x0, .L.false
+    ldr  x0, [x0]
+    str  x0, [USP]
+    ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L7.1:
-    .word C_LAB(integer_key)
+    .xword C_LAB(integer_key)
 .L7.2:
-    .word C_LAB(weakref decimal_key)
+    .xword C_LAB(weakref decimal_key)
 DEF_C_LAB (_datakey)
-    ldr r0, [USP], #4
-    tst r0, #1
-    bne .L7.3
-    ldr r0, [r0, #_KEY]
-    str r0, [USP, #-4]!
-    bx lr
+    ldr  x0, [USP], #8
+    tst  x0, #1
+    b.ne .L7.3
+    ldr  x0, [x0, #_KEY]
+    str  x0, [USP, #-8]!
+    ret
 .L7.3:
-    tst r0, #2
-    ldrne r0, .L7.1
-    ldreq r0, .L7.2
-    str r0, [USP, #-4]!
-    bx lr
+    tst  x0, #2
+    b.eq .L7.4
+    adr_l x0, .L7.1
+    ldr  x0, [x0]
+    str  x0, [USP, #-8]!
+    ret
+.L7.4:
+    adr_l x0, .L7.2
+    ldr  x0, [x0]
+    str  x0, [USP, #-8]!
+    ret
 
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L8.1:
-    .word I_LAB(Sys$- _free_pairs)
+    .xword I_LAB(Sys$- _free_pairs)
 DEF_C_LAB (_conspair)
-    ldr r0, .L8.1
-    ldr r1, [r0]
-    tst r1, #1
-    bne XC_LAB(Sys$-Conspair)
-    ldr r2, [r1, #_P_BACK]
-    str r2, [r0]
-    ldr r0, [USP], #4
-    str r0, [r1, #_P_BACK]
-    ldr r0, [USP]
-    str r0, [r1, #_P_FRONT]
-    str r1, [USP]
-    bx lr
+    adr_l x0, .L8.1
+    ldr  x0, [x0]
+    ldr  x1, [x0]
+    tst  x1, #1
+    bne_x XC_LAB(Sys$-Conspair)
+    ldr  x2, [x1, #_P_BACK]
+    str  x2, [x0]
+    ldr  x0, [USP], #8
+    str  x0, [x1, #_P_BACK]
+    ldr  x0, [USP]
+    str  x0, [x1, #_P_FRONT]
+    str  x1, [USP]
+    ret
 
 DEF_C_LAB (_subss)
-    ldr r0, [USP], #4
-    ldr r1, [USP]
-    add r0, #_V_BYTES-1
-    ldrb r0, [r0, r1, asr #2]
-    mov r0, r0, asl #2
-    orr r0, #3
-    str r0, [USP]
-    bx lr
+    ldr  x0, [USP], #8
+    ldr  x1, [USP]
+    add  x0, x0, #(_V_BYTES-1)
+    asr  x1, x1, #3
+    ldrb w0, [x0, x1]
+    lsl  x0, x0, #3
+    orr  x0, x0, #7
+    str  x0, [USP]
+    ret
 
 DEF_C_LAB (-> _subss)
 DEF_C_LAB (_u_subss)
-    ldr r0, [USP], #4
-    ldr r1, [USP], #4
-    ldr r2, [USP], #4
-    add r0, #_V_BYTES-1
-    mov r2, r2, asr #2
-    strb r2, [r0, r1, asr #2]
-    bx lr
+    ldr  x0, [USP], #8
+    ldr  x1, [USP], #8
+    ldr  x2, [USP], #8
+    add  x0, x0, #(_V_BYTES-1)
+    asr  x2, x2, #3
+    asr  x1, x1, #3
+    strb w2, [x0, x1]
+    ret
 
 DEF_C_LAB (_locc)
-    ldr r12, [USP], #4
-    ldr r1, [USP], #4
-    ldr r2, [USP]
-    cmp r1, #0
-    beq .L10.not_found
-    mov r0, #0
+    ldr  x12, [USP], #8
+    ldr  x1, [USP], #8
+    ldr  x2, [USP]
+    cmp  x1, #0
+    b.eq .L10.not_found
+    mov  x0, #0
 .L10.loop:
-    ldrb r3, [r2, r0]
-    cmp r3, r12
-    beq .L10.found
-    add r0, r0, #1
-    cmp r0, r1
-    bne .L10.loop
+    ldrb w3, [x2, x0]
+    cmp  x3, x12
+    b.eq .L10.found
+    add  x0, x0, #1
+    cmp  x0, x1
+    b.ne .L10.loop
 .L10.not_found:
-    mov r0, #-1
+    mov  x0, #-1
 .L10.found:
-    str r0, [USP]
-    bx LR
+    str  x0, [USP]
+    ret
 
 DEF_C_LAB (_skpc)
-    ldr r12, [USP], #4
-    ldr r1, [USP], #4
-    ldr r2, [USP]
-    cmp r1, #0
-    beq .L19.not_found
-    mov r0, #0
+    ldr  x12, [USP], #8
+    ldr  x1, [USP], #8
+    ldr  x2, [USP]
+    cmp  x1, #0
+    b.eq .L19.not_found
+    mov  x0, #0
 .L19.loop:
-    ldrb r3, [r2, r0]
-    cmp r3, r12
-    bne .L19.found
-    add r0, r0, #1
-    cmp r0, r1
-    bne .L19.loop
+    ldrb w3, [x2, x0]
+    cmp  x3, x12
+    b.ne .L19.found
+    add  x0, x0, #1
+    cmp  x0, x1
+    b.ne .L19.loop
 .L19.not_found:
-    mov r0, #-1
+    mov  x0, #-1
 .L19.found:
-    str r0, [USP]
-    bx LR
+    str  x0, [USP]
+    ret
 
-;;; FIXME: really implement
+;;; _checkplogall: check prolog trail and then fall into _checkall
 DEF_C_LAB (_checkplogall)
-    ldr r0, .L11.special
-    ldr r1, [r0, #_SVB_OFFS(_plog_trail_sp)]
-    ldr r2, [r0, #_SVB_OFFS(_plog_trail_lim)]
-    cmp r1, r2
-    bhi C_LAB (_checkall)
-    b XC_LAB(weakref[prologvar_key] Sys$-Plog$-Area_overflow)
+    adr_l x0, C_LAB(_special_var_block)
+    ldr  x1, [x0, #_SVB_OFFS(_plog_trail_sp)]
+    ldr  x2, [x0, #_SVB_OFFS(_plog_trail_lim)]
+    cmp  x1, x2
+    b.hi C_LAB (_checkall)
+    b    XC_LAB(weakref[prologvar_key] Sys$-Plog$-Area_overflow)
 
 DEF_C_LAB (_checkall)
-    ldr r0, .L11.special
+    adr_l x0, C_LAB(_special_var_block)
 .L11.do_checkall:
-    ldr r1, [r0, #_SVB_OFFS(_call_stack_lim)]
-    cmp sp, r1
-    bcc .L11.do_call_overflow
+    ldr  x1, [x0, #_SVB_OFFS(_call_stack_lim)]
+    cmp  sp, x1
+    b.cc .L11.do_call_overflow
 .L11.check_user:
-    ldr r1, [r0, #_SVB_OFFS(_userlim)]
-    cmp USP, r1
-    bcc .L11.do_user_overflow
+    ldr  x1, [x0, #_SVB_OFFS(_userlim)]
+    cmp  USP, x1
+    b.cc .L11.do_user_overflow
 .L11.check_interrupt:
-    ldr r1, [r0, #_SVB_OFFS(_trap)]
-    tst r1, #1
-    bxeq LR
-    ldr r1, .L11.disable
-    ldr r1, [r1]
-    tst r1, #1
-    beq XC_LAB(Sys$-Async_raise_signal)
-    bx  LR
+    ldr  x1, [x0, #_SVB_OFFS(_trap)]
+    tst  x1, #1
+    b.eq .L11.ret
+    adr_l x1, I_LAB(_disable)
+    ldr  x1, [x1]
+    tst  x1, #1
+    beq_x XC_LAB(Sys$-Async_raise_signal)
+.L11.ret:
+    ret
 
 .L11.do_call_overflow:
-    ldr r1, .L11.disable
-    ldr r1, [r1]
-    tst r1, #2
-    beq XC_LAB(Sys$-Call_overflow)
-    b .L11.check_user
+    adr_l x1, I_LAB(_disable)
+    ldr  x1, [x1]
+    tst  x1, #2
+    beq_x XC_LAB(Sys$-Call_overflow)
+    b    .L11.check_user
 
 .L11.do_user_overflow:
-    ldr r1, .L11.disable
-    ldr r1, [r1]
-    tst r1, #2
-    beq XC_LAB(Sys$-User_overflow)
-    b .L11.check_interrupt
+    adr_l x1, I_LAB(_disable)
+    ldr  x1, [x1]
+    tst  x1, #2
+    beq_x XC_LAB(Sys$-User_overflow)
+    b    .L11.check_interrupt
 
 DEF_C_LAB (_checkinterrupt)
-    ldr  r1, .L11.trap
-    ldr  r1, [r1]
-    tst  r1, #1
-    bxeq  LR
-    b C_LAB (_checkall)
+    adr_l x1, I_LAB(_trap)
+    ldr  x1, [x1]
+    tst  x1, #1
+    b.eq .L12.ret
+    b    C_LAB (_checkall)
+.L12.ret:
+    ret
 
-.L11.special:
-    .word C_LAB(_special_var_block)
-.L11.disable:
-    .word I_LAB(_disable)
-.L11.trap:
-    .word I_LAB(_trap)
+#_IF DEF UNIX_MACHO
+	.p2align	3
+#_ENDIF
 .L11.dummy_procedure_helper:
-    .word XC_LAB(Sys$-dummy_procedure_callback_helper)
-.L11.mess:
-    .ascii "0x%x\\n\\000"
-    .align 2
-.L11.messp:
-     .word .L11.mess
+    .xword XC_LAB(Sys$-dummy_procedure_callback_helper)
+
 EXTERN_NAME(pop_print):
-    stmfd sp!, {r4, r5, PB, LR}
-    ldr PB, .L11.dummy_procedure_helper
-    str PB, [sp, #-4]!
-    ;;; ldr r0, .L11.messp
-    ;;; mov r1, r10
-    ;;; bl printf
-    str r0, [USP, #-4]!
-    bl  XC_LAB(sys_syspr)
-    add sp, sp, #4
-    ldmfd sp!, {r4, r5, PB, pc}
+    ;;; Save callee-saved registers: x21, x22 (Pop temps), PB, FP, LR
+    stp  x29, x30, [sp, #-48]!
+    stp  x21, x22, [sp, #16]
+    str  PB, [sp, #32]
+    mov  x29, sp
+
+    adr_l PB, .L11.dummy_procedure_helper
+    ldr  PB, [PB]
+    str  PB, [sp, #-16]!
+
+    str  x0, [USP, #-8]!
+    bl   XC_LAB(sys_syspr)
+
+    add  sp, sp, #16
+    ldr  PB, [sp, #32]
+    ldp  x21, x22, [sp, #16]
+    ldp  x29, x30, [sp], #48
+    ret
 
 ;;; End wrapper: set size
-    .text
+#_IF DEF UNIX_MACHO
+	.section	__POPSEED,__popseed
+	.p2align	3
+#_ELSE
+	.text
+#_ENDIF
 Ltext_end:
     .set Ltext_size, Ltext_end-Ltext_start

@@ -16,8 +16,44 @@ HASH_STYLE_OPT = @@HASH_STYLE_OPT@@
 
 X_INCLUDES = @@X_INCLUDES@@
 X_CONF = @@X_CONF@@
+GFX_CONF = @@GFX_CONF@@
 POP_arch = @@POP_arch@@
 
+ifeq (${GFX_CONF},imgui)
+# Experimental native graphics backend (Dear ImGui + Metal, macOS); no X linked.
+# Glue: pop/extern/lib/imgui_backend.{h,mm}; ImGui vendored by ./tools/fetch-imgui.sh.
+# The GFX objects are compiled into ${popexlib} and folded into the Poplog
+# link via $POP_GFX_OBJECTS/$POP_GFX_LDFLAGS, which gen_link_command
+# (syscomp/os_comms.p, Darwin branch) writes into poplink_cmnd as lazy
+# shell expansions -- empty when unset, so non-gfx links are unaffected.
+XL_FLAG=-nox
+GFX_LINK_OBJS = ${popexlib}/imgui_backend.o ${popexlib}/imgui.o \
+                ${popexlib}/imgui_draw.o ${popexlib}/imgui_tables.o \
+                ${popexlib}/imgui_widgets.o ${popexlib}/imgui_impl_metal.o \
+                ${popexlib}/imgui_impl_osx.o
+GFX_LINK_LDFLAGS = -lc++ -framework Metal -framework MetalKit -framework Cocoa \
+                   -framework QuartzCore -framework GameController -framework Carbon
+export POP_GFX_OBJECTS = ${GFX_LINK_OBJS}
+export POP_GFX_LDFLAGS = ${GFX_LINK_LDFLAGS}
+else ifeq (${GFX_CONF},imgui-sdl)
+# Experimental native graphics backend (Dear ImGui + SDL3 + OpenGL3).  Cross
+# platform: Linux/Unix (SDL3 dlopen's Wayland/X11/kmsdrm at run time -> no hard
+# X11 dependency) AND macOS (SDL3 over Cocoa, OpenGL core profile).  Glue:
+# pop/extern/lib/imgui_backend_sdl.cpp.  gen_link_command (syscomp/os_comms.p)
+# folds $POP_GFX_OBJECTS/$POP_GFX_LDFLAGS into the poplink command.
+# SDL3 + OpenGL compile/link flags are resolved by ./configure (pkg-config or
+# SDL3_CFLAGS/SDL3_LIBS, plus the OS-specific GL link), so no pkg-config here.
+XL_FLAG=-nox
+GFX_CXX        = c++
+GFX_INCLUDES   = -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib @@GFX_SDL_CFLAGS@@
+GFX_LINK_OBJS  = ${popexlib}/imgui_backend_sdl.o ${popexlib}/imgui.o \
+                 ${popexlib}/imgui_draw.o ${popexlib}/imgui_tables.o \
+                 ${popexlib}/imgui_widgets.o ${popexlib}/imgui_impl_sdl3.o \
+                 ${popexlib}/imgui_impl_opengl3.o
+GFX_LINK_LDFLAGS = @@GFX_SDL_LIBS@@
+export POP_GFX_OBJECTS = ${GFX_LINK_OBJS}
+export POP_GFX_LDFLAGS = ${GFX_LINK_LDFLAGS}
+else
 ifeq (${X_CONF},no)
 XL_FLAG=-nox
 else
@@ -30,6 +66,72 @@ else
 XL_FLAG=-xm
 endif
 endif
+endif
+
+# --- Experimental graphics backend (Dear ImGui + Metal, macOS) -------------
+# Vendored ImGui (./tools/fetch-imgui.sh) + the glue in pop/extern/lib.  These
+# vars also feed the eventual basepop11 integration (GFX_OBJECT/GFX_FRAMEWORKS).
+GFX_IMGUI      ?= pop/extern/imgui
+GFX_CXX        ?= clang++
+GFX_INCLUDES   ?= -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib
+GFX_FRAMEWORKS ?= -framework Metal -framework MetalKit -framework Cocoa \
+                  -framework QuartzCore -framework GameController -framework Carbon
+GFX_IMGUI_SRCS ?= ${GFX_IMGUI}/imgui.cpp ${GFX_IMGUI}/imgui_draw.cpp \
+                  ${GFX_IMGUI}/imgui_tables.cpp ${GFX_IMGUI}/imgui_widgets.cpp \
+                  ${GFX_IMGUI}/backends/imgui_impl_metal.mm \
+                  ${GFX_IMGUI}/backends/imgui_impl_osx.mm
+GFX_GLUE_SRC   ?= pop/extern/lib/imgui_backend.mm
+
+# Standalone smoke test: build + link the whole graphics stack into a window and
+# render a few frames (no Poplog needed) -- proves the --experimental-gfx
+# toolchain.  Usage: ./tools/fetch-imgui.sh && make gfx-smoke && ./gfx-smoke
+.PHONY: gfx-smoke
+gfx-smoke:
+	@test -f ${GFX_IMGUI}/imgui.cpp || { echo "Run ./tools/fetch-imgui.sh first."; exit 1; }
+	clang++ -std=c++17 -fobjc-arc ${GFX_INCLUDES} \
+	    ${GFX_GLUE_SRC} pop/extern/lib/imgui_smoke.mm ${GFX_IMGUI_SRCS} \
+	    ${GFX_FRAMEWORKS} -o gfx-smoke
+
+# Linux/Unix smoke: SDL3 + OpenGL3.  Usage:
+#   ./tools/fetch-imgui.sh && make gfx-smoke-sdl && ./gfx-smoke-sdl
+# SDL3 headers/libs via pkg-config (set PKG_CONFIG_PATH if not on the system).
+.PHONY: gfx-smoke-sdl
+gfx-smoke-sdl:
+	@test -f ${GFX_IMGUI}/imgui.cpp || { echo "Run ./tools/fetch-imgui.sh first."; exit 1; }
+	${GFX_CXX} -std=c++17 -O2 \
+	    -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib $(shell pkg-config --cflags sdl3) \
+	    pop/extern/lib/imgui_backend_sdl.cpp pop/extern/lib/imgui_smoke.cpp \
+	    ${GFX_IMGUI}/imgui.cpp ${GFX_IMGUI}/imgui_draw.cpp \
+	    ${GFX_IMGUI}/imgui_tables.cpp ${GFX_IMGUI}/imgui_widgets.cpp \
+	    ${GFX_IMGUI}/backends/imgui_impl_sdl3.cpp ${GFX_IMGUI}/backends/imgui_impl_opengl3.cpp \
+	    $(shell pkg-config --libs sdl3) -lGL -o gfx-smoke-sdl
+	@echo "Built ./gfx-smoke-sdl -- run it to open the window."
+
+# Headless render harness (Linux/Unix): SDL3 offscreen (EGL surfaceless) +
+# OpenGL3, renders the scene to a PPM with NO display/GPU/compositor (Mesa
+# llvmpipe).  This is the CI / regression primitive -- see
+# tools/validate-gfx-headless.sh.  Usage:
+#   ./tools/fetch-imgui.sh && make gfx-headless && ./gfx-headless out.ppm
+.PHONY: gfx-headless
+gfx-headless:
+	@test -f ${GFX_IMGUI}/imgui.cpp || { echo "Run ./tools/fetch-imgui.sh first."; exit 1; }
+	${GFX_CXX} -std=c++17 -O2 \
+	    -I${GFX_IMGUI} -I${GFX_IMGUI}/backends -Ipop/extern/lib $(shell pkg-config --cflags sdl3) \
+	    pop/extern/lib/imgui_backend_sdl.cpp pop/extern/lib/imgui_headless.cpp \
+	    ${GFX_IMGUI}/imgui.cpp ${GFX_IMGUI}/imgui_draw.cpp \
+	    ${GFX_IMGUI}/imgui_tables.cpp ${GFX_IMGUI}/imgui_widgets.cpp \
+	    ${GFX_IMGUI}/backends/imgui_impl_sdl3.cpp ${GFX_IMGUI}/backends/imgui_impl_opengl3.cpp \
+	    $(shell pkg-config --libs sdl3) -lGL -o gfx-headless
+	@echo "Built ./gfx-headless -- ./gfx-headless out.ppm renders with no display."
+
+# W^X JIT smoke test (PORTING-ARM64-M-SILICON-OSX.md Phase 4): JIT a tiny AArch64
+# function into MAP_JIT memory and call it -- proves the Apple-Silicon write->
+# execute cycle (pop/extern/lib/pop_jit.c) without a Poplog build.
+.PHONY: jit-smoke
+jit-smoke:
+	clang -O2 -Wall -Ipop/extern/lib \
+	    pop/extern/lib/pop_jit.c pop/extern/lib/pop_jit_smoke.c -o jit-smoke
+	@echo "Built ./jit-smoke -- run it to verify the W^X JIT cycle."
 
 PACK_CONF = @@PACK_CONF@@
 
@@ -62,7 +164,7 @@ stamp_popc: ${popsys}/corepop stamp_dirs_and_symlinks ${SYSCOMP_SRC}
 	   -d -a=${POP_arch} popc poplibr poplink)
 	touch stamp_popc
 
-stamp_new_corepop: stamp_popc stamp_srclib ${popexlib}/libpop.a
+stamp_new_corepop: stamp_popc stamp_srclib ${popexlib}/libpop.a ${popexlib}/pop_seed_loader.o ${GFX_LINK_OBJS}
 	(cd ${popsys} && POP__cc="${CC} ${HASH_STYLE_OPT}"; \
 	    export POP__cc && \
 	    ${DO_COMMAND} ${PGLINK} -core && \
@@ -124,18 +226,48 @@ stamp_newpop: stamp_popc
 	touch stamp_newpop
 
 LIBPOP_CSRC = c_bignum c_callback c_core c_sysinit ext_arm \
-              pop_encoding pop_poll pop_stat pop_timer
+              pop_encoding pop_poll pop_stat pop_timer pop_vararg_fix
 
 LIBPOP_OBJS0 = $(addprefix ${popexlib}/, $(addsuffix .o, \
                 $(basename $(notdir ${LIBPOP_CSRC}))))
 
-LIBPOP_OBJS = ${LIBPOP_OBJS0} ${XT_OBJECT}
+LIBPOP_OBJS = ${LIBPOP_OBJS0} ${XT_OBJECT} ${GFX_OBJECT}
 
 ${LIBPOP_OBJS0}: ${popexlib}/%.o: pop/extern/lib/%.c stamp_dirs_and_symlinks
 	$(CC) -c -g -Wall -O $< -o $@
 
 ${popexlib}/XtPoplog.o: pop/extern/lib/XtPoplog.c stamp_dirs_and_symlinks
 	$(CC) -c -g -Wall -O $(X_INCLUDES) $< -o $@
+
+${popexlib}/pop_seed_loader.o: pop/extern/lib/pop_seed_loader.c stamp_dirs_and_symlinks
+	$(CC) -c -g -Wall -O $< -o $@
+
+# GFX object compilation (only built when referenced -- GFX_CONF=imgui*).
+# The ImGui core + SDL/GL backends compile with ${GFX_CXX} (clang++ on macOS,
+# c++ on Linux); the ObjC++ Metal/Cocoa backends are macOS-only (clang++ -ARC).
+${popexlib}/imgui.o: ${GFX_IMGUI}/imgui.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_draw.o: ${GFX_IMGUI}/imgui_draw.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_tables.o: ${GFX_IMGUI}/imgui_tables.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_widgets.o: ${GFX_IMGUI}/imgui_widgets.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+# macOS (Metal + Cocoa) glue + backends -- ObjC++
+${popexlib}/imgui_backend.o: pop/extern/lib/imgui_backend.mm stamp_dirs_and_symlinks
+	clang++ -std=c++17 -fobjc-arc -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_impl_metal.o: ${GFX_IMGUI}/backends/imgui_impl_metal.mm stamp_dirs_and_symlinks
+	clang++ -std=c++17 -fobjc-arc -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_impl_osx.o: ${GFX_IMGUI}/backends/imgui_impl_osx.mm stamp_dirs_and_symlinks
+	clang++ -std=c++17 -fobjc-arc -O2 ${GFX_INCLUDES} -c $< -o $@
+# Linux/Unix (SDL3 + OpenGL3) glue + backends -- plain C++
+${popexlib}/imgui_backend_sdl.o: pop/extern/lib/imgui_backend_sdl.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_impl_sdl3.o: ${GFX_IMGUI}/backends/imgui_impl_sdl3.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+${popexlib}/imgui_impl_opengl3.o: ${GFX_IMGUI}/backends/imgui_impl_opengl3.cpp stamp_dirs_and_symlinks
+	${GFX_CXX} -std=c++17 -O2 ${GFX_INCLUDES} -c $< -o $@
+
 
 ${popexlib}/libpop.a: ${LIBPOP_OBJS}
 	ar rc $@ $^
@@ -152,8 +284,8 @@ ${XPW_OBJS}: ${popexlib}/%.o: pop/x/Xpw/%.c ${XPW_HSRC} stamp_dirs_and_symlinks
 ${popexlib}/libXpw.so: ${XPW_OBJS}
 	$(CC) -g -shared -o $@ $^
 
-${popsys}/basepop11: ${popexlib}/libpop.a ${XPW_TARGETS} \
-                     stamp_popc stamp_vedlib
+${popsys}/basepop11: ${popexlib}/libpop.a ${XPW_TARGETS} ${GFX_LINK_OBJS} \
+                     stamp_popc stamp_vedlib ${popexlib}/pop_seed_loader.o
 	(cd ${popsys} && POP__cc="${CC}"; export POP__cc && \
 	   rm -f basepop11 clisp pml pop11 prolog ved xved && \
 	   ${DO_COMMAND} ${PGLINK} ${XL_FLAG} -map && \

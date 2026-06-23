@@ -33,8 +33,17 @@ define emacsreadline() -> list;
 
     dlocal popnewline = true, popprompt = pop_readline_prompt;
 
-    ;;; Make a list items to next newline
-    [% until (rep() ->> item) == newline do item enduntil %] -> list;
+    ;;; Make a list of items to the next newline.  Also stop at -termin- (end
+    ;;; of input): a non-interactive stream (e.g. piped input) can reach EOF
+    ;;; with no closing newline, and the original `== newline` test alone then
+    ;;; loops forever re-reading termin -- which steadily fills, then overruns,
+    ;;; the user stack.  Return termin (as the standard readline does) when EOF
+    ;;; is hit with nothing read, so the caller's toplevel sees end-of-input.
+    [% until (rep() ->> item) == newline do
+        quitif(item == termin);
+        item
+     enduntil %] -> list;
+    if item == termin and null(list) then termin -> list endif;
 
 enddefine;
 

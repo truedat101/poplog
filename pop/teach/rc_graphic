@@ -1,0 +1,168 @@
+TEACH RC_GRAPHIC                       Apple M-silicon Poplog, Jun 2026
+                          (after the original by Aaron Sloman)
+
+An introduction to turtle graphics with LIB * RC_GRAPHIC.
+
+This teach file works through the library by example.  Each chunk of
+code can be marked and loaded (or typed at the prompt).  On macOS the
+drawing appears in a native window; everything here also works on an
+X build with the original library.
+
+
+-- Getting started ----------------------------------------------------
+
+First load the library and open the window:
+
+    uses rc_graphic;
+    rc_start();
+
+A 500 by 500 window opens.  The coordinate origin is at the CENTRE,
+x increases to the right and y increases UPWARD.  An invisible
+"turtle" sits at the origin facing right.
+
+
+-- Drawing lines ------------------------------------------------------
+
+rc_drawline draws between two points given in user coordinates:
+
+    rc_drawline(-200, 0, 200, 0);       ;;; horizontal axis
+    rc_drawline(0, -200, 0, 200);       ;;; vertical axis
+
+rc_jumpto moves the turtle without drawing; rc_drawto draws a line
+from the turtle to a new position (and moves it):
+
+    rc_jumpto(-150, -150);
+    rc_drawto(-150, 150);
+    rc_drawto(150, 150);
+
+You can also draw single points and put text in the picture:
+
+    rc_drawpoint(100, -50);
+    rc_print_at(-90, -180, 'hello from the turtle');
+
+
+-- Turtling: rc_draw and rc_turn --------------------------------------
+
+The turtle has a position and a heading (in degrees; 0 means facing
+right, and positive turns are counter-clockwise).  rc_draw(D) draws D
+units in the direction of the heading; rc_turn changes the heading.
+
+Try a square:
+
+    rc_start();                 ;;; clear and re-centre
+    repeat 4 times
+        rc_draw(150);
+        rc_turn(90);
+    endrepeat;
+
+A procedure to draw any regular polygon:
+
+    define polygon(side, n);
+        repeat n times
+            rc_draw(side);
+            rc_turn(360 / n);
+        endrepeat;
+    enddefine;
+
+    rc_start();
+    polygon(100, 3);
+    polygon(100, 5);
+    polygon(100, 8);
+
+The classic square spiral -- the angle is slightly more than a right
+angle, so the figure slowly rotates:
+
+    rc_start();
+    lvars side;
+    for side from 4 by 4 to 240 do
+        rc_draw(side);
+        rc_turn(91);
+    endfor;
+
+
+-- Jumping and relative moves -----------------------------------------
+
+    rc_start();
+    rc_jump(100);               ;;; move without drawing
+    rc_turn(90);
+    rc_draw(50);
+    rc_jumpby(-200, -50);       ;;; relative jump
+    rc_drawby(50, 100);         ;;; relative draw
+
+
+-- Circles and arcs ---------------------------------------------------
+
+rc_arc_around(R, DEGREES) draws a circular arc starting at the turtle,
+curving left for positive DEGREES.  A full circle:
+
+    rc_start();
+    rc_jumpto(0, -100);
+    rc_arc_around(100, 360);
+
+Rectangles, rounded rectangles, and elliptical arcs:
+
+    rc_jumpto(-220, 220);
+    rc_draw_rectangle(120, 80);
+    rc_jumpto(100, 220);
+    rc_draw_oblong(120, 80, 20);
+    rc_draw_arc(-60, -120, 120, 80, 0, 180 * 64);
+
+
+-- Changing the coordinate frame --------------------------------------
+
+The user-to-window transform is controlled by rc_xorigin, rc_yorigin,
+rc_xscale and rc_yscale.  For example, to make the origin the bottom
+left corner with y increasing upward:
+
+    rc_start();
+    rc_set_coordinates(0, rc_window_ysize, 0.5, -0.5);
+    rc_drawline(0, 0, 400, 400);
+    rc_drawline(0, 400, 400, 0);
+
+rc_stretch_frame_by and rc_shift_frame_by adjust the frame relative to
+its current state:
+
+    rc_start();
+    lvars i;
+    for i from 1 to 5 do
+        polygon(100, 4);
+        rc_stretch_frame_by(0.7);
+    endfor;
+
+
+-- Keeping the window alive, and finishing ----------------------------
+
+The window is repainted after every drawing operation, but ONLY while
+Pop-11 is executing -- while the REPL waits for your next command the
+window is frozen (it will not redraw or respond to clicks).  Whenever
+you want to look at the picture or interact with the window, call
+
+    rc_pump(300);
+
+to keep it live for about 3 seconds (or longer).  Your drawing
+accumulates on a retained canvas, so it is never lost between pumps.
+When you are done:
+
+    rc_finish();
+
+
+-- Drawing with the mouse ---------------------------------------------
+
+LIB * RC_MOUSE provides mouse tracking with a rubber-band line:
+
+    uses rc_mouse;
+    rc_start();
+    rc_mouse_draw(false, 3);
+
+Click button 1 to place points; a rubber band follows the mouse; click
+button 3 (the right button) to stop.  With a first argument of true it
+returns the list of points you clicked:
+
+    rc_mouse_draw(true, 3) =>
+
+
+-- What next ----------------------------------------------------------
+
+HELP * RC_GRAPHIC gives the full procedure-by-procedure reference, and
+HELP * POPGFX documents the underlying native drawing layer (colours,
+the canvas mark/rewind facility, raw window-coordinate drawing).

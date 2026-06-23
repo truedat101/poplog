@@ -1,10 +1,20 @@
+/*
+   Copyright Waldek Hebisch, you can distribute this file
+   under terms of Free Poplog licence.
+   Purpose: Output code procedures for AArch64 (Unix-style assembler)
+   Author:  Waldek Hebisch (ARM32 original)
+   Modified for AArch64 port
+*/
 
 #_INCLUDE 'common.ph'
 
 section $-Popas;
 
-constant macro CLOSURE_HDR_LEN = 7;
+;;; Closure header is 6 xwords on 64-bit (same as x86_64)
+constant macro CLOSURE_HDR_LEN = 6;
 
+;;; popint encoding: tag bits in low 2 bits, value in upper bits
+;;; For 64-bit: same 2-bit tag scheme
 define global popint(n); lvars n; (n << 2) || 3; enddefine;
 
 define global mcint(n); lvars n; n >> 2; enddefine;
@@ -112,15 +122,68 @@ global constant macro (
 );
 
 ;;; Assembler directive strings
+;;; For AArch64 64-bit: .xword for Poplog words (8 bytes)
 
 global constant macro (
-    $- ASM_TEXT_STR = '\t.text',
-    $- ASM_DATA_STR = '\t.data',
     $- ASM_BYTE_STR = '\t.byte\t',
     $- ASM_SHORT_STR= '\t.short\t',
     $- ASM_INT_STR  = '\t.word\t',
-    $- ASM_WORD_STR = ASM_INT_STR,
 );
+
+;;; The writable data section also holds rebasable .quad pointer fields, so it
+;;; needs the same forced 8-byte alignment as __popseed (see ASM_TEXT_STR).
+#_IF DEF UNIX_MACHO
+global constant macro (
+    $- ASM_DATA_STR = '\t.section\t__DATA,__data\n\t.p2align\t3',
+);
+#_ELSE
+global constant macro (
+    $- ASM_DATA_STR = '\t.data',
+);
+#_ENDIF
+
+;;; 8-byte Poplog word: GNU as (AArch64 ELF) uses .xword; Mach-O/Clang uses .quad.
+;;; A whole conditional block -- #_IF cannot appear INSIDE a single
+;;; `constant macro ( ... )` declaration list.
+#_IF DEF UNIX_MACHO
+global constant macro (
+    $- ASM_DOUBLE_STR = '\t.quad\t',
+    $- ASM_WORD_STR   = '\t.quad\t',
+);
+#_ELSE
+global constant macro (
+    $- ASM_DOUBLE_STR = '\t.xword\t',
+    $- ASM_WORD_STR   = '\t.xword\t',
+);
+#_ENDIF
+
+;;; Procedure/code section. On Mach-O the Pop seed image must be dyld-rebasable:
+;;; under mandatory PIE the absolute `.quad` pointer fields in procedure records
+;;; cannot live in read-only __TEXT, so route the code section into a writable
+;;; __DATA section. The startup loader copies __popseed into a MAP_JIT region,
+;;; relocates, and executes it there (PORTING-ARM64-M-SILICON-OSX.md Phase 3).
+;;; ELF keeps `.text`.
+#_IF DEF UNIX_MACHO
+;;; The seed lives in its OWN segment (__POPSEED) so it gets exclusive pages:
+;;; at startup the loader (pop_seed_loader.c) replaces those pages in place
+;;; with an anonymous RW mapping, copies the seed back, and mprotects RX --
+;;; same address, so nothing needs relocating (intra-seed pointers are
+;;; dyld-rebased; seed<->C PC-relative refs stay valid). A shared __DATA
+;;; section would put other data on the seed's boundary pages and the remap
+;;; would clobber it.
+;;; The trailing .p2align 3 forces 8-byte alignment on every entry to the seed
+;;; section. setseg's out_double_align is a no-op right after a section switch
+;;; (offset 0), so without this the first structure after each switch keeps atom
+;;; alignment 1 and the linker can place its rebasable .quad pointers at a
+;;; 4-mod-8 address ("pointer not aligned"). No padding at a section boundary.
+global constant macro (
+    $- ASM_TEXT_STR = '\t.section\t__POPSEED,__popseed\n\t.p2align\t3',
+);
+#_ELSE
+global constant macro (
+    $- ASM_TEXT_STR = '\t.text',
+);
+#_ENDIF
 
 ;;; Starting and ending an assembly code file
 
@@ -135,7 +198,9 @@ define asm_startfile(name);
     lvars name;
     dlocal pop_max_filename_len = ASM_MAX_FILENAME_LEN;
     asmf_printf(sysfileok(name), '\t.file\t"%p"\n');
-    asmf_printf('\t.arch armv8\n');
+#_IF not(DEF UNIX_MACHO)
+    asmf_printf('\t.arch armv8-a\n');   ;;; GNU as; Clang/Mach-O uses -arch arm64
+#_ENDIF
 enddefine;
 sysprotect("pop_max_filename_len");
 
@@ -148,8 +213,9 @@ constant procedure (
 );
 
 global constant procedure (
+    ;;; 8-byte (64-bit) word alignment = .align 3 (2^3 = 8)
     asm_align_word =
-            outcode(% '.align\t2' %),
+            outcode(% '.align\t3' %),
     asm_align_double =
             outcode(% '.align\t3' %)
     ;;; asm_align_file -- end-of-file alignment
@@ -184,8 +250,20 @@ enddefine;
 constant procedure asm_uselab = identfn;
 
 define lconstant outdatum(n, type);
-    lvars i, n, type;
+    lvars i, n, type, v;
     if n == 0 then return endif;
+    ;;; Defensive guard: every datum reaching here must be an emittable label
+    ;;; (string), an integer, or a label expression -- never a raw Pop-11
+    ;;; boolean / procedure / vector / pair.  Such a raw value means an upstream
+    ;;; structure/label bug; fail loudly rather than masking it into a wrong
+    ;;; label or a null pointer (the old band-aid).  See the `#`-comment stack
+    ;;; leak fix in genproc.p which removed the only source of these.
+    fast_for i from 1 to n do
+        subscr_stack(i) -> v;
+        if isboolean(v) or isprocedure(v) or isvector(v) or ispair(v) then
+            mishap(v, 1, 'outdatum: RAW POP-11 VALUE (expected a label)')
+        endif
+    endfor;
     asmf_charout(type);
     fast_for i from n by -1 to 2 do
         asmf_pr(subscr_stack(i)), asmf_charout(',\s');
@@ -200,6 +278,7 @@ global constant procedure (
     asm_outshort    = outdatum(% ASM_SHORT_STR %),
     asm_outint      = outdatum(% ASM_INT_STR %),
     asm_outword     = outdatum(% ASM_WORD_STR %),
+    asm_outdouble   = outdatum(% ASM_DOUBLE_STR %),
 );
 
 define asm_out_dfloat(hipart, lopart);
@@ -219,8 +298,8 @@ enddefine;
         the fields are added to it, so it is the responsibility of this
         procedure and -asm_outbits- to output the bitfields correctly.
     */
-    ;;; 386 version same as VAX ('little endian'), adds the fields at the
-    ;;; top and outputs the bytes from the bottom up
+    ;;; AArch64 is little endian, same as x86_64/ARM32
+    ;;; adds the fields at the top and outputs the bytes from the bottom up
 define asm_addbits(new_val, new_nbits, val, nbits);
     lvars new_val, new_nbits, val, nbits;
     val || (new_val << nbits)   ;;; add the new field at the top
@@ -268,7 +347,7 @@ enddefine;
 
 ;;; asm_pdr_len:
 ;;;     construct an expression which will evaluate to the length of a
-;;;     procedure (in long words) given its header size, execute address
+;;;     procedure (in 64-bit words) given its header size, execute address
 ;;;     and end address
 
 define asm_pdr_len(hdr_size, exec_addr, end_addr);
@@ -277,35 +356,68 @@ define asm_pdr_len(hdr_size, exec_addr, end_addr);
         explode(ASM_LPAR), explode(ASM_LPAR),
         dest_characters(end_addr), explode(' - '), dest_characters(exec_addr),
         explode(ASM_RPAR),
-        explode(' >> 2'),
+        explode(' >> 3'),
         explode(ASM_RPAR), explode(' + '),
         dest_characters(hdr_size)
     |#);
 enddefine;
 
+;;; AArch64 PC-relative address materialisation into x16: ELF uses
+;;; adrp / :lo12:, Mach-O uses @PAGE / @PAGEOFF.  (Used by the poplink stubs.)
+#_IF DEF UNIX_MACHO
+lconstant ADRP_X16_FMT  = '\tadrp x16, %p@PAGE\n',
+          ADDLO_X16_FMT = '\tadd x16, x16, %p@PAGEOFF\n';
+#_ELSE
+lconstant ADRP_X16_FMT  = '\tadrp x16, %p\n',
+          ADDLO_X16_FMT = '\tadd x16, x16, :lo12:%p\n';
+#_ENDIF
+
 ;;; asm_gen_poplink_code:
 ;;;     code for undefined procedures generated by poplink
+;;;     On AArch64: x19 is the user stack pointer (USP)
+;;;     We use x16 as a scratch register (intra-procedure-call scratch)
 
 define asm_gen_poplink_code(outlabs, nfroz, jmplab);
     lvars outlabs, nfroz, jmplab, l, offs;
     ;;; plant exec labels
     outlabs();
-    ;;; Push nfroz frozvals (last nfroz longwords planted)
-    ;;; 'r10' is the user stack pointer
+    ;;; Push nfroz frozvals (last nfroz xwords planted)
+    ;;; x19 is the user stack pointer
     asm_outlab(nextlab() ->> l);
-    fast_for offs from nfroz*4 by -4 to 4 do
-        asmf_printf(asm_expr(l, "-", offs), '\tldr r0, %p\n');
-        asmf_pr('\tstr r0, [r10, #-4]!\n');
+    fast_for offs from nfroz*8 by -8 to 8 do
+#_IF DEF UNIX_MACHO
+        ;;; Mach-O's ld rejects the (l - offs)@PAGE addend relocation
+        ;;; (ARM64_RELOC_ADDEND + PAGE21), so materialise l with no addend and
+        ;;; subtract offs as a real instruction. This is 5 instrs/frozval --
+        ;;; exactly the size reserved by the (nfroz*5+6) result below (the ELF
+        ;;; path emits 4 and leaves the 5th slot as slack).
+        asmf_printf(l, ADRP_X16_FMT);
+        asmf_printf(l, ADDLO_X16_FMT);
+        asmf_printf(offs, '\tsub x16, x16, #%p\n');
+#_ELSE
+        asmf_printf(asm_expr(l, "-", offs), ADRP_X16_FMT);
+        asmf_printf(asm_expr(l, "-", offs), ADDLO_X16_FMT);
+#_ENDIF
+        asmf_pr('\tldr x17, [x16]\n');
+        asmf_pr('\tstr x17, [x19, #-8]!\n');
     endfast_for;
     ;;; Jump to -jmplab-
     nextlab() -> l;
-    asmf_printf(l, '\tldr r0, %p\n');
-    asmf_pr('\tbx r0\n');
+    asmf_printf(l, ADRP_X16_FMT);
+    asmf_printf(l, ADDLO_X16_FMT);
+    asmf_pr('\tldr x16, [x16]\n');
+    asmf_pr('\tbr x16\n');
+    ;;; 8-align the jmplab pointer word. On Mach-O the frozval loop is 5 instrs
+    ;;; each (odd), so for odd nfroz the jmplab .quad lands at a 4-mod-8 offset
+    ;;; and dyld rejects the rebase ("pointer not aligned"). This just moves the
+    ;;; padding the asm_align_word() below would add anyway -- total size is
+    ;;; unchanged -- and is a no-op on ELF (4 instrs/frozval keeps it aligned).
+    asm_align_word();
     asm_outlab(l);
     asm_outword(jmplab, 1);
-    ;;; Return the number of longwords planted
+    ;;; Return the number of xwords planted
     asm_align_word();
-    (nfroz*2+3);
+    (nfroz*5+6);
 enddefine;
 
 
@@ -313,16 +425,33 @@ enddefine;
  *  Exfunc closure code -- jump to subroutine _exfunc_clos_action (aextern.s)
  *  with exfunc_closure record address in a reg, etc. This procedure is
  *  passed the label of _exfunc_clos_action. The code generated must be
- *  padded to exactly 4 words.  It must preserve argument registers
- *  and call-preserved registers.  On ARM that means we can only use
- *  r12...
+ *  padded to exactly 4 xwords (32 bytes on AArch64).
+ *  It must preserve argument registers and call-preserved registers.
+ *  On AArch64 we can use x16/x17 (intra-procedure-call scratch registers).
+ *  We compute the address of the closure record (this code's own address)
+ *  using adr, then load and branch to the action routine.
  */
 
 define asm_gen_exfunc_clos_code(action_lab);
     lvars action_lab, l = nextlab();
-    asmf_printf('\tsub r12, pc, #8\n');
-    asmf_printf(l, '\tldr pc, %p\n');
+    ;;; x16 = address of this closure code (PC-relative)
+    asmf_printf('\tadr x16, .-0\n');
+    ;;; Load _exfunc_clos_action address from literal
+    asmf_printf(l, '\tldr x17, %p\n');
+    ;;; Branch to action routine
+    asmf_printf('\tbr x17\n');
+    ;;; Pad to 32 bytes (4 xwords): 3 instructions = 12 bytes, then
+    ;;; 1 nop (4 bytes) + 1 xword (8 bytes) = 24+8 = 32 total
     asmf_printf('\tnop\n');
+    ;;; 4 instructions = 16 bytes + 8 byte literal + 8 byte pad = 32
+    asmf_printf('\tnop\n');
+#_IF DEF UNIX_MACHO
+    ;;; One more nop: the 5 instrs above are odd, so the rebasable action
+    ;;; literal below would land at a 4-mod-8 offset and dyld rejects it. With
+    ;;; 6 instrs (24 B) + the 8 B literal the closure is exactly 4 xwords (32 B,
+    ;;; as documented above) and the literal is 8-aligned.
+    asmf_printf('\tnop\n');
+#_ENDIF
     asm_outlab(l);
     asm_outword(action_lab, 1);
 enddefine;
@@ -338,8 +467,22 @@ enddefine;
 define global extern_name_translate(lang, symbol, type) -> symbol;
     lvars lang, symbol, type;
     returnif(lang = 'ASM');
-    if lang = 'FORTRAN' then uppertolower(symbol) <> '_' -> symbol endif
+    if lang = 'FORTRAN' then uppertolower(symbol) <> '_' -> symbol endif;
+#_IF DEF UNIX_MACHO
+    ;;; Darwin variadic ABI: the variadic part of a call goes on the STACK,
+    ;;; but Pop's extern calls pass everything in registers -- so calls to
+    ;;; variadic libc functions read garbage (e.g. open(2) got mode 000).
+    ;;; `read` is not variadic but needs the same routing: its wrapper
+    ;;; pre-flips lazy-W^X RX heap pages writable (kernel writes into an RX
+    ;;; buffer fail with EFAULT instead of faulting-and-retrying).
+    ;;; Wrappers live in pop/extern/lib/pop_vararg_fix.c.
+    if symbol = 'open' or symbol = 'fcntl' or symbol = 'ioctl'
+    or symbol = 'printf' or symbol = 'read' then
+        'pop_w_' <> symbol -> symbol
+    endif;
+    ;;; Mach-O: external C/Fortran symbols carry a leading underscore (foo -> _foo)
+    '_' <> symbol -> symbol;
+#_ENDIF
 enddefine;
 
 endsection;     /* $-Popas */
-

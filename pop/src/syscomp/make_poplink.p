@@ -23,7 +23,12 @@ sys_unlock_heap();
 true -> pop_record_writeable;
 
 load lib.p
-compile(pop_architecture >< '/sysdefs.p');
+compile(pop_architecture ><
+    ;;; native build targets the host OS: pick the matching sysdefs
+    ;;; (cross builds swap the file in the build tree instead)
+    if member("darwin", sys_os_type) then '/sysdefs_darwin.p'
+    else '/sysdefs.p'
+    endif);
 load mcdata.p
 load files.p
 load wordflags.p

@@ -23,6 +23,12 @@ enddefine;
 
 #_IF DEF MIPS
 lconstant macro EFC_CODE_SIZE = 20;
+#_ELSEIF DEF ARM64_LINUX or DEF ARM64_DARWIN
+    ;;; aarch64 closure code (syscomp/arm64/asmout.p
+    ;;; asm_gen_exfunc_clos_code): instructions + the 8-aligned action
+    ;;; literal = 4 xwords.  Must match, or EFC_ARG/EFC_ARG_DEST land
+    ;;; inside the code and the C function pointer reads garbage.
+lconstant macro EFC_CODE_SIZE = 32;
 #_ELSE
 lconstant macro EFC_CODE_SIZE = 16;
 #_ENDIF
@@ -81,6 +87,15 @@ lconstant
     SHLIB_EXTN = '.so',
     SHLIB_NAME = 'shared object',
 ;
+
+#_ELSEIF DEF DARWIN
+
+lconstant
+    SHLIB_EXTN = '.dylib',          ;;; macOS dynamic library (Mach-O)
+    SHLIB_NAME = 'dynamic library', ;;; what to call a shared library
+;
+    ;;; No DL_LIB: dlopen/dlsym live in libSystem, so extern_symbols.p skips
+    ;;; the dummy -ldl exload for Darwin (as it does for IRIX 5 / OSF1).
 
 #_ELSE_ERROR
 #_ENDIF

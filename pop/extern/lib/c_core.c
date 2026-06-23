@@ -569,15 +569,20 @@ int set_libc_errno(int x) {
  *  Handler for error-type signals, i.e. QUIT, ILL, IOT, EMT, FPE, BUS, SEGV
  */
 
-#if defined(SVR4) || defined(__linux__) || defined(__NetBSD__)
+#if defined(SVR4) || defined(__linux__) || defined(__NetBSD__) || defined(__APPLE__)
 /* Default case for SVR4, but not (yet) used for SG IRIX */
 #if !defined(__sgi)
 #define _POP_ERRSIG_HANDLER_
 
-#if !(defined(__linux__) || defined(__NetBSD__))
+#if !(defined(__linux__) || defined(__NetBSD__) || defined(__APPLE__))
 #include <siginfo.h>
 #endif
+#if defined(__APPLE__)
+#include <sys/ucontext.h>   /* mcontext types only; <ucontext.h> gates on _XOPEN_SOURCE */
+#include <stdio.h>          /* snprintf for the signal diagnostics */
+#else
 #include <ucontext.h>
+#endif
 
 #if defined(sparc) && !defined(REG_PC)
 /* old style */
@@ -614,6 +619,11 @@ int set_libc_errno(int x) {
 #endif
 
 
+#if defined(__APPLE__)
+/* defined below, next to the break emulation whose bounds it needs */
+extern int _pop_wx_fixup(siginfo_t *info, ucontext_t *context);
+#endif
+
 void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
 
     extern void __pop_errsig();
@@ -621,7 +631,82 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     int code = 0;
     caddr_t addr = NULL;
 
-    if (__pop_in_user_extern == -1) _exit(1);   /* outside Pop */
+#if defined(__APPLE__)
+    /* Lazy W^X: a fetch/write fault on a Pop heap page may just need that
+       page's protection flipped (heap holds runtime-generated code). If the
+       fixup repairs it, retry the faulting instruction. */
+    if ((sig == SIGBUS || sig == SIGSEGV) && info != NULL && context != NULL
+        && _pop_wx_fixup(info, context))
+        return;
+    /* diagnostic: every fatal signal reaching the Pop error machinery,
+       with the GC-in-progress flag (an exception raised while
+       _memory_is_corrupt is set is treated as fatal and can exit(1) without
+       managing to print anything -- errors.p Sys$-Raise_exception). */
+    if (context != NULL) {
+        extern unsigned long i_Sys_S_031memory__is__corrupt[]
+            __asm__("i_Sys_S_031memory__is__corrupt");
+        char fb[220];
+        int fn = snprintf(fb, sizeof fb,
+            "[fatal] sig=%d pc=%llx addr=%lx lr=%llx x0=%llx x16=%llx gcflag=%lx/%lx\n",
+            sig,
+            (unsigned long long) context->uc_mcontext->__ss.__pc,
+            (unsigned long) (info ? (unsigned long) info->si_addr : 0),
+            (unsigned long long) context->uc_mcontext->__ss.__lr,
+            (unsigned long long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long long) context->uc_mcontext->__ss.__x[16],
+            i_Sys_S_031memory__is__corrupt[1],
+            i_Sys_S_031memory__is__corrupt[2]);
+        write(2, fb, fn);
+    }
+    /* diagnostic: SIGBUS with PC in the shared cache (libc) -- e.g.
+       IC IVAU faulting inside sys_icache_invalidate: show the failing
+       address and the call chain registers. */
+    if (sig == SIGBUS && context != NULL
+        && context->uc_mcontext->__ss.__pc > 0x180000000UL
+        && context->uc_mcontext->__ss.__pc < 0x300000000UL) {
+        char b2[220];
+        int n2 = snprintf(b2, sizeof b2,
+            "[busc] pc=%llx addr=%lx lr=%llx x0=%llx x1=%llx x9=%llx\n",
+            (unsigned long long) context->uc_mcontext->__ss.__pc,
+            (unsigned long) (info ? (unsigned long) info->si_addr : 0),
+            (unsigned long long) context->uc_mcontext->__ss.__lr,
+            (unsigned long long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long long) context->uc_mcontext->__ss.__x[1],
+            (unsigned long long) context->uc_mcontext->__ss.__x[9]);
+        write(2, b2, n2);
+    }
+    /* diagnostic: register dump on illegal-instruction faults */
+    if (sig == SIGILL && context != NULL) {
+        char b[200];
+        int n = snprintf(b, sizeof b,
+            "[sigill] pc=%llx lr=%llx x0=%llx x16=%llx x20=%llx sp=%llx\n",
+            (unsigned long long) context->uc_mcontext->__ss.__pc,
+            (unsigned long long) context->uc_mcontext->__ss.__lr,
+            (unsigned long long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long long) context->uc_mcontext->__ss.__x[16],
+            (unsigned long long) context->uc_mcontext->__ss.__x[20],
+            (unsigned long long) context->uc_mcontext->__ss.__sp);
+        write(2, b, n);
+    }
+#endif
+
+    if (__pop_in_user_extern == -1) {
+#if defined(__APPLE__) && defined(__aarch64__)
+        /* never die silently -- dump the fatal-signal context */
+        char ob[200];
+        int on = snprintf(ob, sizeof ob,
+            "[outside-pop] sig=%d pc=%lx addr=%lx lr=%lx x0=%lx x16=%lx sp=%lx\n",
+            sig,
+            (unsigned long) context->uc_mcontext->__ss.__pc,
+            (unsigned long) info->si_addr,
+            (unsigned long) context->uc_mcontext->__ss.__lr,
+            (unsigned long) context->uc_mcontext->__ss.__x[0],
+            (unsigned long) context->uc_mcontext->__ss.__x[16],
+            (unsigned long) context->uc_mcontext->__ss.__sp);
+        write(2, ob, on);
+#endif
+        _exit(1);   /* outside Pop */
+    }
 
 #if defined(i386)||defined(__x86_64__)
     if (sig == SIGFPE) {
@@ -655,18 +740,31 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
     /* copy the details into a memory structure that pop can access */
     __pop_sigcontext.PSC_SIG    = sig;
     __pop_sigcontext.PSC_CODE   = code;
-/* XXX TODO: porting to ARM64, this may need its own ifdef*/
-#if defined(__arm__)||defined(__aarch64__)
+#if defined(__APPLE__)
+        /* Darwin: uc_mcontext is a _STRUCT_MCONTEXT* (see <mach/arm/_structs.h>);
+           the saved PC is __ss.__pc (__uint64_t). */
+        __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext->__ss.__pc;
+#elif defined(__aarch64__)
+        __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.pc;
+#elif defined(__arm__)
         __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.arm_pc;
+#elif defined(__riscv)
+        /* riscv64 glibc: mcontext_t.__gregs[REG_PC] (REG_PC==0) holds the PC */
+        __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.__gregs[REG_PC];
 #else
     __pop_sigcontext.PSC_PC = (char *) context->uc_mcontext.gregs[REG_PC];
 #endif
     __pop_sigcontext.PSC_ADDR   = (char *) addr;
 
     /* return to routine that cleans up and calls Error_signal */
-    /* XXX TODO: porting to ARM64, this may need its own ifdef*/
-#if defined(__arm__)||defined(__aarch64__)
+#if defined(__APPLE__)
+        context->uc_mcontext->__ss.__pc = (unsigned long) __pop_errsig;
+#elif defined(__aarch64__)
+        context->uc_mcontext.pc = (unsigned long) __pop_errsig;
+#elif defined(__arm__)
         context->uc_mcontext.arm_pc = (greg_t) __pop_errsig;
+#elif defined(__riscv)
+        context->uc_mcontext.__gregs[REG_PC] = (greg_t) __pop_errsig;
 #else
     context->uc_mcontext.gregs[REG_PC] = (greg_t) __pop_errsig;
 #endif
@@ -1717,6 +1815,329 @@ char * _pop_sbrk(int nbytes) {
 #endif  /* AIX */
 
 
+#if defined(__APPLE__)
+
+/****************************************************************************
+ * macOS: no usable sbrk/brk.  Emulate a contiguous, growable break over a
+ * reserved address range so GET_REAL_BREAK / SET_REAL_BREAK (sysdefs_darwin.p)
+ * work.  Pages are committed READ|WRITE only -- macOS forbids W^X heap pages;
+ * runtime-generated code is allocated separately via MAP_JIT (pop_jit.c).
+ * Beyond the break the range stays PROT_NONE, preserving the "access past the
+ * break faults" property the break exists to provide.
+ *
+ * FIRST DRAFT (Phase 1) -- the reservation size, the kernel-chosen base vs
+ * PIE/ASLR, and the interaction with the MAP_FIXED saved-image load are
+ * UNVERIFIED and must be settled during bring-up.  See
+ * PORTING-ARM64-M-SILICON-OSX.md Phase 3.
+ ****************************************************************************/
+
+#include <sys/types.h>
+#include <sys/mman.h>
+
+#define POP_BREAK_RESERVE ((size_t) 8 << 30)    /* 8 GiB of virtual headroom */
+
+/* Fixed placement: saved images (.psv) embed absolute heap addresses, so the
+ * reserve must land at the SAME base in every run (the loader also re-execs
+ * with ASLR disabled -- pop_seed_loader.c).  mmap address hints are ignored
+ * for large anon mappings on macOS, so take the address with
+ * mach_vm_allocate(VM_FLAGS_FIXED), which claims it exactly or fails cleanly
+ * if occupied (no clobbering, unlike mmap MAP_FIXED).  0x8000000000 (512 GiB)
+ * is reliably clear of the slide-0 image, the dyld cache, and the malloc
+ * zones (0x700000000 is malloc territory -- probed).  If even that is taken,
+ * fall back to a kernel-chosen base: corepop still works, but cross-run
+ * image restore will fail with "mapped at wrong address". */
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+
+#define POP_BREAK_BASE ((mach_vm_address_t) 0x8000000000ULL)
+
+/* Execution view: macOS forbids RWX pages, and Poplog interleaves runtime-
+ * generated code with data (a store can target the very page executing it,
+ * which per-page protection flipping can never satisfy -- observed as a
+ * ~1M-fault ping-pong).  Instead the SAME physical pages are mapped twice:
+ * the canonical view stays RW for all Pop data access, and an RX alias at
+ * canonical+POP_VIEW_OFFSET carries all execution.  The signal handler
+ * redirects any attempt to execute a canonical heap address into the view
+ * (pc += POP_VIEW_OFFSET); code is position-independent within a procedure
+ * and cross-procedure jumps go through absolute (canonical) literals, which
+ * fault and redirect again.  Verified on Apple Silicon: an RX vm_remap
+ * alias of RW anon memory is permitted (no MAP_JIT needed). */
+#define POP_VIEW_OFFSET ((mach_vm_address_t) 1 << 36)   /* view at 0x9000000000 */
+
+static char *break_base    = (char *) 0;    /* start of the reserved range */
+static char *break_limit   = (char *) 0;    /* end of the reserved range   */
+static char *current_break = (char *) 0;    /* committed top == the break  */
+static char *view_base     = (char *) 0;    /* RX alias of the reserve     */
+
+#include <pthread.h>
+
+/* (re)create the RX execution view of the break reserve at +POP_VIEW_OFFSET */
+static int pop_make_view(mach_vm_address_t canon) {
+    mach_vm_address_t view = canon + POP_VIEW_OFFSET;
+    vm_prot_t cur, max;
+    if (mach_vm_remap(mach_task_self(), &view, POP_BREAK_RESERVE, 0,
+                      VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(),
+                      canon, FALSE, &cur, &max,
+                      VM_INHERIT_NONE) == KERN_SUCCESS
+        && mprotect((void *) view, POP_BREAK_RESERVE,
+                    PROT_READ | PROT_EXEC) == 0) {
+        view_base = (char *) view;
+        return 0;
+    }
+    return -1;
+}
+
+static void pop_refresh_view_in_child(void) {
+    if (break_base != (char *) 0)
+        (void) pop_make_view((mach_vm_address_t) break_base);
+}
+
+static int pop_break_init(void) {
+    mach_vm_address_t addr = POP_BREAK_BASE;
+    if (mach_vm_allocate(mach_task_self(), &addr, POP_BREAK_RESERVE,
+                         VM_FLAGS_FIXED) == KERN_SUCCESS) {
+        /* zero-fill RW by default; demote to PROT_NONE so accesses past the
+           break fault, as the break contract requires */
+        if (mach_vm_protect(mach_task_self(), addr, POP_BREAK_RESERVE,
+                            0, VM_PROT_NONE) != KERN_SUCCESS) {
+            mach_vm_deallocate(mach_task_self(), addr, POP_BREAK_RESERVE);
+            addr = 0;
+        }
+    } else
+        addr = 0;
+
+    if (addr == 0) {
+        void *p = mmap((void *) 0, POP_BREAK_RESERVE, PROT_NONE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (p == MAP_FAILED) return -1;
+        addr = (mach_vm_address_t) p;
+    }
+    break_base = current_break = (char *) addr;
+    break_limit = break_base + POP_BREAK_RESERVE;
+
+    /* the execution view: one shared remap of the whole reserve, RX */
+    if (pop_make_view((mach_vm_address_t) addr) != 0) {
+        /* on failure view_base stays 0 and the handler falls back to
+           per-page flipping (slow, and same-page stores will wedge) */
+    }
+    /* the remap does not survive fork (and any inheritance mode would
+       let the child's view and its COW canonical diverge): rebuild the
+       child's view over ITS OWN canonical pages after every fork --
+       sysobey/sysexecute run Pop code in the child before exec. */
+    pthread_atfork(NULL, NULL, pop_refresh_view_in_child);
+    return 0;
+}
+
+int _pop_brk(char *new_break) {
+    if (current_break == (char *) 0 && pop_break_init() == -1) return -1;
+    if (new_break < break_base || new_break > break_limit) return -1;
+    if (new_break > current_break) {
+        /* commit: make the new pages readable+writable (never executable) */
+        if (mprotect(current_break, (size_t)(new_break - current_break),
+                     PROT_READ | PROT_WRITE) == -1) return -1;
+    } else if (new_break < current_break) {
+        /* decommit: back to PROT_NONE so accesses past the break fault */
+        if (mprotect(new_break, (size_t)(current_break - new_break),
+                     PROT_NONE) == -1) return -1;
+    }
+    current_break = new_break;
+    return 0;
+}
+
+char * _pop_sbrk(int nbytes) {
+    if (current_break == (char *) 0 && pop_break_init() == -1) return (char *) -1;
+    char *new_break = current_break + nbytes;
+    if (nbytes != 0 && _pop_brk(new_break) == -1) return (char *) -1;
+    return new_break;
+}
+
+/****************************************************************************
+ * Lazy per-page W^X for the Pop heap (called from _pop_errsig_handler).
+ *
+ * Poplog keeps runtime-generated code (closures, compiled procedures, and
+ * code the GC moves) interleaved with data in ONE heap.  macOS arm64 forbids
+ * writable+executable pages, so heap pages are committed RW and flipped
+ * per-page on demand: an instruction-fetch fault (PC == fault address)
+ * inside the committed break flips that page to RX (+ icache flush); a
+ * later write fault on such a page flips it back to RW.  The faulting
+ * instruction is then retried.  Correct, if potentially flippy -- a
+ * staging-buffer or split-allocation scheme can come later (Phase 4).
+ *
+ * Returns 1 if the fault was repaired (handler should just return), 0 if
+ * this is not a heap W^X fault (normal Pop error handling proceeds).
+ ****************************************************************************/
+
+#include <libkern/OSCacheControl.h>
+#include <unistd.h>
+
+/* no-progress guard state; reset by _pop_wx_make_writable below, whose
+   direct mprotects would otherwise make a legitimate re-flip look like a
+   repeat of the previous one */
+static char *wx_last_page = (char *) 0;
+static int   wx_last_exec = -1;
+
+int _pop_wx_fixup(siginfo_t *info, ucontext_t *context) {
+    char *addr = (char *) info->si_addr;
+    char *pc   = (char *) context->uc_mcontext->__ss.__pc;
+    int exec_fault = (addr == pc);
+
+    /* Exec faults are repaired anywhere in the reserve (a restored .psv maps
+       segments at their saved addresses, possibly beyond the current break);
+       write faults only below the break, preserving the fault-past-the-break
+       property. */
+    char *wx_limit = exec_fault ? break_limit : current_break;
+    if (break_base == (char *) 0 || addr < break_base || addr >= wx_limit) {
+        /* TEMP: why was this fault not repaired? */
+        char db[160];
+        int dn = snprintf(db, sizeof db,
+            "[wx-decline] addr=%lx base=%lx brk=%lx exec=%d\n",
+            (unsigned long) addr, (unsigned long) break_base,
+            (unsigned long) current_break, exec_fault);
+        write(2, db, dn);
+        return 0;                               /* not a Pop heap access */
+    }
+
+    long pagesz = sysconf(_SC_PAGESIZE);
+    char *page = (char *) ((unsigned long) addr & ~((unsigned long) pagesz - 1));
+
+    /* No-progress guard: flipping the same page to the same mode twice in a
+       row means the fault is not W^X -- let the error machinery have it. */
+    if (page == wx_last_page && exec_fault == wx_last_exec) {
+        char db[120];
+        int dn = snprintf(db, sizeof db,
+            "[wx-noprogress] page=%lx exec=%d\n", (unsigned long) page, exec_fault);
+        write(2, db, dn);
+        return 0;
+    }
+
+    if (exec_fault && view_base != (char *) 0) {
+        /* dual-mapping: continue this execution in the RX view of the same
+           physical page.  Flush the icache for the view page on its first
+           use (one bit per 16K page of the reserve); later code rewrites
+           are covered by the code generator's normal cache flushing. */
+        unsigned long off = (unsigned long) (page - break_base);
+        unsigned long pgno = off / (unsigned long) pagesz;
+        static unsigned char flushed[ (size_t) (((size_t)8 << 30) / 16384 / 8) ];
+        if (!(flushed[pgno >> 3] & (1u << (pgno & 7)))) {
+            sys_icache_invalidate(view_base + off, (size_t) pagesz);
+            flushed[pgno >> 3] |= (unsigned char) (1u << (pgno & 7));
+        }
+        context->uc_mcontext->__ss.__pc =
+            (unsigned long) (pc + ((unsigned long) view_base - (unsigned long) break_base));
+        return 1;
+    }
+    if (exec_fault) {
+        if (mprotect(page, (size_t) pagesz, PROT_READ | PROT_EXEC) == -1) return 0;
+        sys_icache_invalidate(page, (size_t) pagesz);
+    } else {
+        if (mprotect(page, (size_t) pagesz, PROT_READ | PROT_WRITE) == -1) return 0;
+    }
+    wx_last_page = page;
+    wx_last_exec = exec_fault;
+    return 1;
+}
+
+
+/* Instruction-cache flush for Poplog's CACHEFLUSH (sysdefs_darwin.p).
+ * IC IVAU faults on untranslatable pages, and Poplog flushes ranges that can
+ * cross uncommitted (PROT_NONE) parts of the break reserve -- observed: image
+ * restore faulting in sys_icache_invalidate at break_base+0x110000.  Clamp
+ * heap flushes to the committed break; invalidation is by physical line on
+ * Apple Silicon (verified), so flushing the canonical alias covers the
+ * execution view too. */
+void _pop_cache_flush(char *ptr, unsigned long nbytes) {
+    /* Walk the range region-by-region and flush only READABLE memory --
+       Poplog PROT_NONEs guard regions inside the break, and the break
+       reserve beyond the committed top is PROT_NONE too. */
+    char *end = ptr + nbytes;
+
+    /* defensive backstop: skip + log wild flush ranges (seen historically:
+       start=0x180000000 len=1.8GB -- the dyld shared cache; and the
+       original prolog.psv restore fault). Log and skip instead of letting
+       IC IVAU fault; the logged values identify the corrupt PD fields. */
+    if (nbytes > (64UL << 20) || ((unsigned long) ptr >> 32) == 0
+        || ((unsigned long) ptr < 0x8000000000UL
+            && (unsigned long) ptr > 0x200000000UL)) {
+        char b[160];
+        int n = snprintf(b, sizeof b,
+            "[flush-wild] ptr=%lx nbytes=%lx (skipped)\n",
+            (unsigned long) ptr, nbytes);
+        write(2, b, n);
+        return;
+    }
+    /* fast path: a range wholly inside the committed heap BELOW the
+       userstack limit page (the PROT_NONE guard sits AT _userhi) is
+       guaranteed mapped readable on both aliases -- flush directly.
+       This is the per-creation flush for every runtime procedure and
+       closure; the mach_vm_region walk below costs more than the
+       closure itself (M2 closures1M: 16cs walked vs ~4cs direct). */
+    {
+        extern unsigned long i__031userhi[] __asm__("i__031userhi");
+        char *userhi = (char *) i__031userhi[0];
+        if (view_base != (char *) 0
+            && ptr >= break_base && userhi != (char *) 0
+            && end <= userhi && end > ptr) {
+            sys_icache_invalidate(ptr, nbytes);
+            sys_icache_invalidate(ptr + ((unsigned long) 1 << 36), nbytes);
+            return;
+        }
+    }
+    while (ptr < end) {
+        mach_vm_address_t addr = (mach_vm_address_t) ptr;
+        mach_vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t objname;
+        if (mach_vm_region(mach_task_self(), &addr, &size,
+                           VM_REGION_BASIC_INFO_64, (vm_region_info_t) &info,
+                           &cnt, &objname) != KERN_SUCCESS)
+            break;
+        if ((char *) addr >= end) break;
+        {
+            char *rs = (char *) addr > ptr ? (char *) addr : ptr;
+            char *re = (char *) (addr + size);
+            if (re > end) re = end;
+            if ((info.protection & VM_PROT_READ) && rs < re) {
+                sys_icache_invalidate(rs, (size_t) (re - rs));
+                /* also invalidate via the execution-view alias: code
+                   executes at canonical+2**36, so keep both VAs clean
+                   (cheap belt-and-braces; icache maintenance by either
+                   alias has been observed sufficient on M-series). */
+                if ((unsigned long) rs >= 0x8000000000UL
+                    && (unsigned long) rs < 0x9000000000UL)
+                    sys_icache_invalidate(rs + ((unsigned long) 1 << 36),
+                                          (size_t) (re - rs));
+            }
+            ptr = re;
+        }
+    }
+}
+
+/* Make a heap buffer writable before a SYSCALL writes into it: the kernel
+ * does not take the user fault-and-retry path -- read(2) into a page the
+ * lazy W^X flipped to RX just fails with EFAULT ("ERROR READING DEVICE
+ * (Bad address)").  Called by the pop_w_* syscall wrappers
+ * (pop_vararg_fix.c) for any buffer inside the Pop heap reserve. */
+void _pop_wx_make_writable(void *buf, unsigned long n) {
+    char *p = (char *) buf;
+    if (break_base == (char *) 0 || p < break_base || p >= break_limit || n == 0)
+        return;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    char *page = (char *) ((unsigned long) p & ~((unsigned long) pagesz - 1));
+    char *end  = p + n;
+    /* clamp to the reserve, not the break: image restore read()s segments
+       into regions before raising the break over them */
+    if (end > break_limit) end = break_limit;
+    if (end > page) {
+        mprotect(page, (size_t) (end - page), PROT_READ | PROT_WRITE);
+        wx_last_page = (char *) 0;      /* protections changed: reset guard */
+        wx_last_exec = -1;
+    }
+}
+
+#endif  /* __APPLE__ */
+
+
 
 /**************************************************************************
  *                  Calling Math Library Functions                        *
@@ -2147,6 +2568,15 @@ linux_setper(int argc, char * * argv, char * * envp)
     }
 #endif
 }
+#elif defined(__APPLE__)
+/* macOS has no personality(2)/ADDR_NO_RANDOMIZE: PIE is mandatory on Darwin and
+   the (non-randomised) image load is rethought in the OS-layer port. But the
+   shared arm64 amain.s calls linux_setper unconditionally (amain.s:69), so
+   provide a no-op here to resolve the link. */
+void
+linux_setper(int argc, char * * argv, char * * envp)
+{
+}
 #endif
 /* --- Revision History ---------------------------------------------------
 --- Aaron Sloman and Waldek Hebisch 2 Dec 2008
@@ -2447,3 +2877,27 @@ linux_setper(int argc, char * * argv, char * * envp)
         problems with programs that use -malloc- to get space for
         double-float operations on SPARC etc).
  */
+
+/* rv_cacheflush -- robust instruction-cache sync for self-modifying code
+   (closures and other JIT-planted procedures) on RISC-V.
+
+   The Poplog runtime writes native code into the heap and then asks
+   CACHEFLUSH (see pop/src/syscomp/riscv64/sysdefs.p) to make it executable.
+   A bare range __clear_cache() proved insufficient on the StarFive
+   VisionFive (JH7100, dual SiFive U74): under heavy GC address reuse --
+   short-lived closures churned through collection so their addresses are
+   recycled -- freshly written closure code was occasionally still stale in
+   the i-cache at call time, faulting SIGILL on a perfectly valid `auipc`.
+
+   The fix brackets the kernel flush with fences: a leading `fence rw, rw`
+   drains the code stores to the point of unification before the i-cache is
+   invalidated, and a trailing local `fence.i` is a belt-and-braces barrier.
+   __builtin___clear_cache() still issues the kernel range flush (which
+   handles cross-hart invalidation). */
+int rv_cacheflush(unsigned long ptr, unsigned long nbytes)
+{
+    __asm__ volatile("fence rw, rw" ::: "memory");
+    __builtin___clear_cache((char*) ptr, (char*) (ptr + nbytes));
+    __asm__ volatile("fence.i" ::: "memory");
+    return 0;
+}

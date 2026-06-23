@@ -15,6 +15,12 @@ usage() {
   echo "  --with_motif      fail if no Motif"
   echo "  --with_xt         use X toolkit instead of Motif"
   echo "  --with_no_x       do not use X"
+  echo "  --experimental-graphics[=metal|sdl]  native ImGui graphics; implies no X."
+  echo "                           No value picks the default backend by OS:"
+  echo "                           Metal+Cocoa on macOS, SDL3+OpenGL elsewhere."
+  echo "                           =metal is macOS-only; =sdl works on macOS and Linux"
+  echo "                           and needs SDL3 (pkg-config, or SDL3_CFLAGS/SDL3_LIBS)."
+  echo "  --experimental-gfx[=...]  alias for --experimental-graphics"
   echo "  --with_packages   fail if package tree is missing"
 }
 
@@ -35,6 +41,18 @@ while [ "$*" != "" ] ; do
            X_CONF=xt
              ;;
         --with_no_x)
+           X_CONF=no
+             ;;
+        --experimental-graphics|--experimental-gfx)
+           # "gfx requested", default backend; resolved by OS below (HOST_OS
+           # isn't known yet at option-parse time).
+           GFX_REQ=yes; GFX_BACKEND=auto
+           X_CONF=no
+             ;;
+        --experimental-graphics=*|--experimental-gfx=*)
+           # explicit backend: --experimental-graphics=metal|sdl
+           GFX_REQ=yes
+           GFX_BACKEND=`expr "x$1" : 'x[^=]*=\(.*\)'`
            X_CONF=no
              ;;
         --with_packages)
@@ -70,7 +88,75 @@ if [ -z "$HOST_ARCH" ]; then
 fi
 
 
+HOST_OS=`uname -s`
+
+# Resolve the experimental-graphics backend.  --experimental-graphics with no
+# value picks per OS (Metal on macOS, SDL3 elsewhere); =metal / =sdl force one.
+# Metal is macOS-only; SDL needs SDL3 (pkg-config, or SDL3_CFLAGS/SDL3_LIBS env).
+if [ "$GFX_REQ" = yes ]; then
+    case "$GFX_BACKEND" in
+        auto)  if [ "$HOST_OS" = Darwin ]; then GFX_BACKEND=metal; else GFX_BACKEND=sdl; fi ;;
+        metal|sdl) ;;
+        *) echo "ERROR: --experimental-graphics=$GFX_BACKEND: unknown backend (use metal or sdl)."; exit 1 ;;
+    esac
+    if [ "$GFX_BACKEND" = metal ] && [ "$HOST_OS" != Darwin ]; then
+        echo "ERROR: the Metal graphics backend is macOS-only; use --experimental-graphics=sdl."
+        exit 1
+    fi
+    if [ "$GFX_BACKEND" = metal ]; then
+        GFX_CONF=imgui
+    else
+        GFX_CONF=imgui-sdl
+        # SDL3 build flags: honour SDL3_CFLAGS/SDL3_LIBS from the environment
+        # (for a from-source SDL3 that pkg-config can't see), else pkg-config.
+        if [ -z "$SDL3_LIBS" ]; then
+            if pkg-config --exists sdl3 2>/dev/null; then
+                SDL3_CFLAGS=`pkg-config --cflags sdl3`
+                SDL3_LIBS=`pkg-config --libs sdl3`
+            else
+                echo "ERROR: --experimental-graphics=sdl needs SDL3, which pkg-config can't find."
+                echo "       Install it (brew install sdl3, or your distro's libsdl3-dev), or set"
+                echo "       SDL3_CFLAGS and SDL3_LIBS to point at a build, e.g.:"
+                echo "         SDL3_CFLAGS='-I/path/SDL/include' \\"
+                echo "         SDL3_LIBS='-L/path/SDL/build -Wl,-rpath,/path/SDL/build -lSDL3' \\"
+                echo "         ./configure --experimental-graphics=sdl"
+                exit 1
+            fi
+        fi
+        # OS-specific OpenGL link: a framework on macOS, -lGL elsewhere.
+        if [ "$HOST_OS" = Darwin ]; then
+            GFX_SDL_CFLAGS="$SDL3_CFLAGS -DGL_SILENCE_DEPRECATION"
+            GFX_SDL_LIBS="$SDL3_LIBS -framework OpenGL -lc++"
+        else
+            GFX_SDL_CFLAGS="$SDL3_CFLAGS"
+            GFX_SDL_LIBS="$SDL3_LIBS -lGL -lstdc++"
+        fi
+    fi
+fi
+
 CC_LINK_OPTIONS="-Wl,-export-dynamic"
+if [ "$HOST_OS" = Darwin ]; then
+    # macOS is supported on Apple Silicon (arm64) ONLY.  The Darwin port
+    # lives in the arm64 backend (Mach-O output in syscomp/arm64, the
+    # __POPSEED seed segment, the dual-mapped heap); the x86_64 backend
+    # still emits ELF/GNU-as and none of the OS-layer work exists there.
+    # Note Intel-Darwin would actually be EASIER in OS policy (no hard
+    # W^X, -no_pie works on x86_64 Mach-O) but needs the object-format
+    # work redone in syscomp/x86_64 -- see PORTING-ARM64-M-SILICON-OSX.md.
+    if [ "$HOST_ARCH" != arm64 ] && [ "$HOST_ARCH" != aarch64 ]; then
+        echo "ERROR: Poplog on macOS is only supported on Apple Silicon (arm64)."
+        echo "       Darwin/$HOST_ARCH is not ported (the $HOST_ARCH backend emits ELF)."
+        echo "       See PORTING-ARM64-M-SILICON-OSX.md for what a port would entail."
+        exit 1
+    fi
+    # macOS arm64 (Apple M-silicon). PIE is mandatory (-no-pie is ignored on
+    # arm64), ld64 has none of the GNU-ld options probed below, and the
+    # bootstrap flow differs (see PORTING-ARM64-M-SILICON-OSX.md and
+    # tools/build-msilicon.sh): corepop is linked from popc-emitted Mach-O
+    # plus the C runtime, with the Pop seed in a __POPSEED segment remapped
+    # executable at startup.
+    CC_LINK_OPTIONS=""
+fi
 case "$HOST_ARCH" in
   i86pc)
       # Solaris
@@ -84,8 +170,19 @@ case "$HOST_ARCH" in
   aarch64)
       POP_arch=arm64
         ;;
+  arm64)
+      # macOS reports arm64 (not aarch64); without this it would fall
+      # through to the 32-bit arm case below.
+      POP_arch=arm64
+        ;;
   arm*)
       POP_arch=arm
+        ;;
+  riscv64)
+      # RISC-V 64-bit (rv64gc/LP64D), Linux/ELF.  Codegen backend is WIP --
+      # see PORTING-RISCV64-LINUX.md; pop/src/syscomp/riscv64 does not exist
+      # yet, so a build will stop at stamp_popc until it lands.
+      POP_arch=riscv64
         ;;
   x86_64)
       POP_arch="$HOST_ARCH"
@@ -128,6 +225,12 @@ else
 fi
 rm -f conftest.exe
 
+if [ "$HOST_OS" = Darwin ]; then
+    # clang ACCEPTS -no-pie but arm64 ld64 ignores it; the GNU-ld options
+    # below do not exist there. Skip the probes.
+    HAS_NOPIE=no; HAS_AS_NEEDED=no; HAS_HASH_STYLE=no; HASH_STYLE_OPT=""
+    echo "Darwin: skipping GNU-ld option probes (PIE mandatory)"
+else
 echo -n "Testing if compiler recognizes -no-pie"
 NO_PIE_OPT=-no-pie
 comp_cmd="${CC} $NO_PIE_OPT conftest.c -o conftest.exe"
@@ -163,6 +266,7 @@ else
 fi
 rm -f conftest.exe
 echo "   "$HAS_HASH_STYLE
+fi
 
 if [ x"$X_CONF" != "xno" ] ; then
 
@@ -258,7 +362,7 @@ POPEXTERNLIB=$USEPOP/$POP_target/exlib
 POPOBJLIB=$USEPOP/$POP_target/obj
 
 SUBSTS="s,@@USEPOP@@,$USEPOP,"
-for A in POPSYS POPEXTERNLIB POPOBJLIB X_CONF X_INCLUDES \
+for A in POPSYS POPEXTERNLIB POPOBJLIB X_CONF GFX_CONF X_INCLUDES \
     ABS_BUILD  POP_BIN_DIR POP_arch CC POP_target PACK_CONF ;
 do
     VAL=`eval echo '$'"$A"`
@@ -266,7 +370,10 @@ do
 done
 O_sub1="s:@@CC_LINK_OPTIONS@@:$CC_LINK_OPTIONS:"
 O_sub2="s:@@HASH_STYLE_OPT@@:$HASH_STYLE_OPT:"
-SUBSTS="$SUBSTS;$O_sub1;$O_sub2"
+# SDL3 flags can contain commas (-Wl,-rpath,...), so substitute with a | delim.
+O_gfx1="s|@@GFX_SDL_CFLAGS@@|$GFX_SDL_CFLAGS|"
+O_gfx2="s|@@GFX_SDL_LIBS@@|$GFX_SDL_LIBS|"
+SUBSTS="$SUBSTS;$O_sub1;$O_sub2;$O_gfx1;$O_gfx2"
 
 for A in Makefile scripts/poplog ; do
    B=`basename ${A}`
