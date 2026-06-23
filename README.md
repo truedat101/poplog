@@ -34,6 +34,45 @@ and interoperate freely.  Captured from the Apple Silicon (macOS) build:
 | **Common Lisp — CLTL2** | **Standard ML — type inference** |
 | ![Common Lisp REPL](docs/images/repl-clisp.png) | ![Standard ML REPL](docs/images/repl-pml.png) |
 
+## Forth — a fifth language (new in this fork)
+
+The four languages above are classic Poplog.  This fork adds a fifth,
+**Forth**, as a first-class Poplog subsystem.  The design leans on Poplog's
+open-stack calling convention so the implementation stays small and the result
+is genuinely native:
+
+* **Forth's data stack *is* the Poplog user stack**, so Forth primitives are
+  ordinary open-stack Pop-11 procedures (`+` is `define f_plus(x,y); x+y
+  enddefine`).
+* **Colon definitions compile to machine code.**  `: name … ;` transpiles to a
+  Pop-11 procedure and is run through Poplog's incremental compiler, so a Forth
+  word is a real native procedure — not threaded/interpreted code.  Control
+  words (`if/else/then`, `begin/until`, `begin/while/repeat`, `do/loop`,
+  `recurse`, `exit`) map onto Pop-11 constructs at compile time.
+* **A first-class subsystem:** `.fth` is a recognised file type and `uses
+  forth;` enters the REPL, alongside `pop11`/`lisp`/`prolog`/`ml`; `bye` or
+  `pop11` returns to Pop-11.
+
+```
+$ tools/forth.sh                 # interactive REPL  (-t testbench, -b bench, -c '…')
+forth> : sq  dup * ;
+forth> 9 sq .
+81  ok
+forth> : fib  dup 2 < if drop 1 else dup 1 - recurse swap 2 - recurse + then ;
+forth> 10 fib .
+89  ok
+```
+
+The current core covers arithmetic, ~40 stack/compare/bitwise/IO words, native
+colon definitions, the control words above, counted loops (`do/loop/i/j/leave`),
+`variable`/`constant`/`@`/`!`, a return stack (`>r r@ r>`), and string literals.
+It is newer and leaner than the four mature languages (no `+loop` /
+`create does>` / `value` yet; case-sensitive).  Because it is pure Pop-11 it
+runs on **every platform Poplog does**; the built-in `testbench` is **21/21** on
+macOS arm64 and on RISC-V (StarFive VisionFive).  Implementation:
+`pop/forth/src/forth.p`; examples in `pop/forth/examples/`; performance in
+[BENCHMARKS.md](BENCHMARKS.md#forth).
+
 ## Platforms
 
 Poplog builds and runs natively on a growing set of platforms

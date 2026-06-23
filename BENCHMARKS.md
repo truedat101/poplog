@@ -323,6 +323,33 @@ Poplog win.
 
 ---
 
+## Forth
+
+Poplog Forth (a fifth language added in this fork — see the
+[README](README.md)) compiles colon definitions to **native code**: `: name … ;` transpiles to a Pop-11 procedure
+and goes through the same incremental compiler as everything above, so a Forth
+word *is* a machine-code procedure and inherits the engine numbers in this
+report. It is pure Pop-11, so it runs on every platform Poplog does; the
+built-in `testbench` is **21/21** on macOS arm64 and on the RISC-V StarFive
+VisionFive.
+
+Its own micro-benchmark (`tools/forth.sh -b`) is a separate, lighter
+instrument than the engine suite above — **wall-clock** (`sys_microtime`), a
+single timed run, not the CPU-time median-of-30 methodology — so treat it as
+indicative, not directly comparable to the tables. It times three native
+colon-defs; on the **M5 Pro** (macOS arm64):
+
+| Forth workload | M5 Pro |
+|---|---|
+| `fib(32)` (recursive) | ~161 ms |
+| `count` to 50,000,000 (`do/loop`) | ~98 ms |
+| `sum` to 50,000,000 (`do/loop` + accumulate) | ~126 ms |
+| total | ~385 ms |
+
+The shape tracks the engine results — recursion-heavy `fib` dominates, the
+counted loops are cheaper — confirming colon-defs really are native procedures
+rather than threaded code.
+
 ## Reproducing
 
 Clear the decks first (close browsers/apps; on Linux set the CPU governor to
