@@ -36,6 +36,7 @@ pre: how what
 pre: when what
 pre: certainly yes
 pre: machine computer
+pre: machines computer
 pre: computers computer
 pre: were was
 pre: you're you are
@@ -233,7 +234,7 @@ key: i
     reasmb: Why don't you (2) ?
     reasmb: Do you wish to be able to (2) ?
     reasmb: Does that trouble you ?
-  decomp: * do i feel *
+  decomp: * i feel *
     reasmb: Tell me more about such feelings.
     reasmb: Do you often feel (2) ?
     reasmb: Do you enjoy feeling (2) ?

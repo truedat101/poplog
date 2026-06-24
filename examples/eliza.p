@@ -192,9 +192,9 @@ define build_doctor(fname);
             split_ws(rest) -> toks;
             maplist(tl(toks), procedure(s); consword(lc(s)) endprocedure)
                 -> eliza_pre(consword(lc(hd(toks))))
-        elseif dir = 'post' then
-            split_ws(rest) -> toks;
-            maplist(tl(toks), procedure(s); consword(lc(s)) endprocedure)
+        elseif dir = 'post' then                  ;;; key matched lower-case; value keeps
+            split_ws(rest) -> toks;                ;;; its case (so you -> "I", not "i")
+            maplist(tl(toks), procedure(s); consword(s) endprocedure)
                 -> eliza_post(consword(lc(hd(toks))))
         elseif dir = 'synon' then
             split_ws(rest) -> toks;
