@@ -2,6 +2,48 @@
 
 Small, self-contained Pop-11 programs.
 
+## Console demos
+
+No graphics build needed — these run on a plain console Poplog.
+
+### `eliza.p` — ELIZA (Weizenbaum's DOCTOR)
+
+A faithful implementation of Joseph Weizenbaum's 1966 ELIZA — the original
+chatbot — using the *real* technology, not the thin teaching pattern-matcher
+usually shown for Pop-11: keyword **ranking**, **decomposition** rules with
+wildcards and synonym classes, **reassembly** templates cycled round-robin,
+pronoun **reflection**, `goto` **equivalence**, and the **MEMORY** mechanism
+(it stows what you say about "my …" and brings it back later). The engine is
+`eliza.p`; the DOCTOR script is the data file [`doctor.txt`](doctor.txt), read
+at startup — Weizenbaum's own script/engine separation. Pop-11's list matcher
+makes the decomposition engine a couple of dozen lines.
+
+```sh
+./poplog ./target/pop/basepop11 examples/eliza.p     # or:  tools/eliza.sh
+```
+
+It reproduces the canonical conversation from Weizenbaum's paper almost
+verbatim (your lines are the indented ones):
+
+```
+How do you do.  Please tell me your problem.
+    Men are all alike.
+In what way?
+    They are always bugging us about something or other.
+Can you think of a specific example?
+    Well, my boyfriend made me come here.
+Your boyfriend made you come here?
+    He says I am depressed much of the time.
+I am sorry to hear that you are depressed.
+    My mother takes care of me.
+Tell me more about your family.
+    It is raining today.                  <- no keyword: a stored memory returns
+Lets discuss further why your mother takes care of you.
+```
+
+Type `bye`, `goodbye`, `quit`, or end-of-file (Ctrl-D) to leave. Swap in a
+different script by editing `doctor.txt`.
+
 ## Graphics demos
 
 These use the experimental native graphics backend (`uses popgfx` /
