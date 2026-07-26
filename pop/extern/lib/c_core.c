@@ -2878,6 +2878,7 @@ linux_setper(int argc, char * * argv, char * * envp)
         double-float operations on SPARC etc).
  */
 
+#if defined(__riscv)
 /* rv_cacheflush -- robust instruction-cache sync for self-modifying code
    (closures and other JIT-planted procedures) on RISC-V.
 
@@ -2901,3 +2902,4 @@ int rv_cacheflush(unsigned long ptr, unsigned long nbytes)
     __asm__ volatile("fence.i" ::: "memory");
     return 0;
 }
+#endif /* __riscv */

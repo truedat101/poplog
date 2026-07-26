@@ -81,7 +81,7 @@ Poplog builds and runs natively on a growing set of platforms
 | OS | Architecture | Status | Notes |
 | --- | --- | --- | --- |
 | **Linux** | x86-64 | ✅ Supported | Reference platform |
-| **Linux** | AArch64 (ARM64) | ✅ Supported | Validated on Raspberry Pi 5 — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so it ports readily to other ARM64 boards (MediaTek Genio, Qualcomm Snapdragon) |
+| **Linux** | AArch64 (ARM64) | ✅ Supported | Validated + benchmarked on **Raspberry Pi 5** and **MediaTek Genio 720** (MT8391, 2×A78+6×A55; GlobalScale Cortadodeck 720) — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so other ARM64 boards (Qualcomm Snapdragon etc.) should follow readily |
 | **macOS** | Apple Silicon (arm64) | ✅ Supported | Native Mach-O port — self-hosting, all four languages, terminal VED, C↔Pop callbacks, and native graphics |
 | **Linux** | ARM32 (`armv6`/`armv7`) | ✅ Supported | Long-standing 32-bit ARM port (`pop/src/syscomp/arm`); Raspberry Pi 1–3 and other 32-bit ARM Linux.  Not benchmarked in this report |
 | **Solaris** | x86 (i386) | ✅ Supported | Upstream port (W. Hebisch); tested on Solaris 10 (`CC=gcc`, vendored `corepop_solaris.i386`).  Not benchmarked here |
@@ -104,7 +104,9 @@ Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
 A self-contained **Nix flake** builds and bootstraps the whole system — all
 four languages and their saved images — from source, with no manual seed or
 toolchain setup.  Tested end-to-end on `x86_64-linux` and `aarch64-darwin`;
-`aarch64-linux` ships a vendored seed.
+the `aarch64-linux` build is deployed and benchmarked on a MediaTek Genio 720
+(the **G720** column in BENCHMARKS.md is the flake build running from a Nix
+profile).
 
 ```sh
 nix build .#poplog          # build; then ./result/bin/{pop11,clisp,prolog,pml,ved}
@@ -178,8 +180,8 @@ examples/tenprint.p` on a graphics build) — for instance the classic
 
 Poplog's incremental compilers emit fast native code on every backend.  For
 cross-platform and cross-language benchmark numbers (x86-64, Apple M-series,
-Raspberry Pi 5, with Python and Perl baselines for context), see
-**[BENCHMARKS.md](BENCHMARKS.md)**.
+Raspberry Pi 5, MediaTek Genio 720, RISC-V, with Python and Perl baselines for
+context), see **[BENCHMARKS.md](BENCHMARKS.md)**.
 
 ---
 
@@ -189,7 +191,15 @@ core part.  It misses binary needed for bootstrap and extensions
 
   https://github.com/hebisch/poplog_packages
 
-You can find bootstrap binaries at:
+Bootstrap (`corepop`) binaries for the platforms ported here — x86-64
+Linux, AArch64 Linux, Apple Silicon macOS, and RISC-V RV64GC Linux — are
+published with checksums on this repository's releases page:
+
+  https://github.com/IoTone/poplog/releases
+
+(e.g. `releases/latest/download/corepop-aarch64-linux`; the same seeds
+are vendored under `nix/seeds/` for the Nix flake build).  For the older
+upstream platforms you can find bootstrap binaries at:
 
   https://poplog.fricas.org/corepops
 

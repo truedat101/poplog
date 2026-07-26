@@ -241,9 +241,14 @@ State of each as a rule to **preserve**, not a bug to rediscover.
 > clone — placing it is always a manual first step) and is **native machine code,
 > hence architecture-specific**: an x86-64 corepop won't run on AArch64, and a
 > 32-bit `corepop.arm` (armhf) is **not** an AArch64 corepop (a common trap).
-> - **Established arch** (x86-64, i386, 32-bit ARM, FreeBSD…): download one from
+> - **Arch already ported here** (x86-64 Linux, AArch64 Linux, Apple Silicon,
+>   RISC-V RV64GC Linux): download a seed from this repo's GitHub Releases
+>   (`corepop-<arch>-<os>` + `SHA256SUMS`;
+>   <https://github.com/IoTone/poplog/releases>) → `target/pop/corepop`. The
+>   same seeds are vendored under `nix/seeds/` for the Nix flake build.
+> - **Established upstream arch** (i386, 32-bit ARM, FreeBSD…): download one from
 >   `poplog.fricas.org/corepops/` → `target/pop/corepop`.
-> - **New arch** (AArch64, Apple Silicon): there is **no download**, and you can't
+> - **Genuinely new arch**: there is **no download**, and you can't
 >   mint the first one *natively* (the target's `popc`/`poplink` are still the
 >   host's corepop — PORTING.txt §0: *"porting involves cross-compilation; one needs
 >   running Poplog on some machine (the host)"*). **Cross-build it on the host:**
@@ -252,8 +257,10 @@ State of each as a rule to **preserve**, not a bug to rediscover.
 >   `basepop11`, since `popc` is architecture-neutral Pop and the host corepop
 >   happily emits the target's code. Seed it onto the target as
 >   `target/pop/corepop` to make it **self-hosting** (a one-time, per-architecture
->   "compiler-compiler" seed), and **publish a `corepop.<arch>`** so others
->   bootstrap without a host.
+>   "compiler-compiler" seed), and **publish it** so others bootstrap without a
+>   host: vendor it as `nix/seeds/corepop-<arch>-<os>`, then tag a `corepops-*`
+>   release (`.github/workflows/corepops-release.yml` packages and checksums the
+>   vendored seeds automatically).
 >
 > `basepop11` is the same species — the *full* core — so it's easy to overlook you
 > still need a `corepop` once the images build. Worked example + script:

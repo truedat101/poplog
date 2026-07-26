@@ -233,14 +233,23 @@ LIBPOP_OBJS0 = $(addprefix ${popexlib}/, $(addsuffix .o, \
 
 LIBPOP_OBJS = ${LIBPOP_OBJS0} ${XT_OBJECT} ${GFX_OBJECT}
 
+# Poplog's C externs are legacy K&R/C89 (e.g. `typedef unsigned bool`,
+# unprototyped `()` signal handlers). GCC 14 promoted several warnings to hard
+# errors and GCC 15 defaults to C23 (where `bool` is a keyword and `()` means
+# `(void)`) -- both reject this code. Compile the extern lib as C17 and don't
+# fail on the pre-standard pointer conversions. Dropping this pin back to the
+# compiler default needs the C23 source modernisation tracked in
+# docs/bugs/c23-modernization.md.
+POPCFLAGS = -std=gnu17 -Wno-error=incompatible-pointer-types
+
 ${LIBPOP_OBJS0}: ${popexlib}/%.o: pop/extern/lib/%.c stamp_dirs_and_symlinks
-	$(CC) -c -g -Wall -O $< -o $@
+	$(CC) -c -g -Wall -O $(POPCFLAGS) $< -o $@
 
 ${popexlib}/XtPoplog.o: pop/extern/lib/XtPoplog.c stamp_dirs_and_symlinks
-	$(CC) -c -g -Wall -O $(X_INCLUDES) $< -o $@
+	$(CC) -c -g -Wall -O $(POPCFLAGS) $(X_INCLUDES) $< -o $@
 
 ${popexlib}/pop_seed_loader.o: pop/extern/lib/pop_seed_loader.c stamp_dirs_and_symlinks
-	$(CC) -c -g -Wall -O $< -o $@
+	$(CC) -c -g -Wall -O $(POPCFLAGS) $< -o $@
 
 # GFX object compilation (only built when referenced -- GFX_CONF=imgui*).
 # The ImGui core + SDL/GL backends compile with ${GFX_CXX} (clang++ on macOS,
