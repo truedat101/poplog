@@ -189,7 +189,15 @@ core part.  It misses binary needed for bootstrap and extensions
 
   https://github.com/hebisch/poplog_packages
 
-You can find bootstrap binaries at:
+Bootstrap (`corepop`) binaries for the platforms ported here — x86-64
+Linux, AArch64 Linux, Apple Silicon macOS, and RISC-V RV64GC Linux — are
+published with checksums on this repository's releases page:
+
+  https://github.com/IoTone/poplog/releases
+
+(e.g. `releases/latest/download/corepop-aarch64-linux`; the same seeds
+are vendored under `nix/seeds/` for the Nix flake build).  For the older
+upstream platforms you can find bootstrap binaries at:
 
   https://poplog.fricas.org/corepops
 
