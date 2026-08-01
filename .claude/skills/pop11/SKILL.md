@@ -20,16 +20,22 @@ than CPython on these), or when the user asks for Pop-11 / Poplog.
 **Prefer plain Python** for one-off glue needing rich libraries (JSON APIs,
 images, data science) — Pop-11 has no JSON/image libraries yet.
 
-## Setup (once per machine)
+## Setup
 
-Requires a built Poplog tree. Set `POPLOG_ROOT` to it (must contain
-`./poplog` and `./target/pop/basepop11`):
+**Usually none.** If this skill was installed by `install.sh` (or the curl
+one-liner), the engine location is already persisted in
+`~/.cache/pop11-skill/config.json` and `popsession` finds it automatically —
+do NOT hunt for a Poplog install or set any environment variable; just run
+`popsession start`. If that fails with "cannot find a built Poplog tree",
+only then point it at a make-built checkout (a tree containing `./poplog`
+and `./target/pop/basepop11` — note: NOT the layout of classic V16 installs):
 
 ```sh
-export POPLOG_ROOT=/path/to/poplog        # e.g. a checkout built with `make`
+popsession start --poplog-root /path/to/built/poplog-checkout
 ```
 
-All commands below live in this skill's `bin/` directory.
+(or `export POPLOG_ROOT=...`). All commands below live in this skill's
+`bin/` directory.
 
 ## The session lifecycle
 
