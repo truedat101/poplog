@@ -98,6 +98,11 @@ while cond do ... endwhile;
 [1 2 3]                           ;;; list;  hd(l), tl(l), length(l), l(2) indexes
 {1 2 3}                           ;;; vector
 newproperty([], 50, false, true) -> tbl;   ;;; hash table: tbl(key) / val -> tbl(key)
+;;; TRAP: newproperty matches keys by IDENTITY (==) — two equal-spelled
+;;; strings are DIFFERENT keys, so string-keyed lookups silently miss.
+;;; For string-ish keys either intern them to words (identity-equal by
+;;; spelling):  consword('read_file') -> k;   or use a mapping, which
+;;; compares keys with = (structural):  newmapping([], 50, false, true) -> tbl;
 ```
 
 File and process idioms:
@@ -150,7 +155,9 @@ complex jq programs to a file (`jq -f prog.jq`) to avoid shell-quoting pain.
 
 - Send chunks via `-f file.p` when they contain quotes — avoids shell escaping.
 - `line_repeater`'s buffer truncates longer lines; size `inits(n)` generously.
-- Words vs strings (`"x"` vs `'x'`) is the #1 beginner error.
+- Words vs strings (`"x"` vs `'x'`) is the #1 beginner error; its silent
+  cousin is string keys in `newproperty` (identity-matched — see the TRAP
+  note above). Prefer word keys or `newmapping`.
 - The session is single-threaded; a long-running chunk blocks later sends
   (use `--timeout` on sends that may run long).
 - Checkpoint images restore heap state, not open files/network handles.
