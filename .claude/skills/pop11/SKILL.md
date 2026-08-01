@@ -129,6 +129,9 @@ non-number, often that undef); `STRING NEEDED` (passed a word `"x"` where a
 string `'x'` was expected — check quote type); `MISHAP ... INCORRECT DEFINE
 SYNTAX` (check header parentheses and `enddefine`). Every closing keyword is
 required: `endif`, `endfor`, `endwhile`, `enddefine`, `endrepeat`.
+`nonop` is ONLY for passing infix operators as values (`nonop +`,
+`nonop ><`); ordinary procedures (`alphabefore`, `issubstring`, …) are
+passed by bare name — `nonop` before them is a syntax error.
 
 ## HTTPS: popcurl (native) or curl CLI
 
