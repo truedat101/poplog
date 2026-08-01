@@ -1,6 +1,6 @@
 # pop11 skill — status & post-demo checklist
 
-Last updated: 2026-07-31 (pre-demo). Companion docs: [SKILL.md](SKILL.md)
+Last updated: 2026-08-01 (post-validation, pre-demo). Companion docs: [SKILL.md](SKILL.md)
 (usage), [demo/DEMO.md](demo/DEMO.md) (walkthrough),
 [../../tools/bench-skill/README.md](../../../tools/bench-skill/README.md)
 (numbers).
@@ -24,15 +24,29 @@ Last updated: 2026-07-31 (pre-demo). Companion docs: [SKILL.md](SKILL.md)
 Priority order. "P" = pure Pop-11 (portable to every port for free),
 "C" = needs a small C shim like popcurl.
 
-- [ ] **lib json** (P, 2–4 days) — recursive-descent parser + printer;
-      objects→properties, arrays→vectors; `\uXXXX`; JSONTestSuite pass.
-      *The single highest-leverage gap: unlocks API work without jq.*
+None of these block the skill: the 2026-08-01 odysseus field trials went
+4/4 with zero of them written, using shipped builtins + CLI bridges
+(jq, sqlite3, sysobey). This roadmap deepens the "in-process at
+microsecond cost" story; ranked by field evidence, not theory.
+
+- [ ] **sqlite shim** (C, 2–3 days) — the only item with a measured cost:
+      a real DB report via the sqlite3-CLI bridge spent ~375 ms spawning
+      ~52 sqlite3 processes for one pass (field trial 4, 2026-08-01).
+      In-process binding collapses that to microseconds per query; the API
+      is almost entirely non-variadic, so the popcurl pattern transfers
+      directly.
 - [ ] **lib shell** (P, 2–3 days) — real process orchestration, the core of
       "tooling/shell" work. `run(cmd) -> (output_string, status)`,
       `run_lines(cmd) -> list`, stderr capture, exit-code access, timeout
       kill, background jobs + wait, pipelines. Built on
       `syspipe`/`sys_fork`/`sys_wait` (today only fire-and-forget `sysobey`
-      / `sys_obey_linerep` exist — no clean status or stderr capture).
+      / `sys_obey_linerep` exist — no clean status or stderr capture; the
+      trials worked, but a silent failure of a spawned command would have
+      been invisible).
+- [ ] **lib json** (P, 2–4 days) — recursive-descent parser + printer;
+      objects→properties, arrays→vectors; `\uXXXX`; JSONTestSuite pass.
+      Biggest *capability* gap, but no field trial has needed it yet —
+      promote when a real API/JSON task shows up.
 - [ ] **lib fileutils** (P, 1–2 days) — `file_to_string`, `string_to_file`,
       `file_lines -> list`, glob via `sys_file_match`, directory walk,
       stat/mtime/size, temp files, path join/split.
@@ -49,11 +63,6 @@ Priority order. "P" = pure Pop-11 (portable to every port for free),
       with lib json for report pipelines.
 - [ ] **lib datetime** (P, 1 day) — epoch/ISO-8601 parse + format over
       `sys_real_time`.
-- [ ] **sqlite shim** (C, 2–3 days) — next binding after popcurl; the API is
-      almost entirely non-variadic, so the popcurl pattern transfers directly.
-      Field-validated need (2026-08-01): a real DB report via the sqlite3-CLI
-      bridge spent ~375 ms spawning ~52 sqlite3 processes for one pass —
-      in-process binding collapses that to microseconds per query.
 
 ## 🔧 Runtime hardening (popsession)
 
@@ -96,11 +105,12 @@ The ladder to true one-command-from-nothing (in order):
       install.sh (config, skill link, popcurl, live smoke test).
       `POP11_SKILL_URL`/`POP11_SKILL_PREFIX` override for pinning/testing.
       Full chain validated locally via a `file://` URL in a sandbox $HOME.
-- [ ] **Publish the assets** — run `release-skill-tarball.sh` on each
-      platform (macos-arm64, linux-x86_64, linux-aarch64; riscv64 optional)
-      and `gh release upload` them; ideally a CI job per platform so every
-      release ships fresh tarballs. Until assets are uploaded, the one-liner
-      404s — this is the only missing piece.
+- [x] **Publish the assets** — done 2026-07-31: release `v160200-skill`
+      carries pop11-skill tarballs for macos-arm64 and linux-x86_64 (plus
+      corepop seeds and SHA256SUMS), and the curl one-liner is verified
+      end-to-end on both platforms. Remaining refinement: linux-aarch64 /
+      riscv64 tarballs, and a CI job per platform so every release ships
+      fresh assets instead of hand-built uploads.
 - [ ] **Nix path** (0.5–1 day) — teach `popsession` the Nix store layout
       (today it requires `./poplog` + `./target/pop/basepop11`; the flake's
       out-path differs), then `nix profile install github:IoTone/poplog#poplog`

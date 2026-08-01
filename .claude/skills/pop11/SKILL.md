@@ -133,6 +133,40 @@ required: `endif`, `endfor`, `endwhile`, `enddefine`, `endrepeat`.
 `nonop ><`); ordinary procedures (`alphabefore`, `issubstring`, …) are
 passed by bare name — `nonop` before them is a syntax error.
 
+## Regular expressions (built in — but NOT PCRE syntax)
+
+The engine ships a full regexp matcher (`regexp_compile`, no load needed;
+docs: `pop/ref/regexp`). **TRAP: the syntax is inverted from every modern
+engine.** The escape character is `@` (not `\`), and `. * [ ] ^ $` are
+LITERAL by default — they only become wildcards when escaped. A PCRE
+pattern pasted in compiles fine and then silently matches almost nothing:
+
+```pop11
+vars err, p, s, n;
+regexp_compile('ERROR [0-9]+') -> (err, p);          ;;; legal, but all-literal
+p(1, 'ERROR 42 happened', false, false) -> (s, n);   ;;; -> false false: MISS
+
+regexp_compile('ERROR @[0-9@]@{1,@}') -> (err, p);   ;;; the Poplog spelling
+p(1, 'ERROR 42 happened', false, false) -> (s, n);   ;;; -> 1 8
+substring(s, n, 'ERROR 42 happened') =>              ;;; ** ERROR 42
+```
+
+Translation table: `.` → `@.`  `*` → `@*`  `[abc]` → `@[abc@]`
+`x+` → `x@{1,@}`  `x?` → `x@{0,1@}`  `x{m,n}` → `x@{m,n@}`
+`^`/`$` (anchors) → `@^`/`@$`  `\b` → `@<` (word start) / `@>` (word end)
+`(x)` → `@(x@)` (9 groups max, backref `@1`…`@9`)  literal `@` → `@@`.
+
+- `regexp_compile(str) -> (err, p)`: err is false on success, else an error
+  string (test it!). `p` is a compiled procedure — define it once in the
+  session, reuse at native speed: `p(start_i, string, len, back) -> (i, n)`
+  gives match position + length (`false, false` on no match); extract with
+  `substring(i, n, string)`. len=false means "to end"; back=true searches
+  right-to-left.
+- Case-insensitive: `regexp_compile(str, 1, false)` (flags bit 1), or `@i`
+  inside the pattern.
+- **No alternation (`|`)** and no lookaround/lazy/`\d`/`\w` — compile one
+  pattern per branch and try each; `[0-9]`-style classes spell `@[0-9@]`.
+
 ## HTTPS: popcurl (native) or curl CLI
 
 ```sh
