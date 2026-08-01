@@ -51,6 +51,9 @@ Priority order. "P" = pure Pop-11 (portable to every port for free),
       `sys_real_time`.
 - [ ] **sqlite shim** (C, 2–3 days) — next binding after popcurl; the API is
       almost entirely non-variadic, so the popcurl pattern transfers directly.
+      Field-validated need (2026-08-01): a real DB report via the sqlite3-CLI
+      bridge spent ~375 ms spawning ~52 sqlite3 processes for one pass —
+      in-process binding collapses that to microseconds per query.
 
 ## 🔧 Runtime hardening (popsession)
 
