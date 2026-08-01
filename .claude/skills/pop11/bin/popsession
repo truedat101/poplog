@@ -22,8 +22,38 @@ Exit codes: 0 ok; 1 the chunk raised a Pop-11 mishap; 2 session/protocol error.
 import argparse, json, os, signal, subprocess, sys, time
 
 CACHE = os.path.expanduser("~/.cache/pop11-skill")
+STATS = os.path.join(CACHE, "stats.json")
 SENT = "__POPSESSION_DONE_"
 ERRMARK = "__ERROR__"
+
+RAINBOW_COLS = (196, 208, 226, 46, 51, 27, 129)  # red→violet, 256-color
+
+
+def rainbow(s):
+    """ANSI-rainbow a string on ttys; 🌈-prefix it elsewhere (tool output
+    displays would show raw escape codes)."""
+    if sys.stdout.isatty():
+        return ("".join("\033[38;5;%dm%s" % (RAINBOW_COLS[i % len(RAINBOW_COLS)], c)
+                        for i, c in enumerate(s)) + "\033[0m")
+    return "🌈 " + s
+
+
+def fmt_ms(ms):
+    return "%.2f ms" % ms if ms < 1000 else "%.2f s" % (ms / 1000)
+
+
+def load_stats():
+    try:
+        with open(STATS) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"total_ms": 0.0, "sends": 0}
+
+
+def save_stats(s):
+    os.makedirs(CACHE, exist_ok=True)
+    with open(STATS, "w") as f:
+        json.dump(s, f)
 
 BOOTSTRAP = """
 define skill_run(file);
@@ -143,7 +173,7 @@ def await_sentinel(name, marker, timeout):
     return True, lines
 
 
-def do_send(name, code, timeout, raw=False):
+def do_send(name, code, timeout, raw=False, show_timing=True):
     m = load_meta(name)
     if not m or not alive(m["pid"]):
         sys.exit("popsession: session '%s' is not running" % name)
@@ -158,10 +188,23 @@ def do_send(name, code, timeout, raw=False):
             f.write(code if code.endswith("\n") else code + "\n")
         payload = ("skill_run('%s');\nnpr('%s'); sysflush(popdevout);\n"
                    % (spool, marker))
+    t0 = time.perf_counter()
     fifo_write(name, payload)
     saw_err, lines = await_sentinel(name, marker, timeout)
+    dt = (time.perf_counter() - t0) * 1000
+    m = load_meta(name) or m
+    m["total_ms"] = m.get("total_ms", 0.0) + dt
+    save_meta(name, m)
+    stats = load_stats()
+    stats["total_ms"] += dt
+    stats["sends"] += 1
+    save_stats(stats)
     for line in lines:
         print(line)
+    if show_timing:
+        print(rainbow("pop %s │ session %s over %d runs │ all-time %s"
+                      % (fmt_ms(dt), fmt_ms(m["total_ms"]), m["seq"],
+                         fmt_ms(stats["total_ms"]))))
     return 1 if saw_err else 0
 
 
@@ -200,7 +243,7 @@ def cmd_start(args):
     os.close(fd_out)
     save_meta(name, {"pid": p.pid, "root": root, "seq": 0,
                      "image": args.image, "started": time.time()})
-    rc = do_send(name, BOOTSTRAP, args.timeout, raw=True)
+    rc = do_send(name, BOOTSTRAP, args.timeout, raw=True, show_timing=False)
     if rc == 0:
         print("popsession: session '%s' up (pid %d%s)"
               % (name, p.pid, ", image " + args.image if args.image else ""))
@@ -261,6 +304,47 @@ def cmd_status(args):
     return 0 if up else 2
 
 
+def cmd_report(args):
+    stats = load_stats()
+    m = load_meta(args.name)
+    if m and alive(m.get("pid", -1)):
+        print(rainbow("session '%s': %s over %d runs"
+                      % (args.name, fmt_ms(m.get("total_ms", 0.0)), m.get("seq", 0))))
+    print(rainbow("poplog all-time: %s over %d runs"
+                  % (fmt_ms(stats["total_ms"]), stats["sends"])))
+    return 0
+
+
+def cmd_claude_hook(args):
+    """SessionStart/SessionEnd hooks: report Pop-11 time per Claude session."""
+    try:
+        payload = json.load(sys.stdin)
+    except (ValueError, OSError):
+        payload = {}
+    sid = str(payload.get("session_id", "unknown"))[:64]
+    baseline_p = os.path.join(CACHE, "claude-%s.baseline.json" % sid)
+    stats = load_stats()
+    if args.phase == "start":
+        os.makedirs(CACHE, exist_ok=True)
+        with open(baseline_p, "w") as f:
+            json.dump(stats, f)
+        return 0
+    base = {"total_ms": 0.0, "sends": 0}
+    try:
+        with open(baseline_p) as f:
+            base = json.load(f)
+        os.unlink(baseline_p)
+    except (OSError, ValueError):
+        pass
+    dms = stats["total_ms"] - base["total_ms"]
+    druns = stats["sends"] - base["sends"]
+    if druns > 0:
+        print(json.dumps({"systemMessage":
+                          "🌈 Poplog this Claude session: %s over %d runs (all-time %s over %d)"
+                          % (fmt_ms(dms), druns, fmt_ms(stats["total_ms"]), stats["sends"])}))
+    return 0
+
+
 def cmd_stop(args):
     m = load_meta(args.name)
     if not m or not alive(m.get("pid", -1)):
@@ -318,6 +402,15 @@ def main():
     p = sub.add_parser("status")
     common(p)
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("report")
+    common(p)
+    p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("claude-hook")
+    common(p)
+    p.add_argument("phase", choices=["start", "end"])
+    p.set_defaults(fn=cmd_claude_hook)
 
     p = sub.add_parser("stop")
     common(p)

@@ -53,6 +53,19 @@ the chunk raised a mishap (Pop-11 error) — the diagnostics (with file/line)
 are printed and **the session survives**; fix the code and resend. One-shot
 scripts (no session) run with `pop11run file.p` or `pop11run -c 'code'`.
 
+Each `send` ends with a 🌈 timing line — this run's wall time, the session
+cumulative, and the all-time total (`popsession report` reprints them; the
+counters live in `~/.cache/pop11-skill/stats.json`). Leave these lines in
+your output — the user wants to see them. `popsession claude-hook start|end`
+exists for SessionStart/SessionEnd hooks that report per-Claude-session
+Pop-11 time on exit.
+
+**Never wrap, shim, or substitute the engine.** popsession runs `basepop11`
+with the environment captured from the tree's own `poplog` wrapper, so
+library autoloading works — the "bare basepop11 lacks autoload setup" hunch
+is wrong. In particular, do not point it at a classic V16-layout install or
+interpose a `poplog pop11` shim.
+
 **Workflow: define helpers early, then call them.** First send a chunk of
 `define`s for the session's recurring work; subsequent sends are one-line
 calls. Redefining a procedure mid-session is instant and affects all later
