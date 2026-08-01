@@ -36,3 +36,6 @@ tools/ci-watch.log
 # nix build output symlinks
 result
 result-*
+
+# release artifacts (uploaded to GitHub Releases, never committed)
+dist/

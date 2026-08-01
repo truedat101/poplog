@@ -1,0 +1,19 @@
+#!/bin/sh
+# pop11run — one-shot Pop-11 script runner.
+#   pop11run file.p          run a script and exit
+#   pop11run -c 'code'       run a code string and exit
+# Poplog tree resolved from $POPLOG_ROOT (needs ./poplog and ./target/pop/basepop11).
+set -e
+
+root="${POPLOG_ROOT:?set POPLOG_ROOT to a built Poplog tree}"
+basepop="$root/target/pop/basepop11"
+[ -x "$basepop" ] || { echo "pop11run: $basepop not found" >&2; exit 2; }
+
+if [ "$1" = "-c" ]; then
+    tmp="$(mktemp /tmp/pop11run.XXXXXX.p)"
+    trap 'rm -f "$tmp"' EXIT
+    printf '%s\n' "$2" > "$tmp"
+    set -- "$tmp"
+fi
+
+exec "$root/poplog" "$basepop" "$@" ":sysexit();"

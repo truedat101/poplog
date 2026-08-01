@@ -99,6 +99,33 @@ The one remaining 🚧 row (Windows) is genuinely not yet ported.  See the
 Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
 `PORTING-ARM64-M-SILICON-OSX.md`.
 
+## Install
+
+Three ways in, fastest first:
+
+**1. Binary one-liner (~2 MB download; also installs the
+[pop11 Claude skill](.claude/skills/pop11/SKILL.md)):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/IoTone/poplog/master/tools/install-skill.sh | sh
+```
+
+Detects your platform, pulls `pop11-skill-<os>-<arch>.tar.gz` from the
+latest GitHub release (macOS arm64 and Linux x86-64 to start), unpacks a
+relocatable runtime (`basepop11` + libraries) to `~/.local/share/pop11-skill`,
+and finishes with a live smoke test.  `POP11_SKILL_PREFIX` overrides the
+location; `POP11_SKILL_URL` pins a version (any curl-able URL, including
+`file://`).  Uninstall:
+`rm -rf ~/.local/share/pop11-skill ~/.claude/skills/pop11 ~/.cache/pop11-skill`.
+Tarballs are built by `tools/release-skill-tarball.sh` and published with
+checksums (`SHA256SUMS.pop11-skill`) on the releases page.
+
+**2. From source** — see [INSTALL](INSTALL): seed `target/pop/corepop`
+(binaries vendored under `nix/seeds/` for the four ported platforms),
+then `./configure && make all`.
+
+**3. Nix** — see the next section.
+
 ## Packaging (Nix)
 
 A self-contained **Nix flake** builds and bootstraps the whole system — all
