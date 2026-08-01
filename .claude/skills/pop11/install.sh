@@ -8,7 +8,7 @@
 #   2. persists it to ~/.cache/pop11-skill/config.json (no env var needed after)
 #   3. links this skill into ~/.claude/skills/pop11 (all projects see it;
 #      --copy copies instead of symlinking)
-#   4. builds the popcurl HTTPS shim if a C compiler is available
+#   4. builds the popcurl + popsqlite shims if a C compiler is available
 #   5. runs a live smoke test: start session -> compute -> stop
 #
 # Uninstall: rm ~/.claude/skills/pop11; rm -rf ~/.cache/pop11-skill
@@ -59,11 +59,12 @@ else
 fi
 echo "skill:   $skills_dir/pop11 ($mode)"
 
-# 4. popcurl (best-effort)
+# 4. C shims: popcurl + popsqlite (best-effort)
 if command -v cc >/dev/null 2>&1; then
     "$here/bin/build-popcurl" || echo "install: popcurl build failed; curl-CLI fallback still works"
+    "$here/bin/build-popsqlite" || echo "install: popsqlite build failed; sqlite3-CLI fallback still works"
 else
-    echo "install: no C compiler; skipping popcurl (curl-CLI fallback still works)"
+    echo "install: no C compiler; skipping popcurl/popsqlite (CLI fallbacks still work)"
 fi
 
 # 5. smoke test

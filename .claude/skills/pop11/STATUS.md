@@ -18,6 +18,12 @@ Last updated: 2026-08-01 (post-validation, pre-demo). Companion docs: [SKILL.md]
 - [x] SKILL.md crash course; 5-beat demo script; session-retention benchmark
 - [x] `install.sh` — one-command setup from a checkout (engine discovery,
       persisted config, `~/.claude/skills` link, shim build, live smoke test)
+- [x] `popsqlite` sqlite shim (2026-08-01) — int-handle surface over
+      sqlite3 (open/exec/prepare/step/bind, all values as text, NULL→false)
+      + generated loader with `sqlite_query`/`sqlite_run_b` conveniences.
+      Measured against the field scenario that motivated it: 52-query
+      report pass 435 ms via sqlite3-CLI spawns → 6.5 ms in-session;
+      ~47 µs/query steady-state (~180×).
 
 ## 📚 Library roadmap — what great tooling/shell orchestration needs
 
@@ -29,12 +35,9 @@ None of these block the skill: the 2026-08-01 odysseus field trials went
 (jq, sqlite3, sysobey). This roadmap deepens the "in-process at
 microsecond cost" story; ranked by field evidence, not theory.
 
-- [ ] **sqlite shim** (C, 2–3 days) — the only item with a measured cost:
-      a real DB report via the sqlite3-CLI bridge spent ~375 ms spawning
-      ~52 sqlite3 processes for one pass (field trial 4, 2026-08-01).
-      In-process binding collapses that to microseconds per query; the API
-      is almost entirely non-variadic, so the popcurl pattern transfers
-      directly.
+- [x] **sqlite shim** — DONE 2026-08-01, see above. v0.2 ideas: typed
+      column accessors (int64/double), blob support, `sqlite_rows_iter`
+      streaming for huge result sets.
 - [ ] **lib shell** (P, 2–3 days) — real process orchestration, the core of
       "tooling/shell" work. `run(cmd) -> (output_string, status)`,
       `run_lines(cmd) -> list`, stderr capture, exit-code access, timeout
