@@ -17,6 +17,10 @@ else
         echo "test-json: no target/pop/basepop11 (build first, or pass an engine)" >&2; exit 2; }
     engine="$repo/poplog $repo/target/pop/basepop11"
 fi
+# riscv64 Poplog must run with ASLR off (see PORTING-RISCV64-LINUX.md)
+case "$(uname -m)" in
+    riscv64) engine="setarch -R $engine" ;;
+esac
 
 tmp="${TMPDIR:-/tmp}/test-json.$$.p"
 trap 'rm -f "$tmp"' EXIT
