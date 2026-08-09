@@ -1,0 +1,356 @@
+TEACH JSON                                     How to create a Poplog library
+
+A walkthrough of designing and building LIB * JSON — a complete JSON
+parser and generator in pure Pop-11 — used here as a worked example of
+how to write, document, test and ship a new library in this system.
+The finished library is small (about 300 lines) and lives at
+pop/lib/lib/json.p: keep it open in another window while reading.
+
+CONTENTS - (Use ENTER g to access required sections)
+
+ -- Why JSON makes a good exercise
+ -- Where libraries live
+ -- Step 1: design the data mapping first
+ -- Step 2: the skeleton of a library file
+ -- Step 3: a recursive descent parser
+ -- Interlude: re-entrancy with dlocal
+ -- Interlude: mutual recursion needs a forward declaration
+ -- Step 4: building strings on the open stack
+ -- A real bug: when the open stack bites
+ -- Step 5: the generator, with character consumers
+ -- Step 6: testing, including the failures
+ -- Step 7: shipping it -- vendor or fetch?
+ -- Exercises
+ -- Further reading
+
+-- Why JSON makes a good exercise -------------------------------------
+
+JSON (RFC 8259) is the lingua franca of modern data exchange, and
+Poplog had no parser for it.  It is also the ideal size for learning
+library construction: the grammar is small enough to finish, but rich
+enough to force every interesting decision — how foreign types map
+onto Pop-11 data, how to handle errors, how to build strings
+efficiently, and how to test a parser honestly.
+
+Everything below was done to produce the real LIB JSON in this
+repository; nothing is simplified for the exercise.
+
+-- Where libraries live -----------------------------------------------
+
+Poplog finds library code by searching lists of directories:
+
+    popautolist   directories of *autoloadable* files: one file per
+                  identifier, loaded the first time the name is used.
+                  Right for a single self-contained procedure
+                  (see pop/lib/auto/newmapping.p).
+
+    popuseslist   directories searched by "uses".  Right for a library
+                  that defines several related identifiers, loaded
+                  explicitly:   uses json;
+
+A multi-procedure library belongs in a uses directory.  In this tree
+that is pop/lib/lib/, so our file is pop/lib/lib/json.p and users
+write:
+
+    uses json;
+    json_parse('{"a": [1, true, null]}') =>
+
+Larger packages with their own teach/help/lib subtrees get a whole
+directory instead (see pop/lib/objectclass/ and its setup file
+pop/lib/lib/objectclass_help.p, which extends the search lists — the
+same mechanism learn/learn.p uses for fetched teaching material).
+
+-- Step 1: design the data mapping first ------------------------------
+
+Before writing any code, decide what each JSON type becomes in Pop-11.
+This is the most important design step for any data-format library,
+and the decisions have consequences:
+
+    JSON            Pop-11          why
+    ------          -------         ----------------------------------
+    object          property        the natural key->value store; use
+                                    newmapping so keys compare with =
+                                    (string keys are structures, not
+                                    identical words!)
+    array           vector          O(1) subscripting; {1 2 3} prints
+                                    compactly
+    string          string          byte strings holding UTF-8
+    number          integer or      Pop-11 integers are arbitrary
+                    ddecimal        precision; 2.5 becomes a ddecimal
+    true/false      true/false      the obvious choice, BUT...
+    null            json_null       ...false is taken, so null needs a
+                                    distinct value: a constant word
+
+The null decision is the classic trap.  Languages whose booleans
+include a separate nil can map null directly; Pop-11's <false> would
+make  {"x": false}  and  {"x": null}  indistinguishable.  So the
+library exports:
+
+    constant json_null = "json_null";
+
+A word compares by identity (==) and prints readably.  Every
+data-format library you write will contain at least one decision like
+this — find it before coding, not after.
+
+One consequence to document rather than fix: newmapping's default
+means looking up a *missing* key returns false.  Callers who need to
+distinguish "absent" from "false" should test with the property's
+domain, or choose a different default.  Small honest caveats beat
+clever magic.
+
+-- Step 2: the skeleton of a library file -----------------------------
+
+Every library in this tree starts the same way:
+
+    /* --- JSON for Poplog ---------------------------------------
+     > File:            pop/lib/lib/json.p
+     > Purpose:         Parse and generate JSON (RFC 8259)
+     > Documentation:   HELP * JSON, TEACH * JSON
+     */
+    compile_mode :pop11 +strict;
+
+    section $-json => json_null json_parse json_generate json_print;
+
+    ...
+
+    endsection;
+
+Three conventions doing real work:
+
+  * The header comment: files here are found by grep as often as by
+    browsing; Purpose and Documentation lines pay for themselves.
+
+  * compile_mode +strict: undeclared variables become errors instead
+    of silently-created globals.  Non-negotiable for library code.
+
+  * The section: everything defaults to private.  Only the four names
+    after => escape into the global namespace; the dozen internal
+    helpers (parse_string, emit_utf8, ...) cannot collide with user
+    code.  Compare a C library exposing only its .h symbols.
+
+-- Step 3: a recursive descent parser ---------------------------------
+
+JSON's grammar is mutually recursive — a value can be an array of
+values — which maps directly onto mutually recursive procedures, one
+per grammar rule:
+
+    parse_value()     dispatch on the first character
+    parse_object()    '{' pairs '}'     -> property
+    parse_array()     '[' values ']'    -> vector
+    parse_string()    '"' chars '"'     -> string
+    parse_number()    scan, then strnumber()
+    parse_word()      'true', 'false', 'null'
+
+This technique — *recursive descent* — is the most useful parsing
+method a programmer can own: no tools, no tables, and error messages
+exactly where you want them.  (Poplog's own Pop-11 compiler is a
+recursive descent parser, as is LIB * FORTH's transpiler in this
+fork.)
+
+The scanner state is three variables and three one-line helpers:
+
+    vars jstr, jpos, jlen;    ;;; the input, the cursor, the length
+
+    define lconstant cur();   ;;; current char, or -1 at end
+        if jpos > jlen then -1 else subscrs(jpos, jstr) endif
+    enddefine;
+
+Note parse_number does not parse digits into a number itself: it
+*scans* the extent of the number strictly (rejecting 01, 1., 1e) and
+then hands the substring to the system's strnumber, which already
+knows how to build integers, bigintegers and ddecimals.  Reuse the
+system where the system is right.
+
+-- Interlude: re-entrancy with dlocal ---------------------------------
+
+jstr/jpos/jlen are section-private *dynamic* variables (vars, not
+lvars) so that the entry point can localise them:
+
+    define json_parse(s) -> val;
+        dlocal jstr, jpos, jlen;
+        ...
+
+dlocal saves the variables on entry and restores them on *any* exit —
+normal return, mishap, or exitto.  Consequences: json_parse can be
+called from inside a procedure that is itself parsing (re-entrancy),
+and an error mid-parse cannot leave stale state behind.  Cheap
+insurance; take it whenever a library keeps scanning state in
+variables rather than threading it through every call.
+
+-- Interlude: mutual recursion needs a forward declaration ------------
+
+parse_array calls parse_value, but parse_value is defined last (it
+dispatches to everything else).  Under +strict the compiler must see
+a declaration before use, so the file declares a lexical procedure
+variable first and assigns it after:
+
+    lvars procedure jvalue;         ;;; forward declaration
+    ... parse_array uses jvalue() ...
+    define lconstant parse_value() -> val; ... enddefine;
+    parse_value -> jvalue;          ;;; tie the knot
+
+The generator half of the library repeats the same pattern with jgen.
+Any mutually recursive pair in Pop-11 gets this shape.
+
+-- Step 4: building strings on the open stack -------------------------
+
+How do you build a string whose length you don't know in advance?
+The Pop-11 answer uses the open stack: push characters as you find
+them, count as you go, and let consstring collect them all at once:
+
+    define lconstant parse_string() -> s;
+        lvars c, n = 0;
+        ...
+        c; n + 1 -> n;          ;;; push char, bump count
+        ...
+        consstring(n) -> s;     ;;; pop n chars -> one string
+    enddefine;
+
+No preallocated buffer, no quadratic concatenation, no resizing —
+the user stack *is* the buffer.  This works even though parsing an
+escape sequence happens between pushes, and it is the idiomatic
+Pop-11 pattern for any build-then-freeze construction (parse_array
+does the same with consvector).
+
+The escape \uXXXX decodes to a code point which must become UTF-8
+bytes; emit_utf8 pushes 1-4 bytes and returns how many, including the
+surrogate-pair dance for astral characters like 𝄞.
+
+-- A real bug: when the open stack bites ------------------------------
+
+The first version of the \u handler read:
+
+    n + emit_utf8(u) -> n;      ;;; WRONG
+
+and crashed with STACK EMPTY inside consstring.  Work out why before
+reading on — everything needed is above.
+
+The answer: infix + evaluates left to right.  It pushes n, then calls
+emit_utf8(u) — which pushes its 1-4 *bytes* and then its count.  The
+addition pops the top two items: the count and the *last byte*, adds
+those, and leaves n buried in the string under construction.  The
+byte count is now wrong and consstring later starves.  The fix pops
+the count into a variable before any arithmetic touches the stack:
+
+    emit_utf8(u) -> k;
+    n + k -> n;
+
+The open stack gives Pop-11 procedures their power — variadic returns
+like emit_utf8's are free — and this is its one sharp edge: *a
+procedure that leaves extra results on the stack must not be called
+in the middle of an expression*.  Every Pop-11 programmer meets this
+bug once.  Now you have met it in a controlled environment.
+
+-- Step 5: the generator, with character consumers --------------------
+
+json_generate is the parser inverted: recursive dispatch on Pop-11
+datatypes (isstring, isintegral, isvector, isproperty...).  Instead
+of building output by concatenation it emits single characters to a
+*consumer* procedure — the same protocol as the system's cucharout —
+so one generator serves two fronts:
+
+    define json_print(x);           ;;; stream to current output
+        gen_value(x, cucharout)
+    enddefine;
+
+    define json_generate(x) -> s;   ;;; collect into a string
+        lvars n = 0;
+        define lvars out(c);
+            c; n + 1 -> n           ;;; the open-stack trick again
+        enddefine;
+        gen_value(x, out);
+        consstring(n) -> s;
+    enddefine;
+
+out is a *nested procedure closing over n* — Pop-11's full lexical
+scoping quietly doing the work a class would do elsewhere.  Accepting
+a consumer instead of returning strings is the composable choice for
+any output-producing library; the string version is a 6-line wrapper.
+
+-- Step 6: testing, including the failures ----------------------------
+
+A parser untested on bad input is untested.  The suite in
+tools/test-json.sh runs 43 cases: round trips, escapes, surrogate
+pairs, big integers — and fifteen *must-fail* inputs ('01', '[1,]',
+'tru', unterminated strings, lone surrogates...) checked with a
+helper that catches the mishap:
+
+    define mishaps(p);              ;;; true if p() mishaps
+        lvars sl = stacklength();
+        false -> trapped;
+        dlocal prmishap =
+            procedure(m, c); true -> trapped; exitto(mishaps) endprocedure;
+        p();
+        setstacklength(sl);
+        trapped
+    enddefine;
+
+Three system facilities in six lines: dlocal replaces the error
+printer for just this dynamic extent; exitto unwinds out of the
+failed parse back into mishaps; setstacklength discards whatever the
+interrupted parse left on the open stack.  Run the suite:
+
+    $ tools/test-json.sh
+
+Write the must-fail cases while writing the parser, not after: each
+one is a decision (is '01' a number? no — RFC 8259 says so) that is
+cheapest to make while the grammar is in front of you.
+
+-- Step 7: shipping it -- vendor or fetch? ----------------------------
+
+This repository has two channels for Pop-11 material:
+
+  * vendored in-tree — code in pop/lib, docs in pop/help + pop/teach,
+    part of the repository and every build;
+
+  * fetched on demand — tools/fetch-learning.sh downloads external
+    teaching material into learn/ (see LEARNING.md), which stays out
+    of the tree.
+
+The rule: *fetch what you don't own, vendor what you do*.  LIB JSON
+is original code written for this repository, license-clean, pure
+Pop-11 (it runs identically on every port, x86-64 to RISC-V), and
+generally useful — so it is vendored, and 'uses json' works in every
+fresh clone with no network.  The fetched channel exists for exactly
+the opposite case: decades of externally-owned teaching material we
+mirror but do not maintain.
+
+A library is shipped when a stranger can find it, load it, and trust
+it: the searchlists find it (uses json), HELP * JSON documents it,
+this TEACH file explains it, and tools/test-json.sh proves it.  That
+five-part checklist — code, placement, reference doc, rationale,
+tests — is the whole discipline of adding a library to Poplog.
+
+-- Exercises ----------------------------------------------------------
+
+1. json_pretty(x, indent) — a pretty-printer.  Reuse gen_value's
+   consumer protocol; only the structural emitters change.
+
+2. Stream input: json_parse consumes a string; add a variant taking a
+   character repeater (see REF * CHARIO) so JSON can be read straight
+   from a file or socket without slurping it first.
+
+3. Order-preserving objects: properties do not remember insertion
+   order.  Design a representation that does (a vector of pairs? a
+   property plus a key list?) and weigh the costs honestly.
+
+4. Harden against the JSONTestSuite (github.com/nst/JSONTestSuite) —
+   the y_/n_ corpus will find opinions you did not know you had.
+
+5. Duplicate keys: {"a":1,"a":2} currently keeps the last value,
+   silently.  RFC 8259 permits this but interoperability suffers;
+   add an optional strict mode that mishaps.
+
+-- Further reading ----------------------------------------------------
+
+    HELP  * JSON          the library's reference documentation
+    LIB   * JSON          the code this file walks through
+    REF   * PROCEDURE     dlocal, exitto, the call stack
+    REF   * DATA          consstring, consvector, datakeys
+    HELP  * NEWMAPPING    equality-based properties
+    TEACH * SETS          recursion and list processing warm-up
+    learn/hidden-gems/    (after tools/fetch-learning.sh) — the open
+                          stack and dynamic lists as standalone gems
+
+--- pop/teach/json
+--- The learning module accompanying pop/lib/lib/json.p

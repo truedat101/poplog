@@ -6,6 +6,21 @@ Small, self-contained Pop-11 programs.
 
 No graphics build needed — these run on a plain console Poplog.
 
+### `secure_notes.p` — JSON + crypto, composed
+
+A miniature secure-data pipeline using the two libraries added in this fork:
+build a structure and serialise it (`lib json`), HMAC-sign it for transport,
+verify + parse on the receiving side, seal it at rest under a password-derived
+key (PBKDF2 → AES-256-GCM), reopen it, and watch a tampered byte get refused
+(`lib crypto`).  Build the shim once with `tools/build-popcrypto.sh`, then:
+
+```sh
+./poplog ./target/pop/basepop11 examples/secure_notes.p
+```
+
+See `HELP JSON`, `HELP CRYPTO`, and `TEACH JSON` (how these libraries were
+built).
+
 ### `eliza.p` — ELIZA (Weizenbaum's DOCTOR)
 
 A faithful implementation of Joseph Weizenbaum's 1966 ELIZA — the original

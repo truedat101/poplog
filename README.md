@@ -1,3 +1,5 @@
+*English | [日本語](README.ja.md)*
+
 POPLOG is a free, open source, multi-language software development
 environment providing incremental compilers for a number of interactive
 programming languages, notably:
@@ -86,7 +88,7 @@ Poplog builds and runs natively on a growing set of platforms
 | **Linux** | ARM32 (`armv6`/`armv7`) | ✅ Supported | Long-standing 32-bit ARM port (`pop/src/syscomp/arm`); Raspberry Pi 1–3 and other 32-bit ARM Linux.  Not benchmarked in this report |
 | **Solaris** | x86 (i386) | ✅ Supported | Upstream port (W. Hebisch); tested on Solaris 10 (`CC=gcc`, vendored `corepop_solaris.i386`).  Not benchmarked here |
 | **FreeBSD** | x86-64 | ✅ Supported | Upstream port (W. Hebisch); tested on x86-64.  Not benchmarked here |
-| **Linux** | RISC-V (`riscv64`, RV64GC) | ✅ Supported | Native RV64GC/LP64D port, self-hosting on a **StarFive VisionFive** (dual SiFive U74) — all four languages, saved images, terminal VED, and the FFI float ABI.  `tools/validate-riscv64.sh` = 14/14.  See `PORTING-RISCV64-LINUX.md` |
+| **Linux** | RISC-V (`riscv64`, RV64GC) | ✅ Supported | Native RV64GC/LP64D port, self-hosting on a **StarFive VisionFive** (dual SiFive U74) — all four languages, saved images, terminal VED, and the FFI float ABI.  `tools/validate-riscv64.sh` = 14/14; also bootstrapped from the released seed corepop on a cloud RV64 host (Ubuntu 24.04), where the `lib json`/`lib crypto` suites pass.  See `PORTING-RISCV64-LINUX.md` |
 | **Windows** | x86-64 | 🚧 TODO | Not yet ported (WSL2 runs the Linux build as an interim) |
 
 "Supported" means it builds and runs.  The first three rows plus RISC-V are
@@ -209,6 +211,20 @@ Poplog's incremental compilers emit fast native code on every backend.  For
 cross-platform and cross-language benchmark numbers (x86-64, Apple M-series,
 Raspberry Pi 5, MediaTek Genio 720, RISC-V, with Python and Perl baselines for
 context), see **[BENCHMARKS.md](BENCHMARKS.md)**.
+
+## Learning material
+
+Decades of open Pop-11/Prolog teaching material — the Birmingham AI course
+TEACH files, the SimAgent toolkit, the Pop-11 Primer, and more — are one
+command away:
+
+```sh
+tools/fetch-learning.sh --all       # fetch into learn/ (gitignored)
+```
+
+The material is downloaded from public archives, never vendored here; a
+generated `learn/learn.p` wires it into `teach`/`help` inside Poplog.  See
+**[LEARNING.md](LEARNING.md)** for the pack list and usage.
 
 ---
 
