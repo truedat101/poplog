@@ -183,6 +183,20 @@ cross-platform and cross-language benchmark numbers (x86-64, Apple M-series,
 Raspberry Pi 5, MediaTek Genio 720, RISC-V, with Python and Perl baselines for
 context), see **[BENCHMARKS.md](BENCHMARKS.md)**.
 
+## Learning material
+
+Decades of open Pop-11/Prolog teaching material — the Birmingham AI course
+TEACH files, the SimAgent toolkit, the Pop-11 Primer, and more — are one
+command away:
+
+```sh
+tools/fetch-learning.sh --all       # fetch into learn/ (gitignored)
+```
+
+The material is downloaded from public archives, never vendored here; a
+generated `learn/learn.p` wires it into `teach`/`help` inside Poplog.  See
+**[LEARNING.md](LEARNING.md)** for the pack list and usage.
+
 ---
 
 This is cleaned up version of Poplog sources, currently only

@@ -36,3 +36,6 @@ tools/ci-watch.log
 # nix build output symlinks
 result
 result-*
+
+# Educational material fetched by tools/fetch-learning.sh (never committed)
+/learn/
