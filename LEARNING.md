@@ -59,7 +59,10 @@ new Poplog library — data-mapping design, recursive descent, open-stack
 string building (including a real bug and its lesson), `dlocal`
 re-entrancy, sections/exports, must-fail testing, and when to vendor vs.
 fetch.  Reference documentation is in `help json`; the acceptance suite
-is `tools/test-json.sh`.
+is `tools/test-json.sh`.  Both `lib json` and its FFI-based sibling
+`lib crypto` (see `help crypto`) are validated on x86-64, aarch64
+(Raspberry Pi 5) and riscv64 — `tools/test-remote.sh <host>` reruns the
+suites on any machine with a built tree.
 
 ## Provenance notes
 
