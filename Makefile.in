@@ -1,3 +1,7 @@
+# The smoke-test convenience targets (gfx-smoke etc.) are defined before
+# "all", so pin the default goal or a bare "make" would run the first one
+.DEFAULT_GOAL := all
+
 usepop = @@USEPOP@@
 ABS_BUILD = @@ABS_BUILD@@
 poptarget = ${ABS_BUILD}/@@POP_target@@
