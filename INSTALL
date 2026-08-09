@@ -21,6 +21,8 @@ of X libraries and Motif.  For popvison install 'lapack'
 On Debian (or Ubuntu) you probably need: libx11-dev, libxt-dev,
 libice-dev, libsm-dev, libxau-dev, libxdmcp-dev, libxpm-dev,
 libmotif-dev, libncurses-dev, libopenblas-base, liblapacke.
+Optional: libssl-dev for LIB CRYPTO (digests/HMAC/random via a
+small shim -- see 'tools/build-popcrypto.sh' and HELP CRYPTO).
 
 Main part of Poplog is written in Pop-11, so to build Poplog,
 you need compiler for Pop-11.  Poplog contains compiler for

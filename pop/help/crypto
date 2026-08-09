@@ -1,0 +1,87 @@
+HELP CRYPTO                    Digests, HMAC and secure random bytes
+
+LIB * CRYPTO gives Pop-11 access to cryptographic primitives from
+OpenSSL's libcrypto, through a small vendored C shim (never
+hand-rolled implementations).  One-time setup, then load:
+
+    $ tools/build-popcrypto.sh          (needs libssl-dev / OpenSSL)
+
+    uses crypto;
+    sha256('hello') =>
+    ** 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+
+CONTENTS
+
+ -- Procedures
+ -- Examples
+ -- Notes
+ -- See also
+
+-- Procedures ---------------------------------------------------------
+
+sha256(DATA) -> HEXSTRING
+    SHA-256 of the string DATA as lowercase hex — the everyday call.
+
+crypto_digest(ALG, DATA) -> RAWSTRING
+crypto_digest_hex(ALG, DATA) -> HEXSTRING
+    Digest of DATA using the named algorithm — any digest libcrypto
+    knows: 'sha256', 'sha512', 'sha1', 'md5', 'sha3-256', ...
+    The raw form returns the digest bytes (e.g. 32 for sha256);
+    the hex form the usual lowercase hex rendering.  An unknown
+    algorithm name causes a mishap.
+
+crypto_hmac(ALG, KEY, DATA) -> RAWSTRING
+crypto_hmac_hex(ALG, KEY, DATA) -> HEXSTRING
+    HMAC of DATA with KEY using the named digest (RFC 2104), for API
+    signing and message authentication.
+
+crypto_random(N) -> STRING
+    N cryptographically secure random bytes (libcrypto's RAND_bytes).
+    Mishaps if the system RNG is unavailable.
+
+crypto_version() -> STRING
+    The underlying library's version, e.g. 'OpenSSL 3.0.2 15 Mar 2022'.
+
+-- Examples -----------------------------------------------------------
+
+    uses crypto;
+
+    ;;; content checksum
+    crypto_digest_hex('sha256', 'abc') =>
+    ** ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+    ;;; API request signing
+    crypto_hmac_hex('sha256', secret_key, request_body) -> signature;
+
+    ;;; a 128-bit session token, hex-encoded
+    uses json;   ;;; unrelated, just showing they compose
+    crypto_hmac_hex('sha256', crypto_random(16), json_generate(payload))
+
+-- Notes --------------------------------------------------------------
+
+  * All DATA/KEY arguments are byte strings and binary-safe: embedded
+    null bytes are handled correctly (lengths are passed explicitly).
+
+  * The shim (pop/extern/popcrypto/popcrypto_shim.c) exposes only
+    non-variadic, explicit-length entry points — the same design as
+    the popcurl shim, avoiding the variadic-FFI hazards documented in
+    PORTING-ARM64-M-SILICON-OSX.md.  Algorithms and implementations
+    all come from the system libcrypto; this library adds no
+    cryptography of its own, so security fixes arrive with OS updates.
+
+  * md5 and sha1 are provided for interoperability (checksums, legacy
+    protocols); do not use them where collision resistance matters.
+
+  * These are primitives, not protocols: no key derivation, AEAD
+    encryption or certificate handling yet.  Extend the shim rather
+    than composing primitives in Pop-11 where that matters.
+
+-- See also -----------------------------------------------------------
+
+    LIB   * CRYPTO           pop/lib/lib/crypto.p
+    tools/build-popcrypto.sh build the shim (one time)
+    tools/test-crypto.sh     acceptance suite (published test vectors)
+    HELP  * JSON             frequent companion for API work
+    TEACH * JSON             how to build a library like this one
+
+--- pop/help/crypto

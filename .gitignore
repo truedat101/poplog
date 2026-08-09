@@ -39,3 +39,7 @@ result-*
 
 # Educational material fetched by tools/fetch-learning.sh (never committed)
 /learn/
+
+# Built by tools/build-popcrypto.sh (LIB CRYPTO shim)
+pop/extern/popcrypto/*.so
+pop/extern/popcrypto/*.dylib
