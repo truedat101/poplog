@@ -79,6 +79,47 @@ check('random length', length(crypto_random(16)), 16);
 check('random varies', crypto_random(16) = crypto_random(16), false);
 check('random length 1', length(crypto_random(1)), 1);
 
+;;; hex rendering for vector comparison
+lconstant hexdigits = '0123456789abcdef';
+define hexof(s) -> h;
+    lvars i, c;
+    for i from 1 to length(s) do
+        subscrs(i, s) -> c;
+        subscrs((c << -4) + 1, hexdigits);
+        subscrs((c && 15) + 1, hexdigits);
+    endfor;
+    consstring(2 * length(s)) -> h;
+enddefine;
+
+;;; --- PBKDF2 (vectors cross-checked against Python hashlib) ---
+check('pbkdf2 sha256 c=1',
+      hexof(crypto_pbkdf2('sha256', 'password', 'salt', 1, 32)),
+      '120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b');
+check('pbkdf2 sha256 c=4096',
+      hexof(crypto_pbkdf2('sha256', 'password', 'salt', 4096, 32)),
+      'c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a');
+check('pbkdf2 sha512 24-byte',
+      hexof(crypto_pbkdf2('sha512', 'Jefe', 'NaCl', 20, 24)),
+      'e9bc78235f89b18153e0587b602255804d579fd6a7513aee');
+
+;;; --- AES-256-GCM seal/open ---
+vars k = crypto_random(32), k2 = crypto_random(32), blob, blob2;
+crypto_encrypt(k, 'attack at dawn') -> blob;
+check('gcm round trip', crypto_decrypt(k, blob), 'attack at dawn');
+check('gcm blob length', length(blob), 12 + 14 + 16);
+check('gcm wrong key', crypto_decrypt(k2, blob), false);
+;;; tamper with one ciphertext byte
+blob <> nullstring -> blob2;
+(subscrs(13, blob2) ||/& 1) -> subscrs(13, blob2);
+check('gcm tamper detected', crypto_decrypt(k, blob2), false);
+check('gcm truncated blob', crypto_decrypt(k, substring(1, 20, blob)), false);
+check('gcm empty plaintext', crypto_decrypt(k, crypto_encrypt(k, '')), '');
+check('gcm nonce varies',
+      crypto_encrypt(k, 'x') = crypto_encrypt(k, 'x'), false);
+check('gcm binary plaintext',
+      crypto_decrypt(k, crypto_encrypt(k, consstring(0, 255, 10, 3))),
+      consstring(0, 255, 10, 3));
+
 ;;; --- version ---
 check('version string', isstring(crypto_version()) and
       length(crypto_version()) > 0, true);
@@ -92,6 +133,10 @@ check('reject bad hmac alg',
       mishaps(procedure; crypto_hmac('nope', 'k', 'd').erase endprocedure), true);
 check('reject random 0',
       mishaps(procedure; crypto_random(0).erase endprocedure), true);
+check('reject short key',
+      mishaps(procedure; crypto_encrypt('short', 'x').erase endprocedure), true);
+check('reject pbkdf2 bad alg',
+      mishaps(procedure; crypto_pbkdf2('nope', 'p', 's', 1, 32).erase endprocedure), true);
 
 if failures == 0 then
     'SUMMARY: ALL PASS' =>

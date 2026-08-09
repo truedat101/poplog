@@ -39,6 +39,23 @@ crypto_random(N) -> STRING
     N cryptographically secure random bytes (libcrypto's RAND_bytes).
     Mishaps if the system RNG is unavailable.
 
+crypto_encrypt(KEY, DATA) -> BLOB
+    Authenticated encryption (AES-256-GCM).  KEY must be exactly 32
+    bytes — from crypto_random(32), or crypto_pbkdf2 for passwords.
+    Returns a self-contained blob (12-byte random nonce, ciphertext,
+    16-byte authentication tag); its length is length(DATA) + 28.
+
+crypto_decrypt(KEY, BLOB) -> DATA or false
+    The inverse.  Returns *false* — not a mishap — if the blob was
+    tampered with, truncated, or the key is wrong: callers must check
+    the result before trusting it.
+
+crypto_pbkdf2(ALG, PASSWORD, SALT, ITERATIONS, DKLEN) -> KEY
+    Derives a DKLEN-byte key from a password (PBKDF2-HMAC, RFC 2898),
+    e.g. crypto_pbkdf2('sha256', pw, salt, 600000, 32) for a
+    crypto_encrypt key.  Use a random per-user SALT and iterations in
+    the hundreds of thousands for real passwords.
+
 crypto_version() -> STRING
     The underlying library's version, e.g. 'OpenSSL 3.0.2 15 Mar 2022'.
 
@@ -72,9 +89,15 @@ crypto_version() -> STRING
   * md5 and sha1 are provided for interoperability (checksums, legacy
     protocols); do not use them where collision resistance matters.
 
-  * These are primitives, not protocols: no key derivation, AEAD
-    encryption or certificate handling yet.  Extend the shim rather
-    than composing primitives in Pop-11 where that matters.
+  * crypto_encrypt generates a fresh random nonce per call, so
+    encrypting the same data twice yields different blobs — this is
+    correct and required.  Never reuse a key+nonce pair; letting the
+    library pick the nonce guarantees that.
+
+  * Higher-level protocols (certificates, TLS, signatures) are not
+    covered.  Extend the shim (pcr_* entry points) rather than
+    composing primitives in Pop-11 where security matters.  A worked
+    demo of what is covered: examples/secure_notes.p.
 
 -- See also -----------------------------------------------------------
 
