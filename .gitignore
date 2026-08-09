@@ -43,3 +43,6 @@ result-*
 # Built by tools/build-popcrypto.sh (LIB CRYPTO shim)
 pop/extern/popcrypto/*.so
 pop/extern/popcrypto/*.dylib
+
+# Per-machine Claude Code settings (never committed)
+.claude/settings.local.json
