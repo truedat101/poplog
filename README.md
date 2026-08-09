@@ -1,3 +1,5 @@
+*English | [日本語](README.ja.md)*
+
 POPLOG is a free, open source, multi-language software development
 environment providing incremental compilers for a number of interactive
 programming languages, notably:
