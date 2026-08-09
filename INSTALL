@@ -7,8 +7,12 @@ Quick install:
 3. Configure and build:
 
   ./configure
-  make
+  make all
   make buildclean
+
+(Use 'make all' rather than bare 'make': the first target in the
+Makefile is the optional gfx-smoke graphics check, which needs
+./tools/fetch-imgui.sh and fails on a fresh console-only tree.)
 
 More detailed information.
 

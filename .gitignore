@@ -46,3 +46,5 @@ pop/extern/popcrypto/*.dylib
 
 # Per-machine Claude Code settings (never committed)
 .claude/settings.local.json
+# release artifacts (uploaded to GitHub Releases, never committed)
+dist/

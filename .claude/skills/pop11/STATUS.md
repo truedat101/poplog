@@ -46,13 +46,10 @@ microsecond cost" story; ranked by field evidence, not theory.
       / `sys_obey_linerep` exist — no clean status or stderr capture; the
       trials worked, but a silent failure of a spawned command would have
       been invisible).
-- [x] **lib json** — DONE 2026-08-08, but promoted *into the main tree*
-      rather than the skill: `pop/lib/lib/json.p` (`uses json;`), with
-      TEACH/HELP json and tools/test-json.sh (43 cases incl. 15
-      must-fail).  Validated on x86-64, aarch64 (Pi 5) and riscv64.
-      Bonus sibling: **lib crypto** (pop/lib/lib/crypto.p — digests,
-      HMAC, AES-256-GCM, PBKDF2, secure random via a libcrypto shim on
-      the popcurl pattern), same three-platform validation.
+- [ ] **lib json** (P, 2–4 days) — recursive-descent parser + printer;
+      objects→properties, arrays→vectors; `\uXXXX`; JSONTestSuite pass.
+      Biggest *capability* gap, but no field trial has needed it yet —
+      promote when a real API/JSON task shows up.
 - [ ] **lib fileutils** (P, 1–2 days) — `file_to_string`, `string_to_file`,
       `file_lines -> list`, glob via `sys_file_match`, directory walk,
       stat/mtime/size, temp files, path join/split.
