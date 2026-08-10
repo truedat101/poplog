@@ -40,3 +40,4 @@ See also: LIB * STRUTILS (byte-level operations), pop/extern/unicode
 (C codecs for legacy encodings), tools/tests/test_utf8.p.
 
 --- pop/help/utf8
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

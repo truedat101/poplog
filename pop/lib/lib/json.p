@@ -1,6 +1,7 @@
 /* --- JSON for Poplog ----------------------------------------------------
  > File:            pop/lib/lib/json.p
  > Purpose:         Parse and generate JSON (RFC 8259) in pure Pop-11
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * JSON,  TEACH * JSON (built as a worked example
  >                  of writing a new Poplog library)
  > Related Files:   tools/test-json.sh

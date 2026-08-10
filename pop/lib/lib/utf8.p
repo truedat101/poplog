@@ -1,6 +1,7 @@
 /* --- UTF-8 string layer -------------------------------------------------
  > File:            pop/lib/lib/utf8.p
  > Purpose:         Code-point-aware operations over UTF-8 byte strings
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * UTF8
  > Related Files:   tools/tests/test_utf8.p, LIB * JSON (produces UTF-8)
  >

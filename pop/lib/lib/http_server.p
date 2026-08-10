@@ -1,6 +1,7 @@
 /* --- HTTP/1.1 server ----------------------------------------------------
  > File:            pop/lib/lib/http_server.p
  > Purpose:         Serve HTTP from pure Pop-11 over LIB * UNIX_SOCKETS
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * HTTP_SERVER
  > Related Files:   tools/tests/test_http_server.p, examples/http_hello.p,
  >                  LIB * JSON, REF * SOCKETS

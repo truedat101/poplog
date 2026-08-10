@@ -44,3 +44,4 @@ over one pattern compile it once.
 See also: LIB * REGEXP, LIB * STRUTILS, tools/tests/test_pcre.p.
 
 --- pop/help/pcre
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

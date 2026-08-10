@@ -46,3 +46,4 @@ expressions), LIB * STRUTILS (fixed-string operations),
 tools/tests/test_regexp.p.
 
 --- pop/help/regexp_lib
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

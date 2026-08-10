@@ -36,3 +36,4 @@ See also: sys_real_time, LIB * FILEUTILS, tools/tests/test_datetime.p
 (vectors cross-checked against Python's calendar.timegm).
 
 --- pop/help/datetime
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

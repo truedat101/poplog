@@ -96,6 +96,76 @@ define lconstant namechar(c);
     or (c >= `0` and c <= `9`) or c == `_`
 enddefine;
 
+define lconstant ghchar(c);
+    namechar(c) or c == `-`
+enddefine;
+
+;;; does s contain a 19xx/20xx year?  Classic docs carry their credit in
+;;; the title line ("A.Sloman Nov 1986"); new ones carry a description
+;;; there instead, so a year is what tells the two apart.
+define lconstant has_year(s);
+    lvars i, c;
+    for i from 1 to length(s) - 3 do
+        subscrs(i, s) -> c;
+        if (c == `1` and subscrs(i + 1, s) == `9`)
+        or (c == `2` and subscrs(i + 1, s) == `0`) then
+            if subscrs(i + 2, s) >= `0` and subscrs(i + 2, s) <= `9`
+            and subscrs(i + 3, s) >= `0` and subscrs(i + 3, s) <= `9` then
+                return(true)
+            endif;
+        endif;
+    endfor;
+    false
+enddefine;
+
+lconstant months =
+    ['jan' 'feb' 'mar' 'apr' 'may' 'jun' 'jul' 'aug' 'sep' 'oct' 'nov' 'dec'];
+
+define lconstant has_digit(s);
+    lvars i, c;
+    for i from 1 to length(s) do
+        subscrs(i, s) -> c;
+        if c >= `0` and c <= `9` then return(true) endif;
+    endfor;
+    false
+enddefine;
+
+;;; a full year, or a month name next to some digits ("July 85", and even
+;;; the odd upstream typo "July 985") -- a description rarely has both
+define lconstant looks_like_credit(s);
+    lvars m, low;
+    returnif(has_year(s))(true);
+    unless has_digit(s) then return(false) endunless;
+    str_lower(s) -> low;
+    for m in months do
+        if issubstring(m, 1, low) then return(true) endif;
+    endfor;
+    false
+enddefine;
+
+;;; link @handle to the GitHub profile
+define lconstant handlelink(s) -> out;
+    lvars i = 1, j, k, pieces;
+    [% repeat
+        locchar(`@`, i, s) -> j;
+        quitunless(j);
+        j + 1 -> k;
+        while k <= length(s) and ghchar(subscrs(k, s)) do k + 1 -> k endwhile;
+        substring(i, j - i, s);
+        if k > j + 1 then
+            '<a href="https://github.com/' <> substring(j + 1, k - j - 1, s) <> '">';
+            substring(j, k - j, s);
+            '</a>';
+        else
+            substring(j, k - j, s);
+        endif;
+        k -> i;
+    endrepeat;
+    substring(i, length(s) - i + 1, s);
+    %] -> pieces;
+    str_join(pieces, '') -> out;
+enddefine;
+
 ;;; turn `HELP * JSON` style cross-references in an escaped line into
 ;;; links (relative to a page one directory below the site root)
 define lconstant linkify(line) -> out;
@@ -145,6 +215,8 @@ lconstant css =
 <> 'pre{white-space:pre-wrap;word-wrap:break-word;line-height:1.45;font-size:14px}'
 <> 'a{color:#157A63}h1{font-size:1.2rem}'
 <> '.crumb{font-size:0.8rem;margin-bottom:1rem}'
+<> '.auth{margin-top:1.5rem;padding-top:0.6rem;font-size:0.85rem;opacity:0.75;'
+<> 'border-top:1px solid rgba(128,128,128,0.35)}'
 <> 'ul{line-height:1.7;padding-left:1.2rem;list-style:none}'
 <> '.d{opacity:0.65;font-size:0.85em}';
 
@@ -157,15 +229,28 @@ define lconstant page(title, crumb, body) -> html;
 enddefine;
 
 define lconstant render_doc(entry);
-    lvars sub, name, path, title, desc, line, body;
+    lvars sub, name, path, title, desc, line, body, author = false, foot = '';
     explode(entry) -> (sub, name, path, title, desc);
     [% for line in str_lines(file_to_string(path)) do
-           linkify(escape(line))
+           ;;; '--- Author: ...' is metadata, not body text: lift it out
+           ;;; and render it as the page's credit footer
+           if str_starts('--- Author:', line) then
+               str_trim(substring(12, length(line) - 11, line)) -> author;
+           else
+               linkify(escape(line));
+           endif;
        endfor %] -> body;
+    unless author then
+        if looks_like_credit(desc) then desc -> author endif;   ;;; classic style
+    endunless;
+    if author then
+        '<div class="auth">Author: ' <> handlelink(escape(author)) <> '</div>'
+            -> foot;
+    endif;
     string_to_file(
         page(title,
              '<a href="../index.html">poplog docs</a> / ' <> sub,
-             '<pre>' <> str_join(body, '\n') <> '</pre>'),
+             '<pre>' <> str_join(body, '\n') <> '</pre>' <> foot),
         outdir <> '/' <> sub <> '/' <> name <> '.html');
 enddefine;
 

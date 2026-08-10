@@ -105,6 +105,7 @@ Every library in this tree starts the same way:
     /* --- JSON for Poplog ---------------------------------------
      > File:            pop/lib/lib/json.p
      > Purpose:         Parse and generate JSON (RFC 8259)
+     > Author:          Your Name (@your-github-id), Aug 2026
      > Documentation:   HELP * JSON, TEACH * JSON
      */
     compile_mode :pop11 +strict;
@@ -118,7 +119,13 @@ Every library in this tree starts the same way:
 Three conventions doing real work:
 
   * The header comment: files here are found by grep as often as by
-    browsing; Purpose and Documentation lines pay for themselves.
+    browsing; Purpose and Documentation lines pay for themselves.  The
+    Author line is the credit convention this tree has used since 1982
+    — put your name and GitHub id there, and end the matching HELP
+    file with a line reading
+        --- Author: Your Name (@your-github-id), Aug 2026
+    which the docs generator renders as a linked credit on your page
+    at iotone.github.io/poplog.
 
   * compile_mode +strict: undeclared variables become errors instead
     of silently-created globals.  Non-negotiable for library code.
@@ -354,3 +361,4 @@ tests — is the whole discipline of adding a library to Poplog.
 
 --- pop/teach/json
 --- The learning module accompanying pop/lib/lib/json.p
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

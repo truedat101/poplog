@@ -1,6 +1,7 @@
 /* --- Test framework for Poplog libraries --------------------------------
  > File:            pop/lib/lib/poptest.p
  > Purpose:         The check/must-fail test harness, formalized
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * POPTEST
  > Related Files:   tools/test-libs.sh (runner), suites in tools/tests/
  >

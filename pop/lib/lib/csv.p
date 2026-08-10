@@ -1,6 +1,7 @@
 /* --- CSV / TSV reading and writing --------------------------------------
  > File:            pop/lib/lib/csv.p
  > Purpose:         RFC 4180 CSV parse/generate (any single-char separator)
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * CSV
  > Related Files:   tools/tests/test_csv.p, LIB * FILEUTILS
  >

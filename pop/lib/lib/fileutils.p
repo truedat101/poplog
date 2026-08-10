@@ -1,6 +1,7 @@
 /* --- File utilities -----------------------------------------------------
  > File:            pop/lib/lib/fileutils.p
  > Purpose:         Whole-file read/write, line access, stat, globbing
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * FILEUTILS
  > Related Files:   tools/tests/test_fileutils.p, LIB * STRUTILS
  */

@@ -1,6 +1,7 @@
 /* --- Cryptographic primitives for Poplog --------------------------------
  > File:            pop/lib/lib/crypto.p
  > Purpose:         Digests, HMAC and secure random bytes via libcrypto
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * CRYPTO
  > Related Files:   pop/extern/popcrypto/popcrypto_shim.c,
  >                  tools/build-popcrypto.sh, tools/test-crypto.sh

@@ -33,3 +33,4 @@ See also: LIB * FILEUTILS, LIB * JSON (for the other interchange
 format), tools/tests/test_csv.p.
 
 --- pop/help/csv
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

@@ -52,3 +52,4 @@ tools/tests/test_http_server.p (which exercises a live server with
 curl via LIB * SHELL).
 
 --- pop/help/http_server
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

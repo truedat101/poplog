@@ -1,6 +1,7 @@
 /* --- String utilities ---------------------------------------------------
  > File:            pop/lib/lib/strutils.p
  > Purpose:         Everyday string operations: split/join/trim/replace...
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * STRUTILS
  > Related Files:   tools/tests/test_strutils.p
  >

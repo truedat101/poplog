@@ -38,3 +38,4 @@ See also: LIB * PIPEIN (character repeaters from commands), sysobey,
 sys_fork/sys_wait (the primitives), tools/tests/test_shell.p.
 
 --- pop/help/shell_lib
+--- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026

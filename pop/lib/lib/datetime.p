@@ -1,6 +1,7 @@
 /* --- Date and time utilities --------------------------------------------
  > File:            pop/lib/lib/datetime.p
  > Purpose:         Epoch seconds <-> ISO 8601 (UTC), pure integer math
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * DATETIME
  > Related Files:   tools/tests/test_datetime.p, LIB * STRUTILS
  >

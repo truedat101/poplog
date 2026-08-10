@@ -1,6 +1,7 @@
 /* --- Perl-compatible regular expressions --------------------------------
  > File:            pop/lib/lib/pcre.p
  > Purpose:         PCRE2 pattern matching with capture groups
+ > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
  > Documentation:   HELP * PCRE
  > Related Files:   pop/extern/poppcre/poppcre_shim.c,
  >                  tools/build-poppcre.sh, tools/tests/test_pcre.p
