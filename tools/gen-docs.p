@@ -121,6 +121,14 @@ enddefine;
 lconstant months =
     ['jan' 'feb' 'mar' 'apr' 'may' 'jun' 'jul' 'aug' 'sep' 'oct' 'nov' 'dec'];
 
+define lconstant count_char(c, s) -> n;
+    lvars i;
+    0 -> n;
+    for i from 1 to length(s) do
+        if subscrs(i, s) == c then n + 1 -> n endif;
+    endfor;
+enddefine;
+
 define lconstant has_digit(s);
     lvars i, c;
     for i from 1 to length(s) do
@@ -244,8 +252,10 @@ define lconstant render_doc(entry);
         if looks_like_credit(desc) then desc -> author endif;   ;;; classic style
     endunless;
     if author then
-        '<div class="auth">Author: ' <> handlelink(escape(author)) <> '</div>'
-            -> foot;
+        '<div class="auth">'
+            <> (if count_char(`@`, author) >= 2 then 'Authors: '
+                else 'Author: ' endif)
+            <> handlelink(escape(author)) <> '</div>' -> foot;
     endif;
     string_to_file(
         page(title,

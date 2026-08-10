@@ -1,5 +1,5 @@
 /* --- popcurl_shim.c -----------------------------------------------------
- * Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+ * Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
  * libcurl shim for Poplog -- see LIB * HTTP_CLIENT.
  *
  * Same design rules as the popcrypto shim: a few non-variadic,

@@ -1,5 +1,5 @@
 /* --- poppcre_shim.c -----------------------------------------------------
- * Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+ * Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
  * PCRE2 shim for Poplog -- see LIB * PCRE.
  *
  * Non-variadic, explicit-length entry points with results held in

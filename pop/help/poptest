@@ -45,4 +45,4 @@ Example suite (tools/tests/test_example.p):
 See also: tools/test-libs.sh, and tools/tests/ for real suites.
 
 --- pop/help/poptest
---- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

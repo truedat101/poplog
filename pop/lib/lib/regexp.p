@@ -1,7 +1,7 @@
 /* --- Friendly regular-expression surface --------------------------------
  > File:            pop/lib/lib/regexp.p
  > Purpose:         match / all / split / replace over the core engine
- > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+ > Author:          D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
  > Documentation:   HELP * REGEXP_LIB, REF * REGEXP (pattern syntax)
  > Related Files:   tools/tests/test_regexp.p, src/regexp_compile.p
  >

@@ -48,4 +48,4 @@ signing), tools/tests/test_http_client.p (client vs. the Pop-11
 server, full circle).
 
 --- pop/help/http_client
---- Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

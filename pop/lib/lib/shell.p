@@ -2,7 +2,7 @@
  > File:            pop/lib/lib/shell.p
  > Purpose:         Run commands with captured output, status, stderr,
  >                  background jobs and timeouts
- > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+ > Author:          D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
  > Documentation:   HELP * SHELL_LIB
  > Related Files:   tools/tests/test_shell.p, LIB * STRUTILS, * FILEUTILS
  >

@@ -1,7 +1,7 @@
 /* --- HTTP client --------------------------------------------------------
  > File:            pop/lib/lib/http_client.p
  > Purpose:         HTTP(S) requests with headers, status and timeouts
- > Author:          D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+ > Author:          D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
  > Documentation:   HELP * HTTP_CLIENT
  > Related Files:   pop/extern/popcurl/popcurl_shim.c,
  >                  tools/build-popcurl.sh, tools/tests/test_http_client.p

@@ -1,5 +1,5 @@
 /* --- popcrypto_shim.c ---------------------------------------------------
- * Author: D.Kordsmeier (@truedat101) with Claude (Anthropic), Aug 2026
+ * Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
  * Minimal libcrypto (OpenSSL) shim for Poplog -- see LIB * CRYPTO.
  *
  * Why a shim: keeps the Pop-11 exload surface to a few non-variadic,
