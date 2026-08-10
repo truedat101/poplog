@@ -1,0 +1,66 @@
+# Build the documentation site with Poplog itself and deploy to GitHub
+# Pages: fetch the released seed corepop, build the system from source,
+# run tools/gen-docs.sh (a Pop-11 program), publish dist/docs.
+#
+# One-time repo setting if enablement below is not permitted:
+# Settings -> Pages -> Source: GitHub Actions.
+name: docs
+
+on:
+  push:
+    branches: [master, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev
+
+      - name: Fetch seed corepop from the corepops release
+        run: |
+          mkdir -p target/pop
+          curl -fL -o target/pop/corepop \
+            https://github.com/IoTone/poplog/releases/latest/download/corepop-x86_64-linux
+          chmod 755 target/pop/corepop
+
+      - name: Build Poplog
+        run: |
+          ./configure
+          make
+          make buildclean
+
+      - name: Generate documentation site
+        run: tools/gen-docs.sh
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
