@@ -1,0 +1,237 @@
+/* tools/gen-docs.p -- generate a static HTML documentation site (and
+   llms.txt) from the HELP / TEACH / REF corpus.
+
+   Run via tools/gen-docs.sh; output lands in dist/docs/.
+
+   This is 2030plan item 1.1 (first cut), written in Pop-11 on the
+   Tier-2 stdlib (fileutils, strutils, shell): the corpus becomes
+   ~900 HTML pages with cross-references (`HELP * JSON`,
+   `REF * REGEXP`, `LIB * FOO`...) turned into links, one index page,
+   and an llms.txt manifest so AI assistants can find the docs too.
+*/
+
+uses fileutils;
+uses strutils;
+uses shell;
+
+vars outdir = 'dist/docs';
+
+;;; --- collect the corpus -------------------------------------------------
+
+;;; sections: {srcdir outsubdir LABEL}
+lconstant sections =
+    [{'pop/help'  'help'  'HELP'}
+     {'pop/teach' 'teach' 'TEACH'}
+     {'pop/ref'   'ref'   'REF'}];
+
+define lconstant docname_ok(name);
+    ;;; skip generated indexes and oddities
+    lvars i, c;
+    returnif(name = nullstring or issubstring('index', 1, name))(false);
+    for i from 1 to length(name) do
+        subscrs(i, name) -> c;
+        unless (c >= `a` and c <= `z`) or (c >= `0` and c <= `9`)
+        or c == `_` or c == `-` or c == `.` then
+            return(false)
+        endunless;
+    endfor;
+    true
+enddefine;
+
+;;; known('help/json') -> true for every page we will emit
+vars known = newmapping([], 512, false, true);
+vars corpus = [];   ;;; list of {subdir name path title desc}
+
+define lconstant firstline_info(path) -> (title, desc);
+    lvars s = file_to_string(path), lines, parts;
+    str_lines(s) -> lines;
+    if lines == [] then nullstring ->> title -> desc; return endif;
+    str_trim(hd(lines)) -> title;
+    ;;; description = title minus its first two tokens (TYPE NAME)
+    str_split(title, `\s`) -> parts;
+    if length(parts) > 2 then
+        str_trim(str_join(tl(tl(parts)), ' ')) -> desc;
+    else
+        nullstring -> desc;
+    endif;
+enddefine;
+
+define lconstant collect();
+    lvars sec, srcdir, sub, path, name, title, desc, n = 0;
+    for sec in sections do
+        explode(sec) -> (srcdir, sub, );
+        [% for path in dir_files(srcdir <> '/*') do
+               last(str_split(path, `/`)) -> name;
+               nextunless(docname_ok(name));
+               nextif(sysisdirectory(path));
+               firstline_info(path) -> (title, desc);
+               true -> known(sub <> '/' <> name);
+               {% sub, name, path, title, desc %};
+               n + 1 -> n;
+           endfor %] <> corpus -> corpus;
+    endfor;
+enddefine;
+
+;;; --- HTML rendering -----------------------------------------------------
+
+define lconstant escape(s) -> r;
+    lvars i, c, n = 0;
+    for i from 1 to length(s) do
+        subscrs(i, s) -> c;
+        if c == `&` then appdata('&amp;', identfn); n + 5 -> n;
+        elseif c == `<` then appdata('&lt;', identfn); n + 4 -> n;
+        elseif c == `>` then appdata('&gt;', identfn); n + 4 -> n;
+        else c; n + 1 -> n;
+        endif;
+    endfor;
+    consstring(n) -> r;
+enddefine;
+
+lconstant typedirs = newmapping(
+    [['HELP' 'help'] ['TEACH' 'teach'] ['REF' 'ref'] ['LIB' 'help']],
+    8, false, true);
+
+define lconstant namechar(c);
+    (c >= `A` and c <= `Z`) or (c >= `a` and c <= `z`)
+    or (c >= `0` and c <= `9`) or c == `_`
+enddefine;
+
+;;; turn `HELP * JSON` style cross-references in an escaped line into
+;;; links (relative to a page one directory below the site root)
+define lconstant linkify(line) -> out;
+    lvars i = 1, j, b, e, ns, ne, typ, dir, name, pieces = [];
+    [% repeat
+        issubstring(' * ', i, line) -> j;
+        quitunless(j);
+        ;;; the word ending just before j
+        j - 1 -> e;
+        e -> b;
+        while b >= 1 and subscrs(b, line) >= `A` and subscrs(b, line) <= `Z` do
+            b - 1 -> b;
+        endwhile;
+        b + 1 -> b;
+        ;;; the name starting after ' * '
+        j + 3 -> ns;
+        ns -> ne;
+        while ne <= length(line) and namechar(subscrs(ne, line)) do
+            ne + 1 -> ne;
+        endwhile;
+        ne - 1 -> ne;
+        if e >= b
+        and (typedirs(substring(b, e - b + 1, line)) ->> dir)
+        and ne >= ns
+        and (str_lower(substring(ns, ne - ns + 1, line)) ->> name)
+        and known(dir <> '/' <> name) then
+            substring(i, b - i, line);
+            '<a href="../' <> dir <> '/' <> name <> '.html">';
+            substring(b, ne - b + 1, line);
+            '</a>';
+            ne + 1 -> i;
+        else
+            substring(i, j + 2 - i + 1, line);
+            j + 3 -> i;
+        endif;
+    endrepeat;
+    substring(i, length(line) - i + 1, line);
+    %] -> pieces;
+    str_join(pieces, '') -> out;
+enddefine;
+
+lconstant css =
+'body{margin:0;background:#FAFAF7;color:#1E2420;font-family:ui-monospace,Menlo,Consolas,monospace}'
+<> '@media(prefers-color-scheme:dark){body{background:#141815;color:#E6EBE7}'
+<> 'a{color:#4CC69F}.crumb a{color:#4CC69F}}'
+<> 'main{max-width:60rem;margin:0 auto;padding:2rem 1rem}'
+<> 'pre{white-space:pre-wrap;word-wrap:break-word;line-height:1.45;font-size:14px}'
+<> 'a{color:#157A63}h1{font-size:1.2rem}'
+<> '.crumb{font-size:0.8rem;margin-bottom:1rem}'
+<> 'ul{line-height:1.7;padding-left:1.2rem;list-style:none}'
+<> '.d{opacity:0.65;font-size:0.85em}';
+
+define lconstant page(title, crumb, body) -> html;
+    '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+    <> '<title>' <> escape(title) <> ' — Poplog</title>'
+    <> '<style>' <> css <> '</style>'
+    <> '<main><div class="crumb">' <> crumb <> '</div>'
+    <> body <> '</main>' -> html;
+enddefine;
+
+define lconstant render_doc(entry);
+    lvars sub, name, path, title, desc, line, body;
+    explode(entry) -> (sub, name, path, title, desc);
+    [% for line in str_lines(file_to_string(path)) do
+           linkify(escape(line))
+       endfor %] -> body;
+    string_to_file(
+        page(title,
+             '<a href="../index.html">poplog docs</a> / ' <> sub,
+             '<pre>' <> str_join(body, '\n') <> '</pre>'),
+        outdir <> '/' <> sub <> '/' <> name <> '.html');
+enddefine;
+
+;;; --- index + llms.txt ---------------------------------------------------
+
+define lconstant gen_index();
+    lvars sec, sub, label, entry, items, body = '';
+    for sec in sections do
+        explode(sec) -> (, sub, label);
+        [% for entry in corpus do
+               if subscrv(1, entry) = sub then
+                   '<li><a href="' <> sub <> '/' <> subscrv(2, entry)
+                   <> '.html">' <> escape(subscrv(2, entry)) <> '</a>'
+                   <> ' <span class="d">' <> escape(subscrv(5, entry))
+                   <> '</span></li>'
+               endif;
+           endfor %] -> items;
+        body <> '<h1>' <> label <> ' (' >< length(items) >< ')</h1><ul>'
+             <> str_join(items, '\n') <> '</ul>' -> body;
+    endfor;
+    string_to_file(
+        page('Poplog documentation',
+             'poplog docs',
+             '<pre>Poplog / Pop-11 documentation — generated from the in-tree\n'
+             <> 'HELP, TEACH and REF corpus by tools/gen-docs.sh (a Pop-11\n'
+             <> 'program).  Start points: '
+             <> '<a href="help/json.html">HELP JSON</a>, '
+             <> '<a href="teach/json.html">TEACH JSON</a>, '
+             <> '<a href="ref/regexp.html">REF REGEXP</a>.</pre>' <> body),
+        outdir <> '/index.html');
+enddefine;
+
+define lconstant gen_llms();
+    lvars sec, sub, label, entry, out;
+    [% '# Poplog documentation';
+       '';
+       '> Documentation for Poplog / Pop-11 (multi-language incremental-';
+       '> compiler system: Pop-11, Prolog, Common Lisp, Standard ML, Forth),';
+       '> generated from the in-tree HELP/TEACH/REF corpus.';
+       '';
+       for sec in sections do
+           explode(sec) -> (, sub, label);
+           '## ' <> label;
+           '';
+           for entry in corpus do
+               if subscrv(1, entry) = sub then
+                   '- [' <> subscrv(2, entry) <> '](' <> sub <> '/'
+                   <> subscrv(2, entry) <> '.html): ' <> subscrv(5, entry)
+               endif;
+           endfor;
+           '';
+       endfor;
+    %] -> out;
+    string_to_file(str_join(out, '\n') <> '\n', outdir <> '/llms.txt');
+enddefine;
+
+;;; --- main ---------------------------------------------------------------
+
+vars entry, npages = 0, out, st;
+shell_run('mkdir -p ' <> outdir <> '/help ' <> outdir <> '/teach '
+          <> outdir <> '/ref') -> (out, st);
+collect();
+for entry in corpus do
+    render_doc(entry);
+    npages + 1 -> npages;
+endfor;
+gen_index();
+gen_llms();
+'gen-docs: ' >< npages >< ' pages + index + llms.txt -> ' >< outdir =>
