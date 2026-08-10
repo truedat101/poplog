@@ -6,6 +6,20 @@ Small, self-contained Pop-11 programs.
 
 No graphics build needed — these run on a plain console Poplog.
 
+### `http_hello.p` — a web service in pure Pop-11
+
+`lib http_server` + `lib json` composed: routing, query/body access, JSON
+responses, and the built-in safety nets (unknown route → 404, handler mishap →
+500 without killing the server).
+
+```sh
+./poplog ./target/pop/basepop11 examples/http_hello.p 8080
+curl localhost:8080/hello
+```
+
+See `HELP HTTP_SERVER`; the acceptance suite (`tools/tests/test_http_server.p`)
+drives this exact file with curl.
+
 ### `secure_notes.p` — JSON + crypto, composed
 
 A miniature secure-data pipeline using the two libraries added in this fork:

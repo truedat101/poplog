@@ -1,0 +1,47 @@
+HELP POPTEST                          Test framework for Poplog libraries
+
+    uses poptest;
+
+The check / must-fail harness used by every library suite in this
+repository, formalized.  A suite is a plain .p file of checks ending
+with test_summary(); tools/test-libs.sh runs every suite in
+tools/tests/ and keys on the summary line.
+
+check(NAME, GOT, WANT)
+    Passes when GOT = WANT; prints 'PASS name' or 'FAIL name' with the
+    two values.
+
+check_true(NAME, VAL)
+check_false(NAME, VAL)
+    Passes when VAL is (not) false — any non-false value counts as
+    true.
+
+check_mishaps(NAME, P)
+    Runs the procedure P and passes when it mishaps.  The trap
+    replaces prmishap for P's dynamic extent, unwinds with exitto,
+    and clears whatever the interrupted procedure left on the open
+    stack — see TEACH * JSON (testing section) for how this works.
+
+test_reset()
+    Zero the counters (suites in one process).
+
+test_failures() -> N
+    Failures so far.
+
+test_summary()
+    Prints 'SUMMARY: ALL PASS (n checks)' or 'SUMMARY: n FAILURES
+    (of m checks)', and sets pop_exit_ok to match, so the process
+    exit status reflects the suite verdict even though check_mishaps
+    deliberately triggered mishaps along the way.
+
+Example suite (tools/tests/test_example.p):
+
+    uses poptest;
+    uses mylib;
+    check('adds', myadd(2, 2), 4);
+    check_mishaps('rejects junk', procedure; myadd('x', 1) endprocedure);
+    test_summary();
+
+See also: tools/test-libs.sh, and tools/tests/ for real suites.
+
+--- pop/help/poptest

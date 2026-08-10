@@ -1,0 +1,48 @@
+HELP REGEXP_LIB              match / all / split / replace conveniences
+
+    uses regexp;
+
+A friendly surface over Poplog's built-in regular expression engine
+(the one Ved search uses; REF * REGEXP documents it fully).  Compiled
+patterns are cached, so repeating a pattern string costs one property
+lookup.
+
+PATTERN SYNTAX (Ved style, not PCRE): ordinary characters are
+literal; operators take a @ prefix:
+
+    @.          any character
+    @*          zero or more of the previous item
+    @[a-z@]     character class ( @[^...@] negated )
+    @< @>       word boundaries
+    @a @z       anchor at start / end of string
+    @?          any single item (Ved's wildcard)
+
+So digits are '@[0-9@]@[0-9@]@*', and a line of '-'s is '@a-@*@z'.
+
+regexp_search(PATTERN, S, I) -> (START, NCHARS)
+    First match at or after byte position I; both false if none.
+    substring(START, NCHARS, S) is the matching text.
+
+regexp_matches(PATTERN, S) -> BOOL
+
+regexp_first(PATTERN, S) -> SUBSTRING or false
+
+regexp_all(PATTERN, S) -> LIST
+    Every non-overlapping match, left to right.
+
+regexp_split(PATTERN, S) -> LIST
+    S split around matches:
+        regexp_split('@[,;@]', 'a,b;c') -> ['a' 'b' 'c']
+
+regexp_replace(PATTERN, S, NEW) -> S
+    Every match replaced by the literal string NEW.
+
+Zero-length matches advance by one character, so walks always
+terminate.  A malformed pattern (e.g. '@[a-z' with no closing class)
+mishaps with the engine's error message.
+
+See also: REF * REGEXP (full syntax incl. case-folding and long
+expressions), LIB * STRUTILS (fixed-string operations),
+tools/tests/test_regexp.p.
+
+--- pop/help/regexp_lib

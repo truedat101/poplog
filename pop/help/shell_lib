@@ -1,0 +1,40 @@
+HELP SHELL_LIB                Run commands with output, status and control
+
+    uses shell;
+
+What sysobey never gave you: captured output, exit status, separate
+stderr, background jobs, kills and timeouts.  Commands run via
+'/bin/sh -c'.  Status is the decoded exit code (0-255); a command
+killed by a signal reports 128 + signum (so SIGTERM = 143), the
+shell convention.  (HELP * SHELL is the classic 1983 guide to using
+a Unix shell from Ved — different thing entirely.)
+
+shell_run(CMD) -> (OUTPUT, STATUS)
+    Stdout and stderr captured together (2>&1 semantics).
+
+        shell_run('git rev-parse HEAD') -> (out, status);
+
+shell_run_full(CMD) -> (OUTPUT, ERROUT, STATUS)
+    Stderr captured separately (via a temp file, so large stderr
+    cannot deadlock the pipe).
+
+shell_lines(CMD) -> (LINES, STATUS)
+    Output as a list of line strings.
+
+shell_bg(CMD) -> JOB
+shell_wait(JOB) -> (OUTPUT, STATUS)
+shell_kill(JOB)
+    Start a command in the background, later collect it (blocking),
+    or SIGTERM it first.  Always shell_wait a job you started, or a
+    zombie process remains.
+
+shell_timeout(CMD, SECS) -> (OUTPUT, STATUS)
+    Run with a watchdog: the command is SIGTERMed after SECS seconds
+    (status 143).  Fast commands return immediately — the watchdog is
+    detached from the output pipe.  The shell may append its own
+    'Terminated' notice to merged output when the timeout fires.
+
+See also: LIB * PIPEIN (character repeaters from commands), sysobey,
+sys_fork/sys_wait (the primitives), tools/tests/test_shell.p.
+
+--- pop/help/shell_lib

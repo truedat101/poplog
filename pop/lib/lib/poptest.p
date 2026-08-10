@@ -62,11 +62,16 @@ define test_failures() -> n;
     nfail -> n;
 enddefine;
 
+;;; prints the greppable summary and makes the process exit status
+;;; meaningful: deliberate check_mishaps trapping marks the process
+;;; failed (pop_exit_ok), so reassert the suite's own verdict
 define test_summary();
     if nfail == 0 then
         'SUMMARY: ALL PASS (' >< ncheck >< ' checks)' =>
+        true -> pop_exit_ok;
     else
         'SUMMARY: ' >< nfail >< ' FAILURES (of ' >< ncheck >< ' checks)' =>
+        false -> pop_exit_ok;
     endif;
 enddefine;
 

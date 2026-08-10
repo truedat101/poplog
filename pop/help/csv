@@ -1,0 +1,35 @@
+HELP CSV                                    CSV / TSV reading and writing
+
+    uses csv;
+
+RFC 4180 CSV with any single-character separator (`,` for CSV, `\t`
+for TSV).  Rows are vectors of field strings.
+
+csv_parse(S, SEP) -> ROWS
+    Parse CSV text into a list of row vectors.  Handles quoted fields
+    ("a,b"), doubled-quote escapes ("say ""hi"""), fields spanning
+    lines, and \r\n row endings.  Mishaps on an unterminated quoted
+    field.
+
+csv_generate(ROWS, SEP) -> S
+    The inverse.  Rows may be vectors or lists; non-string fields are
+    coerced with sys_><.  Fields containing the separator, quotes or
+    newlines are quoted automatically.  Round trips:
+        csv_parse(csv_generate(rows, `,`), `,`) = rows
+
+csv_read(FILE, SEP) -> ROWS
+csv_write(ROWS, FILE, SEP)
+    File-level convenience over the two above.
+
+Example — reindex a TSV by its second column:
+
+    uses csv;
+    vars rows = csv_read('data.tsv', `\t`);
+    syssort(rows, procedure(a, b); alphabefore(a(2), b(2)) endprocedure)
+        -> rows;
+    csv_write(rows, 'sorted.tsv', `\t`);
+
+See also: LIB * FILEUTILS, LIB * JSON (for the other interchange
+format), tools/tests/test_csv.p.
+
+--- pop/help/csv
