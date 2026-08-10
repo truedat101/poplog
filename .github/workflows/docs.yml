@@ -6,9 +6,13 @@
 # Settings -> Pages -> Source: GitHub Actions.
 name: docs
 
+# Deploys from dev (the active branch) — switch to master here and in
+# the github-pages environment rules if the site should track releases
+# instead.  Deploying from both risks a stale master push rolling the
+# site back.
 on:
   push:
-    branches: [master, dev]
+    branches: [dev]
   workflow_dispatch:
 
 permissions:
