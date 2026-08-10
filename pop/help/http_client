@@ -1,0 +1,50 @@
+HELP HTTP_CLIENT                HTTP(S) requests with headers and status
+
+    uses http_client;
+
+The client half of the HTTP story (LIB * HTTP_SERVER is the other):
+a Pop-11 face over libcurl, so HTTPS, redirects, compression and
+proxy environment variables come along for free.  One-time setup:
+
+    $ tools/build-popcurl.sh        (needs libcurl dev headers)
+
+http_get(URL) -> (BODY, STATUS)
+    The simple case:
+        http_get('https://example.com/data.json') -> (body, status);
+
+http_post(URL, BODY, CTYPE) -> (BODY, STATUS)
+    POST with a Content-Type, e.g.
+        http_post(url, json_generate(obj), 'application/json')
+
+http_request(METHOD, URL, BODY, HEADERS, TIMEOUT)
+                            -> (BODY, RESPHDRS, STATUS)
+    The general form.  METHOD any verb ('GET', 'PUT', 'DELETE'...);
+    BODY '' for none; HEADERS a list of 'Name: value' strings;
+    TIMEOUT in seconds or false.  RESPHDRS is a property of response
+    headers with lowercased names (the final hop's headers when
+    redirects were followed):
+
+        http_request('GET', url, '', ['Authorization: Bearer ' <> tok], 30)
+            -> (body, hdrs, status);
+        hdrs('content-type') =>
+
+http_client_version() -> STRING
+
+STATUS is the HTTP status code (404 is a status, not an error).
+Transport failures — DNS, connection refused, timeout — mishap with
+libcurl's message.
+
+Composes naturally with LIB * JSON:
+
+    json_parse(http_get('https://api.example.com/x') -> status) -> obj;
+
+Note: the shim keeps one response at a time (Poplog is single-
+threaded); a request's body/headers are readable until the next
+request.  For requests from inside an http_server handler, remember
+the server is also single-threaded.
+
+See also: LIB * HTTP_SERVER, LIB * JSON, LIB * CRYPTO (HMAC request
+signing), tools/tests/test_http_client.p (client vs. the Pop-11
+server, full circle).
+
+--- pop/help/http_client
