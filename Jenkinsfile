@@ -21,10 +21,11 @@
  *            and uploads them to the GitHub release with --clobber.
  *
  * Jenkins-side setup (nothing machine-specific belongs in this file):
- *   - Node: one agent labelled "poplog linux x86_64".  Prerequisites: git,
- *     curl, cc/make, ssh/scp (plus the build deps in INSTALL: ncurses dev,
- *     libcurl and libsqlite3 dev headers for the shims).  The gh CLI is
- *     needed only for PUBLISH.
+ *   - Node: one x86_64 Linux agent named "nix" (a node's name is also a
+ *     label, which is what the agent directive below pins to).
+ *     Prerequisites: git, curl, cc/make, ssh/scp (plus the build deps in
+ *     INSTALL: ncurses dev, libcurl and libsqlite3 dev headers for the
+ *     shims).  The gh CLI is needed only for PUBLISH.
  *   - Remote targets: the builder's own ~/.ssh/config and keys decide what
  *     "raspi5" or "riscv-cloud" mean.  Hostnames, IPs, ports and users stay
  *     on the builder, never in the repo; the REMOTE_* parameters below take
@@ -35,8 +36,12 @@
  *     read by gh from the environment — never echoed, never a parameter.
  */
 pipeline {
-    /* every stage runs here; remote platforms are ssh targets, not nodes */
-    agent { label 'poplog && linux && x86_64' }
+    /* every stage runs here; remote platforms are ssh targets, not nodes.
+     * Pinned to the "nix" node by name rather than to a label expression:
+     * there is exactly one builder, and its ssh config/keys are what make
+     * the remote platforms reachable, so a second x86_64 node picking this
+     * job up would fail at the first remote stage. */
+    agent { label 'nix' }
     options {
         timestamps()
         disableConcurrentBuilds()
