@@ -34,7 +34,15 @@
 # Env: FORCE_ENGINE_REBUILD=1   rebuild the remote engine even if present
 #      POP11_SEED_BASE_URL      corepop seed source (passed through)
 #      SSH_OPTS                 extra ssh options, in -o form so scp takes
-#                               them too (e.g. '-o BatchMode=yes')
+#                               them too (e.g. '-o BatchMode=yes').  On a
+#                               board with a shaky link, '-o
+#                               ServerAliveInterval=15' is worth adding: a
+#                               build holds one channel open for many
+#                               minutes.
+#
+# Exit: 0 built and collected      2 remote is unusable (missing tool/header,
+#       3 the ssh link failed        unsupported platform, sync/copy trouble)
+#       other  the remote build's own status, passed through
 set -e
 
 host="${1:?usage: build-remote.sh <ssh-host> [outdir] [remote-dir]}"
@@ -52,6 +60,18 @@ esac
 # shellcheck disable=SC2086  # SSH_OPTS is a deliberate word list
 ssh_() { ssh $SSH_OPTS "$host" "$@"; }
 
+# ssh(1) exits 255 for its own failures -- connect, auth, or a link that
+# drops mid-session -- which is otherwise indistinguishable from the remote
+# command exiting non-zero.  Without this a flaky network reports as
+# "$host lacks cc" and sends you off debugging the wrong machine.
+die_if_transport() {
+    [ "$1" = 255 ] || return 0
+    echo "build-remote: lost the ssh connection to $host" >&2
+    echo "  (link trouble, not a build failure -- check the board's network;" >&2
+    echo "   SSH_OPTS='-o ServerAliveInterval=15' may ride out brief drops)" >&2
+    exit 3
+}
+
 # ---- 1. probe -------------------------------------------------------------
 echo "== $host: probing =="
 uname="$(ssh_ 'uname -s; uname -m' | tr '\n' '/')" || {
@@ -60,7 +80,7 @@ uname="${uname%/}"
 arch="${uname#*/}"
 echo "build-remote: $host is $uname"
 for tool in cc make curl tar; do
-    ssh_ "command -v $tool >/dev/null" || {
+    ssh_ "command -v $tool >/dev/null" || { st=$?; die_if_transport "$st"
         echo "build-remote: $host lacks $tool" >&2; exit 2; }
 done
 # the installer smoke test builds the popcurl and popsqlite shims, so the
@@ -68,7 +88,7 @@ done
 # later at step 4
 for hdr in curl/curl.h sqlite3.h; do
     ssh_ "printf '#include <$hdr>\nint main(void){return 0;}\n' | \
-          cc -fsyntax-only -x c - 2>/dev/null" || {
+          cc -fsyntax-only -x c - 2>/dev/null" || { st=$?; die_if_transport "$st"
         echo "build-remote: $host lacks <$hdr>" >&2
         echo "  (Debian/Ubuntu: apt install libcurl4-openssl-dev libsqlite3-dev)" >&2
         exit 2; }
@@ -91,19 +111,25 @@ run_prefix=''
 # ---- 2. sync tracked files ------------------------------------------------
 echo "== $host: syncing tree -> ~/$rdir =="
 ssh_ "mkdir -p '$rdir'"
-git ls-files -z | tar --null -T - -czf - | ssh_ "tar -xzf - -C '$rdir'"
+git ls-files -z | tar --null -T - -czf - | ssh_ "tar -xzf - -C '$rdir'" || {
+    st=$?; die_if_transport "$st"
+    echo "build-remote: syncing the tree to $host failed" >&2; exit 2; }
 
 # ---- 3. build on the remote ----------------------------------------------
 echo "== $host: build + verify =="
 ssh_ "cd '$rdir' && \
       FORCE_ENGINE_REBUILD='${FORCE_ENGINE_REBUILD:-0}' \
       ${POP11_SEED_BASE_URL:+POP11_SEED_BASE_URL='$POP11_SEED_BASE_URL'} \
-      ${run_prefix}sh tools/ci/build-and-verify.sh dist"
+      ${run_prefix}sh tools/ci/build-and-verify.sh dist" || {
+    st=$?; die_if_transport "$st"
+    echo "build-remote: the build failed on $host (status $st)" >&2; exit "$st"; }
 
 # ---- 4. collect -----------------------------------------------------------
 echo "== $host: collecting $tarball =="
 mkdir -p "$out"
-scp $SSH_OPTS -q "$host:$rdir/dist/$tarball" "$out/$tarball"
+scp $SSH_OPTS -q "$host:$rdir/dist/$tarball" "$out/$tarball" || {
+    st=$?; die_if_transport "$st"
+    echo "build-remote: could not fetch $tarball from $host" >&2; exit 2; }
 ls -l "$out/$tarball"
 
 echo "build-remote: OK $host -> $out/$tarball"
