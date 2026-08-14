@@ -46,6 +46,18 @@ sha256() {  # portable: sha256sum on Linux, shasum on macOS
 # ---- 1. engine ------------------------------------------------------------
 if [ "${FORCE_ENGINE_REBUILD:-0}" = 1 ] || [ ! -x target/pop/basepop11 ]; then
     echo "ci: building engine for $plat"
+    if [ "${FORCE_ENGINE_REBUILD:-0}" = 1 ]; then
+        # A forced rebuild must be CLEAN: incremental make over stale
+        # popc-compiled objects does not reliably pick up .ph/.s source
+        # changes (field-learned twice). Keep only the corepop seed.
+        echo "ci: forced rebuild — clearing build products"
+        if [ -x target/pop/corepop ]; then
+            mv target/pop/corepop /tmp/ci-corepop.$$
+        fi
+        rm -rf target stamp_* Makefile poplog
+        mkdir -p target/pop
+        [ -f /tmp/ci-corepop.$$ ] && mv /tmp/ci-corepop.$$ target/pop/corepop
+    fi
     if [ ! -x target/pop/corepop ]; then
         mkdir -p target/pop
         curl -fsSL -o target/pop/corepop "$seeds/corepop-$plat"
