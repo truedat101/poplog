@@ -69,6 +69,11 @@ def save_stats(s):
 # empty stack) silently drives the stack pointer below base and the NEXT
 # chunk's itemiser dies on it. Refilling to the entry depth keeps the
 # engine sane; the popped-junk values were garbage anyway.
+# Bump whenever BOOTSTRAP changes shape: running sessions (and restored
+# images, which carry their era's skill_run) are re-bootstrapped on the
+# next send when their stamp is older.
+BOOT_VERSION = 2
+
 BOOTSTRAP = """
 define skill_run(file, sentinel);
     lvars _base = stacklength();
@@ -204,6 +209,15 @@ def do_send(name, code, timeout, raw=False, show_timing=True):
     m = load_meta(name)
     if not m or not alive(m["pid"]):
         sys.exit("popsession: session '%s' is not running" % name)
+    # Auto-heal across CLI upgrades: a running session whose skill_run
+    # predates this CLI's bootstrap would wedge on the sentinel protocol
+    # (field-hit 2026-08-14 when the underflow fix changed skill_run's
+    # signature). Redefinition is instant, so just re-send the bootstrap.
+    if not raw and m.get("boot") != BOOT_VERSION:
+        do_send(name, BOOTSTRAP, timeout, raw=True, show_timing=False)
+        m = load_meta(name) or m
+        m["boot"] = BOOT_VERSION
+        save_meta(name, m)
     m["seq"] = m.get("seq", 0) + 1
     save_meta(name, m)
     marker = "%s%d_%d__" % (SENT, m["seq"], os.getpid())
@@ -270,6 +284,7 @@ def cmd_start(args):
     os.close(fd_in)
     os.close(fd_out)
     save_meta(name, {"pid": p.pid, "root": root, "seq": 0,
+                     "boot": BOOT_VERSION,
                      "image": args.image, "started": time.time()})
     rc = do_send(name, BOOTSTRAP, args.timeout, raw=True, show_timing=False)
     if rc == 0:
