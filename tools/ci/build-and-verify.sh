@@ -74,7 +74,9 @@ list="$(tar -tzf "$out/$tarball")"
 for path in target/pop/basepop11 poplog pop/lib skill/SKILL.md \
             skill/install.sh skill/bin/popsession skill/bin/pop11run \
             skill/bin/build-popcurl skill/bin/build-popsqlite \
-            skill/lib/popcurl_shim.c skill/lib/popsqlite_shim.c; do
+            skill/lib/popcurl_shim.c skill/lib/popsqlite_shim.c \
+            pop/mcp/pop11_mcp.p tools/pop11-mcp \
+            pop/lib/lib/json.p; do
     echo "$list" | grep -q "/$path" || {
         echo "ci: tarball missing $path" >&2; exit 1; }
 done
@@ -99,6 +101,16 @@ sqlite_run_b(db, 'insert into t values (?)', ['ci-ok']);
 npr('ci sqlite smoke: ' sys_>< sqlite_query(db, 'select x from t')(1)(1));
 " | grep -q 'ci sqlite smoke: ci-ok' || {
     echo "ci: sqlite smoke failed" >&2; exit 1; }
+
+# ---- 5. MCP server smoke over the real protocol ---------------------------
+echo "ci: MCP protocol smoke against the installed tarball"
+prefix="$sandbox/.local/share/pop11-skill"
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pop11_eval","arguments":{"code":"npr(19 + 23);"}}}' \
+  | HOME="$sandbox" TMPDIR="$sandbox/tmp" "$prefix/tools/pop11-mcp" \
+  | grep -q '"text":"42' || {
+    echo "ci: MCP smoke failed" >&2; exit 1; }
 rm -rf "$sandbox"
 
 echo "ci: OK $out/$tarball"
