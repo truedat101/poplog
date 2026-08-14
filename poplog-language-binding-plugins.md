@@ -249,7 +249,7 @@ clients version together with the engine.
 
 | Phase | Contents | Effort |
 | --- | --- | --- |
-| **P1** | tree-sitter grammar core + corpus tests; Neovim highlighting + ftdetect; VS Code TextMate grammar + language config (no LSP yet) | 1–2 weeks |
+| **P1** | tree-sitter grammar core + corpus tests; Neovim highlighting + ftdetect; VS Code TextMate grammar + language config (no LSP yet) — **shipped 2026-08**: [tree-sitter-pop11](https://github.com/IoTone/tree-sitter-pop11) (95.2 % clean parse over the full 1,805-file tree), `editors/nvim/` (heuristic ftdetect, parser registration, vendored queries), `editors/vscode/` (TextMate grammar + language config) | 1–2 weeks |
 | **P2** | poplog-lsp v0.1 (symbols, completion, hover); wire all three clients; Zed extension | 2–3 weeks |
 | **P3** | Diagnostics + definition (v0.2); linguist PR; Marketplace/OpenVSX/Zed-registry/nvim upstream submissions; saved-image packaging | ~2 weeks |
 

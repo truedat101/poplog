@@ -48,3 +48,13 @@ pop/extern/popcrypto/*.dylib
 .claude/settings.local.json
 # release artifacts (uploaded to GitHub Releases, never committed)
 dist/
+pop/extern/popcurl/*.so
+pop/extern/popcurl/*.dylib
+pop/extern/poppcre/*.so
+pop/extern/poppcre/*.dylib
+
+# Generated documentation site and release staging
+/dist/
+
+# Release/CI build output (tarballs, docs site, sandboxes)
+/dist/

@@ -1374,6 +1374,15 @@ extern char *sbrk();
 #if defined(SVR4)
 /* SVR4 getpwnam needs lots of space */
 #define POP_MEM_BLOCK_SIZE 200000
+#elif defined(__linux__) || defined(__APPLE__)
+/* Modern dlopen chains (glibc loader structures, TLS, constructor
+ * allocations across 20+ dependency libraries -- e.g. libcurl's) can
+ * malloc megabytes during external load, which draws from this block
+ * when not inside a user external call.  Exhausting it kills the
+ * process via SIGEMT (= SIGSYS on Linux).  The array is bss: pages
+ * are only faulted in when actually touched, so a generous size
+ * costs nothing on small machines. */
+#define POP_MEM_BLOCK_SIZE 2000000
 #else
 #define POP_MEM_BLOCK_SIZE 40000
 #endif

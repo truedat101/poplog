@@ -212,6 +212,17 @@ cross-platform and cross-language benchmark numbers (x86-64, Apple M-series,
 Raspberry Pi 5, MediaTek Genio 720, RISC-V, with Python and Perl baselines for
 context), see **[BENCHMARKS.md](BENCHMARKS.md)**.
 
+## Documentation
+
+The full in-tree corpus — 900+ HELP, TEACH and REF files — is browsable
+at **<https://iotone.github.io/poplog/>** (with
+[`llms.txt`](https://iotone.github.io/poplog/llms.txt) for AI
+assistants).  The site is regenerated on every push by
+`tools/gen-docs.sh`, a Pop-11 program: Poplog builds its own docs site
+in CI, from a released seed corepop, in under a second of generator
+time.  Inside the system the same material is available as `help json`,
+`teach json`, `ref regexp` etc. in ved.
+
 ## Learning material
 
 Decades of open Pop-11/Prolog teaching material — the Birmingham AI course

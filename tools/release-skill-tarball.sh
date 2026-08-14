@@ -10,6 +10,8 @@
 #     poplog            env wrapper (poplogroot rewritten at install time)
 #     target/pop/       basepop11 + saved images
 #     pop/lib/          autoloadable + system libraries
+#     pop/mcp/          the MCP server (pop11_mcp.p, runs on lib json)
+#     tools/pop11-mcp   MCP server launcher (register with an MCP client)
 #     skill/            the Claude skill (SKILL.md, bin/, lib/, install.sh)
 #
 # Runtime relocatability: the wrapper derives every pop* env var from
@@ -46,6 +48,11 @@ mkdir -p "$stage/$name/target/pop"
 cp "$src/target/pop/basepop11" "$stage/$name/target/pop/basepop11"
 cp -R "$src/pop/lib" "$stage/$name/pop/lib"
 cp -R "$repo/.claude/skills/pop11" "$stage/$name/skill"
+# The MCP server ships too (its launcher falls back to $root/pop/mcp when
+# not run from a checkout).  Sources live in the repo, not the built tree.
+mkdir -p "$stage/$name/pop/mcp" "$stage/$name/tools"
+cp "$repo/pop/mcp/pop11_mcp.p" "$stage/$name/pop/mcp/pop11_mcp.p"
+cp "$repo/tools/pop11-mcp" "$stage/$name/tools/pop11-mcp"
 
 mkdir -p "$out"
 tar -C "$stage" -czf "$out/$name.tar.gz" "$name"

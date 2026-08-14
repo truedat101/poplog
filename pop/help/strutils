@@ -1,0 +1,43 @@
+HELP STRUTILS                                  Everyday string operations
+
+    uses strutils;
+
+Byte-oriented string utilities (see HELP * UTF8 for code-point-aware
+operations).  Separators may be a character (`,`) or a non-empty
+string ('::').
+
+str_split(S, SEP) -> LIST
+    'a,b,,c' on `,` -> ['a' 'b' '' 'c'] — adjacent separators yield
+    empty fields.
+
+str_join(LIST, SEP) -> S
+    Inverse of str_split.
+
+str_trim(S) -> S            both ends
+str_ltrim(S) -> S           left only
+str_rtrim(S) -> S           right only
+    Strip spaces, tabs, newlines, returns.
+
+str_starts(PREFIX, S) -> BOOL
+str_ends(SUFFIX, S) -> BOOL
+
+str_replace(S, OLD, NEW) -> S
+    Every occurrence of OLD (non-empty) replaced by NEW.
+
+str_lines(S) -> LIST
+    Split on newlines; accepts \n and \r\n; a trailing newline does
+    not produce a phantom empty last line.
+
+str_repeat(S, N) -> S
+str_padl(S, N, CHAR) -> S   pad on the left to width N
+str_padr(S, N, CHAR) -> S   pad on the right
+
+str_lower(S) -> S
+str_upper(S) -> S
+    ASCII case mapping only (bytes >= 128 pass through unchanged).
+
+See also: LIB * REGEXP for pattern-based split/replace, LIB * UTF8,
+sys_parse_string, and the suite tools/tests/test_strutils.p.
+
+--- pop/help/strutils
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

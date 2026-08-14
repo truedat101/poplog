@@ -108,3 +108,4 @@ crypto_version() -> STRING
     TEACH * JSON             how to build a library like this one
 
 --- pop/help/crypto
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

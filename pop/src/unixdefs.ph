@@ -61,6 +61,20 @@ deftype
 #_ENDIF
     gid_t   = uid_t;
 
+#_ELSEIF DEF DARWIN         /* must come before BERKELEY */
+
+    /*  Apple's 64-bit-inode ABI -- the only variant on arm64 (the
+        $INODE64 symbol suffixes are an x86_64-only transition device).
+        From <sys/types.h> with _DARWIN_FEATURE_64_BIT_INODE.           */
+deftype
+    dev_t   = -int,
+    ino_t   = double,
+    mode_t  = short,
+    nlink_t = short,
+    time_t  = -double,
+    uid_t   = int,
+    gid_t   = int;
+
 #_ELSEIF DEF FREEBSD or DEF NETBSD   /* must come before BERKELEY */
 
 deftype
@@ -329,6 +343,38 @@ struct STATB
     long    ST_PAD4[3]; /* expansion area */
   };
 
+#_ELSEIF DEF DARWIN     /* must come before BERKELEY */
+
+    /*  Apple's 64-bit-inode struct stat (<sys/stat.h> with
+        _DARWIN_FEATURE_64_BIT_INODE; the only variant on arm64).
+        Note mode/nlink are 16-bit and precede the 64-bit inode, and
+        each time is a struct timespec (sec + nsec, both 64-bit).
+        sizeof == 144.                                                  */
+struct STATB
+  { dev_t   ST_DEV;         /* i32  @0   */
+    mode_t  ST_MODE;        /* u16  @4   */
+    nlink_t ST_NLINK;       /* u16  @6   */
+    ino_t   ST_INO;         /* u64  @8   */
+    uid_t   ST_UID;         /* u32  @16  */
+    gid_t   ST_GID;         /* u32  @20  */
+    dev_t   ST_RDEV;        /* i32  @24 (+4 pad) */
+    time_t  ST_ATIME;       /* i64  @32  */
+    -double ST_ATIME_N;     /* nsec @40  */
+    time_t  ST_MTIME;       /*      @48  */
+    -double ST_MTIME_N;     /*      @56  */
+    time_t  ST_CTIME;       /*      @64  */
+    -double ST_CTIME_N;     /*      @72  */
+    time_t  ST_BTIME;       /* birthtime @80 */
+    -double ST_BTIME_N;     /*      @88  */
+    off_t   ST_SIZE;        /* i64  @96  */
+    blkcnt_t ST_BLOCKS;     /* i64  @104 */
+    int     ST_BLKSIZE;     /* i32  @112 */
+    int     ST_FLAGS,       /* u32  @116 */
+            ST_GEN,         /* u32  @120 */
+            ST_LSPARE;      /*      @124 */
+    -double ST_QSPARE[2];   /*      @128 */
+  };
+
 #_ELSEIF DEF BERKELEY and not(DEF IRIX)
 
 struct STATB
@@ -450,6 +496,21 @@ struct DIRECT
     byte    DIR_NAME[];     /* name of file */
   };
 
+
+#_ELSEIF DEF DARWIN     /* must come before BERKELEY */
+
+    /*  Apple's 64-bit-inode dirent (<sys/dirent.h> with
+        _DARWIN_FEATURE_64_BIT_INODE; the only variant on arm64):
+        u64 ino; u64 seekoff; u16 reclen; u16 namlen; u8 type;
+        then the name at byte offset 21.                                */
+struct DIRECT
+  { ino_t   DIR_INO;
+    double  DIR_SEEKOFF;
+    short   DIR_RECLEN,
+            DIR_NAMLEN;
+    byte    DIR_TYPE,
+            DIR_NAME[];
+  };
 
 #_ELSEIF DEF BERKELEY
 
