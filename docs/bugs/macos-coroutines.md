@@ -50,6 +50,9 @@ allocation through `pop_jit_alloc`).
   hangs. Docs site generation stays Linux-only for now.
 - Anything user-level built on `consproc`/`suspend`/`runproc`
   (`simproc`, generators) hangs or crashes.
+- `tools/test-libs.sh` on macOS: csv + datetime suites pass, then
+  `test_fileutils.p` spins forever (its checks call `dir_files` from
+  procedures). Run the suite on Linux until this is fixed.
 
 ## What already works (do not confuse with this bug)
 
