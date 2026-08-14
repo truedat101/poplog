@@ -55,3 +55,6 @@ pop/extern/poppcre/*.dylib
 
 # Generated documentation site and release staging
 /dist/
+
+# Release/CI build output (tarballs, docs site, sandboxes)
+/dist/

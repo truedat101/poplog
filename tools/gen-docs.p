@@ -15,6 +15,7 @@ uses strutils;
 uses shell;
 
 vars outdir = 'dist/docs';
+vars site_base = 'https://iotone.github.io/poplog';
 
 ;;; --- collect the corpus -------------------------------------------------
 
@@ -317,6 +318,30 @@ define lconstant gen_llms();
     string_to_file(str_join(out, '\n') <> '\n', outdir <> '/llms.txt');
 enddefine;
 
+;;; sitemap.xml + robots.txt: the site is useless to search engines it has
+;;; never been introduced to.  One <url> per page, no lastmod (the corpus
+;;; carries no per-file dates worth asserting).
+define lconstant gen_sitemap();
+    lvars entry, out;
+    [% '<?xml version="1.0" encoding="UTF-8"?>';
+       '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+       '  <url><loc>' <> site_base <> '/</loc></url>';
+       for entry in corpus do
+           '  <url><loc>' <> site_base <> '/' <> subscrv(1, entry) <> '/'
+           <> escape(subscrv(2, entry)) <> '.html</loc></url>'
+       endfor;
+       '</urlset>';
+    %] -> out;
+    string_to_file(str_join(out, '\n') <> '\n', outdir <> '/sitemap.xml');
+enddefine;
+
+define lconstant gen_robots();
+    string_to_file(
+        'User-agent: *\nAllow: /\n\nSitemap: ' <> site_base
+            <> '/sitemap.xml\n',
+        outdir <> '/robots.txt');
+enddefine;
+
 ;;; --- main ---------------------------------------------------------------
 
 vars entry, npages = 0, out, st;
@@ -329,4 +354,6 @@ for entry in corpus do
 endfor;
 gen_index();
 gen_llms();
-'gen-docs: ' >< npages >< ' pages + index + llms.txt -> ' >< outdir =>
+gen_sitemap();
+gen_robots();
+'gen-docs: ' >< npages >< ' pages + index + llms.txt + sitemap -> ' >< outdir =>
