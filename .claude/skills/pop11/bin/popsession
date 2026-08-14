@@ -55,11 +55,32 @@ def save_stats(s):
     with open(STATS, "w") as f:
         json.dump(s, f)
 
+# skill_run takes the completion SENTINEL as an argument and prints it
+# itself. This is load-bearing, not a convenience: when the sentinel was a
+# separate trailing statement on the same FIFO line, the outer stdin
+# compiler still held that queued statement in its itemiser (which buffers
+# state on the shared user stack) WHILE the user's chunk executed — so a
+# chunk that popped an empty stack (e.g. a bare `-> x;`) underflowed into
+# the compiler's own state and killed the whole engine. With the sentinel
+# consumed as an argument before execution starts, the same chunk now dies
+# with an ordinary trapped mishap and the session survives.
+# The stack repair below is equally load-bearing: the user stack has no
+# underflow guard, so a chunk that pops more than it pushes (`-> x;` on an
+# empty stack) silently drives the stack pointer below base and the NEXT
+# chunk's itemiser dies on it. Refilling to the entry depth keeps the
+# engine sane; the popped-junk values were garbage anyway.
 BOOTSTRAP = """
-define skill_run(file);
+define skill_run(file, sentinel);
+    lvars _base = stacklength();
     dlocal interrupt =
-        procedure; npr('%s'); sysflush(popdevout); exitfrom(skill_run); endprocedure;
+        procedure;
+            while stacklength() fi_< _base do false endwhile;
+            npr('%s'); npr(sentinel); sysflush(popdevout);
+            exitfrom(skill_run);
+        endprocedure;
     pop11_compile(file);
+    while stacklength() fi_< _base do false endwhile;
+    npr(sentinel); sysflush(popdevout);
 enddefine;
 npr('__POPSESSION_READY__'); sysflush(popdevout);
 """ % ERRMARK
@@ -192,8 +213,9 @@ def do_send(name, code, timeout, raw=False, show_timing=True):
         spool = os.path.join(sdir(name), "spool%d.p" % m["seq"])
         with open(spool, "w") as f:
             f.write(code if code.endswith("\n") else code + "\n")
-        payload = ("skill_run('%s');\nnpr('%s'); sysflush(popdevout);\n"
-                   % (spool, marker))
+        # one single statement per line: skill_run prints the sentinel
+        # itself (see BOOTSTRAP for why a trailing npr would be fatal)
+        payload = "skill_run('%s', '%s');\n" % (spool, marker)
     t0 = time.perf_counter()
     fifo_write(name, payload)
     saw_err, lines = await_sentinel(name, marker, timeout)

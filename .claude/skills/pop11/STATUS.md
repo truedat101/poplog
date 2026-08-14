@@ -58,6 +58,17 @@ microsecond cost" story; ranked by field evidence, not theory.
       line with `errors="replace"`. Fixes the field-hit UnicodeDecodeError
       (session output containing non-UTF-8 bytes, e.g. shelled-out npm)
       that also corrupted the resume offset.
+- [x] **Stack-underflow immunity** (2026-08-14) — a chunk that popped an
+      empty stack (`-> x;`) used to KILL the whole engine: the underflow
+      ate the outer stdin compiler's buffered itemiser state (the queued
+      sentinel statement), and the stack pointer was left below base for
+      the next chunk's itemiser to die on. Two-part fix in the skill_run
+      protocol: the sentinel is now an ARGUMENT to skill_run (consumed
+      before user code runs, so the outer compiler holds no state during
+      execution), and skill_run refills the stack to its entry depth
+      after every chunk. Verified: single and triple underflows survive
+      with the session healthy. Found via the Jupyter TEACH conversions
+      (TEACH LISTS teaches `->` in split halves).
 - [x] **Validation-gated checkpoints** (2026-08-13) —
       `checkpoint PATH --verify 'EXPR'` runs EXPR through the
       mishap-trapped path first; mishap or false → no image written,
