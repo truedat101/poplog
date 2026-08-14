@@ -1,6 +1,6 @@
 # pop11 skill — status & post-demo checklist
 
-Last updated: 2026-08-01 (post-validation, pre-demo). Companion docs: [SKILL.md](SKILL.md)
+Last updated: 2026-08-13 (field-fix port + Tier-2 stdlib supersede). Companion docs: [SKILL.md](SKILL.md)
 (usage), [demo/DEMO.md](demo/DEMO.md) (walkthrough),
 [../../tools/bench-skill/README.md](../../../tools/bench-skill/README.md)
 (numbers).
@@ -38,37 +38,33 @@ microsecond cost" story; ranked by field evidence, not theory.
 - [x] **sqlite shim** — DONE 2026-08-01, see above. v0.2 ideas: typed
       column accessors (int64/double), blob support, `sqlite_rows_iter`
       streaming for huge result sets.
-- [ ] **lib shell** (P, 2–3 days) — real process orchestration, the core of
-      "tooling/shell" work. `run(cmd) -> (output_string, status)`,
-      `run_lines(cmd) -> list`, stderr capture, exit-code access, timeout
-      kill, background jobs + wait, pipelines. Built on
-      `syspipe`/`sys_fork`/`sys_wait` (today only fire-and-forget `sysobey`
-      / `sys_obey_linerep` exist — no clean status or stderr capture; the
-      trials worked, but a silent failure of a spawned command would have
-      been invisible).
-- [ ] **lib json** (P, 2–4 days) — recursive-descent parser + printer;
-      objects→properties, arrays→vectors; `\uXXXX`; JSONTestSuite pass.
-      Biggest *capability* gap, but no field trial has needed it yet —
-      promote when a real API/JSON task shows up.
-- [ ] **lib fileutils** (P, 1–2 days) — `file_to_string`, `string_to_file`,
-      `file_lines -> list`, glob via `sys_file_match`, directory walk,
-      stat/mtime/size, temp files, path join/split.
-- [ ] **lib strutils** (P, 1–2 days) — split/join/trim/replace/starts/ends,
-      regexp convenience over the Ved regexp engine, `sprintf`-style
-      formatting. (Words-vs-strings friction lives here; good helpers cut
-      model errors.)
-- [ ] **popcurl v0.2** (C, 2–3 days) — request/response headers, body→string
-      (write-callback), status + error string accessors, auth, per-call
-      timeout, proxy env. Then: retire the "no headers" caveat in SKILL.md.
+- [x] **The rest of this roadmap was superseded by the in-tree Tier-2
+      stdlib sweep (2026-08-08/09)** — shipped as real Poplog libraries
+      (`uses` from any session, no skill-level code needed): `lib shell`
+      (status/stderr/timeouts/background jobs), `lib json` (RFC 8259 + a
+      TEACH walkthrough), `lib strutils`/`fileutils`/`csv`/`datetime`,
+      `lib utf8`, `lib regexp` + `lib pcre` (PCRE2), `lib poptest`,
+      `lib http_server` + `lib http_client` (retiring the popcurl v0.2
+      item), `lib crypto`. 223 checks green via `tools/test-libs.sh`.
+      See `docs/2030plan.md` Tier 2. Tarballs ship them via `pop/lib`.
 - [ ] **lib argvenv** (P, 0.5 day) — `poparglist` niceties, `getenv`/
-      `setenv` (`systranslate`), script exit codes for `pop11run`.
-- [ ] **lib csv** (P, 1 day) — read/write CSV/TSV to lists/vectors; pairs
-      with lib json for report pipelines.
-- [ ] **lib datetime** (P, 1 day) — epoch/ISO-8601 parse + format over
-      `sys_real_time`.
+      `setenv` (`systranslate`), script exit codes for `pop11run`. The one
+      survivor of the original list; low urgency.
 
 ## 🔧 Runtime hardening (popsession)
 
+- [x] **Binary-safe log reader** (2026-08-13) — `await_sentinel` reads
+      `out.log` in binary, does offset arithmetic in bytes, decodes per
+      line with `errors="replace"`. Fixes the field-hit UnicodeDecodeError
+      (session output containing non-UTF-8 bytes, e.g. shelled-out npm)
+      that also corrupted the resume offset.
+- [x] **Validation-gated checkpoints** (2026-08-13) —
+      `checkpoint PATH --verify 'EXPR'` runs EXPR through the
+      mishap-trapped path first; mishap or false → no image written,
+      rc 1, gate visible in the transcript. A checkpoint records state,
+      not quality — this stops a badly-driving model from persisting
+      garbage on vibes. `sysgarbage()` now runs before every `syssave`
+      to keep images compact.
 - [ ] `popsession interrupt` — SIGINT a runaway chunk without killing the
       session (needs a check that batch-mode SIGINT doesn't exit basepop11)
 - [ ] Auto-checkpoint on `stop` (`--checkpoint-on-stop PATH`), plus

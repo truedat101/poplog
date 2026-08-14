@@ -148,15 +148,21 @@ def await_sentinel(name, marker, timeout):
     except OSError:
         off = 0
     deadline = time.time() + timeout
-    lines, saw_err, buf = [], False, ""
-    with open(log, "r") as f:
+    lines, saw_err, buf = [], False, b""
+    # Binary mode: session output is arbitrary bytes (shelled-out commands
+    # write straight into out.log). Offset arithmetic must be in bytes;
+    # decoding (with replacement) happens per line. Text mode here mixed
+    # tell()'s byte cookie with a character count and raised
+    # UnicodeDecodeError on any non-UTF-8/multibyte output.
+    with open(log, "rb") as f:
         f.seek(off)
         while time.time() < deadline:
             chunk = f.read()
             if chunk:
                 buf += chunk
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
+                while b"\n" in buf:
+                    bline, buf = buf.split(b"\n", 1)
+                    line = bline.decode("utf-8", "replace")
                     if line.strip() == marker:
                         with open(offp, "w") as of:
                             of.write(str(f.tell() - len(buf)))
@@ -266,12 +272,25 @@ def cmd_send(args):
 
 
 def cmd_checkpoint(args):
+    if getattr(args, "verify", None):
+        # Validation gate: a checkpoint records state, not quality. Run the
+        # expression through the normal mishap-trapped path first; a mishap
+        # inside it or a false result means no image is written, and the
+        # transcript shows exactly what the gate was.
+        gate = ("if not(%s) then\n"
+                "    mishap('checkpoint --verify gate returned false', []);\n"
+                "endif;" % args.verify)
+        rc = do_send(args.name, gate, args.timeout, show_timing=False)
+        if rc != 0:
+            print("popsession: --verify gate failed; no checkpoint written")
+            return 1
     # Raw (not via a spool file): a restored image must not wake up inside a
     # skill_run still reading a spool device that no longer exists. Stdin is
     # fd 0 in both lives, so the restored process resumes reading the new
     # session's FIFO seamlessly.
     path = os.path.abspath(args.path)
-    code = ("if syssave('%s') then\n"
+    code = ("sysgarbage();\n"
+            "if syssave('%s') then\n"
             "    npr('__POPSESSION_RESTORED__'); sysflush(popdevout);\n"
             "else\n"
             "    npr('checkpoint saved: %s');\n"
@@ -389,6 +408,9 @@ def main():
     p.set_defaults(fn=cmd_send)
 
     p = sub.add_parser("checkpoint")
+    p.add_argument("--verify", metavar="EXPR",
+                   help="Pop-11 expression gating the checkpoint: a mishap "
+                        "or false result aborts without writing an image")
     common(p)
     p.add_argument("path")
     p.set_defaults(fn=cmd_checkpoint)

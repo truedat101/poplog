@@ -66,11 +66,36 @@ library autoloading works — the "bare basepop11 lacks autoload setup" hunch
 is wrong. In particular, do not point it at a classic V16-layout install or
 interpose a `poplog pop11` shim.
 
+**Use a per-task session name.** Session names are machine-global
+(`~/.cache/pop11-skill/session-<name>/`), so concurrent Claude sessions
+that all use the bare default share ONE engine — a stop/start/restore in
+one silently wipes the other's state. Pass `--name <task>` (short, e.g.
+the project name) on every popsession command for real work.
+
 **Workflow: define helpers early, then call them.** First send a chunk of
 `define`s for the session's recurring work; subsequent sends are one-line
 calls. Redefining a procedure mid-session is instant and affects all later
-calls — iterate on a helper freely. Checkpoint before risky work or at
-milestones; `restore` rolls the whole session back.
+calls — iterate on a helper freely.
+
+**Check `~/pop11-tools/` for the user's cross-project toolkit.** If that
+directory exists, its `README.md` indexes ready-made `.p` tools from past
+sessions (log triage, Jenkinsfile simulation, API grep, …). Before writing
+a helper from scratch, look there — `popsession send --name <task> -f
+~/pop11-tools/<tool>.p` loads one in ~20 ms. When you build a genuinely
+reusable tool in a project, offer to promote it there (add a README row).
+
+**Checkpoint after each achievement.** A checkpoint costs ~20 ms and
+~200 KB — take one whenever the session has just earned something worth
+keeping (a helper defined and validated, an index built, a dataset
+parsed), not only before risky work. Use a fresh, milestone-named path
+each time (`data/scan-v2.psv`) so you can step back precisely. `restore`
+rolls the WHOLE session back to that image — anything defined after it is
+gone, so re-checkpoint after adding to a restored session. C-shim handles
+(popsqlite dbs, open devices) go stale across restore and mishap cleanly —
+just reopen them. When state quality is uncertain (long autonomous runs),
+gate the snapshot: `popsession checkpoint path.psv --verify 'EXPR'` runs
+EXPR first and writes NO image if it mishaps or returns false — checkpoint
+what you've validated, not what you hope is fine.
 
 ## Pop-11 crash course (what you need to write correct chunks)
 
@@ -124,6 +149,10 @@ endrepeat;
 sysobey('ls /tmp > /tmp/out');                   ;;; run a shell command
 vars r = sys_obey_linerep('curl -s URL | jq -r ".field"');  ;;; stream cmd output
 ;;; r() yields lines until termin — the zero-dependency JSON/HTTP bridge
+;;; TRAP: the command line runs with errexit (set -e): the first failing
+;;; command aborts the WHOLE line SILENTLY — empty output, no error.
+;;; Prefix 'set +e; ' to survive expected failures or read exit codes:
+vars r = sys_obey_linerep('set +e; grep pat file; echo rc=$?');
 ```
 
 Common mishap decoder: `DECLARING VARIABLE x` (warning: you used an undefined
