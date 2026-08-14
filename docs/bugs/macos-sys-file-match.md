@@ -1,9 +1,37 @@
 # macOS arm64: `sys_file_match` matches nothing, and hangs inside `[% %]`
 
-**Status:** open · **Severity:** medium (breaks `dir_files` and everything
-built on it — `gen-docs` cannot run on macOS) · **Area:** file-name matching
-(`pop/lib/auto/sys_file_match.p` / `sys_matchin_dir` machinery) ·
-**Filed 2026-08-14 while adding sitemap generation to gen-docs**
+**Status:** FIXED 2026-08-14 (struct layer; residual hangs are the separate
+coroutine gate, see `macos-coroutines.md`) · **Severity:** medium ·
+**Area:** `pop/src/unixdefs.ph` struct layouts · **Filed 2026-08-14 while
+adding sitemap generation to gen-docs**
+
+## Root cause and fix (2026-08-14)
+
+The darwin port inherited the classic Berkeley `struct DIRECT` and
+`struct STATB` layouts, but arm64 macOS only speaks Apple's
+64-bit-inode ABI: `dirent` is `u64 ino; u64 seekoff; u16 reclen;
+u16 namlen; u8 type; name@21`, and `struct stat` puts 16-bit
+mode/nlink *before* the 64-bit inode and uses `timespec` pairs
+(sizeof 144). With the old offsets `DIR_NAMLEN` landed inside
+`d_seekoff` (read 0 → every name decoded empty → nothing matched) and
+`ST_SIZE` landed on `st_atimespec` (so `sysfilesize` returned the
+atime and `sysisdirectory` was always false). Fixed by darwin-specific
+`deftype`/`struct DIRECT`/`struct STATB` branches in
+`pop/src/unixdefs.ph`. **A clean rebuild is required** — an incremental
+`make all` after a .ph change produced a binary that still carried the
+old offsets (stale popc-toolchain artifacts); `rm -rf target`, reseed
+corepop, `./configure && make all`.
+
+Verified after the fix: `sys_file_stat('/etc/hosts', …)` returns
+size 264 / mode 33188 / real mtime; `sysisdirectory('/tmp')` true;
+top-level globs enumerate correctly (2/2, 5/5, 50/50 including through
+the `/tmp` symlink).
+
+The **remaining** hangs — repeaters driven from inside procedures, and
+`...`-recursive patterns — are the process/coroutine port gate, split
+out to `macos-coroutines.md`. Everything below is the original report.
+
+---
 
 ## Symptoms (macos-arm64, engine built 2026-08-01 from master)
 

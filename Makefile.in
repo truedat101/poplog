@@ -401,7 +401,12 @@ clean_packages:
 	rm -f ${NEURAL_LIBS} ${VISION_LIBS}
 
 stamp_indexes: ${BIN_START}
-	${DO_COMMAND} ${popsys}/basepop11 make_indexes ${usepop}/pop
+	${DO_COMMAND} ${popsys}/basepop11 make_indexes ${usepop}/pop || { \
+	  case `uname -s` in \
+	  Darwin) echo "make_indexes skipped: needs the process/coroutine"; \
+	          echo "machinery (docs/bugs/macos-coroutines.md, port rung 3)";; \
+	  *) exit 1;; \
+	  esac; }
 	touch stamp_indexes
 
 buildclean:
