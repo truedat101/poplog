@@ -28,8 +28,9 @@ consproc/suspend/runproc repro (5/5), `sys_file_match` from procedures
 and with `...`-recursion (3/3 ALL OK), `test_fileutils` (ALL PASS —
 previously spun 31 minutes), and `make_indexes` completes on macOS for
 the first time. A separate PRE-EXISTING flake found during validation
-is filed as `userstack-growth-aslr.md` (large-stack growth vs ASLR) —
-that one still blocks gen-docs on macOS.
+is filed as `userstack-growth-aslr.md` — since diagnosed (not ASLR: the
+runtime assembler's `I_CHECK` was another port-skeleton stub) and FIXED
+2026-08-15; gen-docs now runs on macOS.
 
 Everything below is the original report.
 

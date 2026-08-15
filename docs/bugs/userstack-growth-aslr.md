@@ -1,12 +1,73 @@
-# macOS arm64: large user-stack growth SIGBUSes, ASLR-dependent
+# Large user-stack growth crashed runtime-compiled loops (was: "ASLR-dependent SIGBUS")
 
-**Status:** open · **Severity:** medium (probabilistic: ~4/5 process
-launches in the bad layout during the 2026-08-14 session; small
-workloads never touch it) · **Area:** fixed-address memory layout
-(porting doc Phase 3: `LOWEST_ADDRESS = 0 … MAP_FIXED image load needs
-revisiting`) · **Found 2026-08-14 while validating the coroutine fix**
+**Status:** FIXED 2026-08-15 · **Severity:** high ·
+**Area:** `pop/src/{arm64,riscv64}/ass.p` (runtime assembler, `I_CHECK`) ·
+**Filed 2026-08-14 while validating the coroutine fix**
 
-## Symptom
+## Root cause and fix (2026-08-15)
+
+Not ASLR and not the memory layout: `I_CHECK` — the check the VM plants
+at every **backward jump** — was an **unimplemented TODO stub** in the
+arm64 (and riscv64) runtime assembler `ass.p`, the same port-skeleton
+family as the coroutine branch-to-self stubs. `I_CHECK` is the only
+check site *inside* loops, and it does two jobs:
+
+1. **Userstack overflow**: call `_checkall` when USP has grown below
+   `_userlim`, which expands the open segment and moves the stack.
+2. **Interrupt polling**: call `_checkall` when the `_trap` flag is set,
+   which is how Ctrl-C and timer ASTs get serviced inside loops.
+
+With the stub, any runtime-compiled loop that pushes without calling a
+procedure (`for i ... do `x` endfor`, `file_to_string`'s char loop,
+`read_all` in lib shell) grew the user stack straight down through the
+open segment — **overwriting the literal pools of the very code being
+executed** — and no loop could be interrupted. popc-compiled system
+code uses a different backend (`syscomp/<arch>/genproc.p`, `pas_CHECK`)
+which was always correct, which is why the engine itself mostly worked.
+
+Diagnosed from the fault pattern: the first crash writes through a
+"pointer" equal to the tagged popint of the loop bound (the stack had
+pushed it over a code literal at exactly USP), and a `_pop_brk` trace
+showed the break never moved — expansion was never even attempted.
+The earlier "~4/5 of launches fail" reading was noise in what the
+corrupted memory happened to contain, not address-space layout.
+
+Both assemblers now plant the full check (trap test, `_userlim` vs USP,
+conditional `_checkall` call), following each file's branch-offset and
+deferred-compare conventions. Verified on macos-arm64 after a clean
+rebuild:
+
+- `pushn(200000)` repro: 10/10 pass (previously 0/10 that day);
+  `pushn(2000000)` passes with `popmemlim` raised; hitting the default
+  limit now produces the proper `MEMORY LIMIT (popmemlim)` mishap.
+- A runtime-compiled infinite loop is now interruptable with SIGINT
+  (previously unkillable — the popsession/Jupyter runaway-`repeat`
+  behaviour).
+- `tools/gen-docs.sh` completes on macOS for the **first time**
+  (921 pages) — docs generation is no longer Linux-only.
+- `tools/test-libs.sh`: all suites green (http suites SKIP on Darwin —
+  see `darwin-no-sockets.md`; `test_shell` previously crashed the old
+  engine outright in `read_all`, same root cause).
+- Coroutine repro still 3/3 (no regression).
+
+riscv64 is mirrored but untested on hardware (pending VisionFive
+rebuild), same status as its coroutine fix.
+
+## Related fix: bounded hibernation (`pause_popintr`)
+
+Making interrupts fire promptly widened an ancient race: if a wake-up
+signal's AST is processed at a check point after `sys_wait`/`syssleep`
+re-tested its wait condition but *before* `pause()` parks, nothing is
+left to wake the process (observed as an intermittent hang in
+`sigsuspend` with the child long dead). On Darwin `pause_popintr` now
+parks in 100ms `poll()` ticks — a signal still interrupts immediately,
+and a lost wake-up costs one tick instead of a hang (c_core.c).
+
+Everything below is the original (mis-)report, kept for the record.
+
+---
+
+## Original symptom (2026-08-14)
 
 Pushing a large number of items onto the user stack (~200k words — e.g.
 `lib fileutils`'s `file_to_string`, which stacks every character before
@@ -18,10 +79,7 @@ then faults recursively:
 [fatal] sig=10 pc=…Error_signal addr=0 lr=…__pop_errsig …
 ```
 
-Whether a given PROCESS fails is decided at launch: the same binary and
-script pass or fail all sizes together depending on that run's address
--space layout (observed 1-in-5 pass rate one hour, all-pass earlier the
-same day). Repro:
+Repro:
 
 ```pop11
 define pushn(n);
@@ -32,20 +90,6 @@ enddefine;
 pushn(200000);
 ```
 
-Run it a handful of times; in bad layouts even the first sizes fail.
-
-## Analysis pointers
-
-- The engine claims fixed regions (heap base 0x8000000000, user stack
-  near `_userhi`); macOS is PIE-mandatory and places system mappings by
-  ASLR, so a colliding/absent reservation makes stack extension hand
-  back an unusable address → the NULL write.
-- This is exactly the porting doc's open Phase-3 item; the durable fix
-  is reserving the full user-stack range up front (single big
-  `mmap(PROT_NONE)` + `mprotect` growth) instead of trusting
-  incremental fixed-address extension.
-- NOT related to the coroutine `_ussave` work (bisected: reverted
-  builds and the shipped tarball engine show the same flake).
-- Consequence today: `gen-docs` on macOS still fails (its
-  `file_to_string` over 900+ files guarantees hitting the bad path);
-  keep generating docs on Linux until this is fixed.
+The report attributed the pass/fail variation to per-launch ASLR layout
+vs the fixed 0x8000000000 heap reserve (porting doc Phase 3). That
+analysis was wrong — see above.

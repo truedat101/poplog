@@ -657,6 +657,28 @@ void _pop_errsig_handler(int sig, siginfo_t *info, ucontext_t *context) {
             i_Sys_S_031memory__is__corrupt[1],
             i_Sys_S_031memory__is__corrupt[2]);
         write(2, fb, fn);
+        {
+            /* second diagnostic line: user stack (x19=USP) and neighbours,
+               plus the faulting instruction words (pc is readable when the
+               fault was a data access) */
+            unsigned long long pc = context->uc_mcontext->__ss.__pc;
+            unsigned int i0 = 0, im1 = 0;
+            if (pc >= 0x100000000ULL && (pc & 3) == 0) {
+                im1 = ((volatile unsigned int *) pc)[-1];
+                i0  = ((volatile unsigned int *) pc)[0];
+            }
+            fn = snprintf(fb, sizeof fb,
+                "[fatal2] x1=%llx x2=%llx x3=%llx usp=%llx x20=%llx x21=%llx sp=%llx insn=%08x,%08x\n",
+                (unsigned long long) context->uc_mcontext->__ss.__x[1],
+                (unsigned long long) context->uc_mcontext->__ss.__x[2],
+                (unsigned long long) context->uc_mcontext->__ss.__x[3],
+                (unsigned long long) context->uc_mcontext->__ss.__x[19],
+                (unsigned long long) context->uc_mcontext->__ss.__x[20],
+                (unsigned long long) context->uc_mcontext->__ss.__x[21],
+                (unsigned long long) context->uc_mcontext->__ss.__sp,
+                im1, i0);
+            write(2, fb, fn);
+        }
     }
     /* diagnostic: SIGBUS with PC in the shared cache (libc) -- e.g.
        IC IVAU faulting inside sys_icache_invalidate: show the failing
@@ -1337,8 +1359,21 @@ long pop_fork() {
 long read_popintr(int fd, char * buf, int nbyte)
     SYSCALL_POPINTR(read(fd, buf, nbyte))
 
+#if defined(__APPLE__)
+/* pause() has an unfixable race: if the wake-up signal's AST is processed
+ * at a check point after the caller re-tested its wait condition but
+ * before pause() parks, nothing is left to wake the process (observed as
+ * sys_wait/syshibernate hanging in sigsuspend with the child long dead).
+ * Bound the park at 100ms with poll(): a signal still interrupts it
+ * immediately (EINTR), and a lost wake-up now costs one tick, after which
+ * syshibernate's caller re-checks its condition. */
+#include <poll.h>
+long pause_popintr()
+    SYSCALL_POPINTR(poll(NULL, 0, 100))
+#else
 long pause_popintr()
     SYSCALL_POPINTR(pause())
+#endif
 
 
 /****************************************************************************
@@ -1939,6 +1974,13 @@ static int pop_break_init(void) {
 
 int _pop_brk(char *new_break) {
     if (current_break == (char *) 0 && pop_break_init() == -1) return -1;
+    extern char *getenv(const char *);
+    if (getenv("POP_BRK_TRACE")) {
+        char tb[120];
+        int tn = snprintf(tb, sizeof tb, "[brk] cur=%lx new=%lx\n",
+            (unsigned long) current_break, (unsigned long) new_break);
+        write(2, tb, tn);
+    }
     if (new_break < break_base || new_break > break_limit) return -1;
     if (new_break > current_break) {
         /* commit: make the new pages readable+writable (never executable) */
