@@ -37,11 +37,6 @@ fi
 bad=0
 for s in $suites; do
     name=$(basename "$s" .p)
-    # http suites need unix_sockets, which the Darwin build does not
-    # enable yet (docs/bugs/darwin-no-sockets.md)
-    case "$(uname -s)/$name" in
-        Darwin/test_http_*) echo "SKIP  $name  (sockets not enabled on Darwin)"; continue ;;
-    esac
     # shellcheck disable=SC2086  # $engine may be "wrapper binary"
     out=$($engine "$s" 2>&1) || true
     line=$(printf '%s\n' "$out" | grep -o 'SUMMARY: .*' | tail -1)
