@@ -1,0 +1,113 @@
+HELP JSON                                 Parse and generate JSON in Pop-11
+
+LIB * JSON provides a parser and generator for JSON (RFC 8259),
+written in pure Pop-11 so it behaves identically on every Poplog
+platform.  Load it with:
+
+    uses json;
+
+CONTENTS
+
+ -- Procedures
+ -- Data mapping
+ -- Examples
+ -- Notes and limits
+ -- See also
+
+-- Procedures ---------------------------------------------------------
+
+json_parse(STRING) -> ITEM
+    Parses STRING, which must hold exactly one JSON value (surrounding
+    whitespace allowed), and returns the corresponding Pop-11 item —
+    see the mapping below.  Malformed input causes a mishap whose
+    culprit is the (1-based) position of the error, e.g.
+
+        json_parse('[1, 2') =>
+        ;;; MISHAP - json_parse: expected , or ] in array
+
+    Input is treated as bytes; non-ASCII text is expected to be UTF-8
+    and \uXXXX escapes (including surrogate pairs) are decoded to
+    UTF-8 byte sequences.
+
+json_generate(ITEM) -> STRING
+    The inverse: returns the JSON text for ITEM as a compact string
+    (no added whitespace).  Items that have no JSON meaning cause a
+    mishap.  Lists are accepted as arrays on output, and object keys
+    must be strings.
+
+json_print(ITEM)
+    As json_generate, but emits characters to cucharout instead of
+    building a string — usable wherever normal printing goes.
+
+json_null
+    A constant (the word "json_null") representing JSON null, kept
+    distinct from false, which represents JSON false.  Compare with
+    ==, e.g.   if x == json_null then ...
+
+-- Data mapping -------------------------------------------------------
+
+    JSON             parses to                generated from
+    ------           ----------               --------------
+    object           property (newmapping,    property
+                     = on keys)
+    array            vector                   vector or list
+    string           string (UTF-8 bytes)     string
+    number           integer/biginteger,      integer, biginteger,
+                     or ddecimal              decimal, ddecimal
+    true / false     true / false             true / false
+    null             json_null                json_null
+
+-- Examples -----------------------------------------------------------
+
+    uses json;
+
+    vars v = json_parse('{"name": "poplog", "ports": [64, 32]}');
+    v('name') =>
+    ** poplog
+    v('ports')(1) =>
+    ** 64
+
+    json_generate(v) =>
+    ** {"name":"poplog","ports":[64,32]}
+
+    json_print({% 1, 2.5, 'x', true, json_null %});
+    [1,2.5,"x",true,null]
+
+    ;;; building an object from scratch
+    vars obj = newmapping([], 8, false, true);
+    42 -> obj('answer');
+    json_generate(obj) =>
+    ** {"answer":42}
+
+-- Notes and limits ---------------------------------------------------
+
+  * Looking up a key absent from a parsed object returns false (the
+    newmapping default) — the same value as JSON false.  Where the
+    difference matters, test membership before use, or copy into a
+    property with a different default.
+
+  * Object member order is not preserved (properties are hash
+    tables); RFC 8259 makes no ordering promise.  Duplicate keys
+    keep the last value.
+
+  * Strings are byte strings: length() counts UTF-8 bytes, not
+    characters.
+
+  * Numbers: integers of any size round-trip exactly (bigintegers);
+    fractional and exponent forms become ddecimals, with the usual
+    binary floating point caveats.  1e3 parses to the integer 1000.
+
+  * The parser is strict: leading zeros, trailing commas, unquoted
+    keys, raw control characters in strings, lone surrogates and
+    trailing garbage are all rejected.
+
+-- See also -----------------------------------------------------------
+
+    TEACH * JSON     how this library was designed and built — a
+                     walkthrough for writing your own libraries
+    LIB   * JSON     the source, pop/lib/lib/json.p
+    tools/test-json.sh   the acceptance suite (43 cases)
+    HELP  * NEWMAPPING   the property constructor used for objects
+
+--- pop/help/json
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

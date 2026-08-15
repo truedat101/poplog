@@ -27,6 +27,7 @@ let
     "x86_64-linux"   = "corepop-x86_64-linux";
     "aarch64-linux"  = "corepop-aarch64-linux";
     "aarch64-darwin" = "corepop-aarch64-darwin";
+    "riscv64-linux"  = "corepop-riscv64-linux";
   }.${system};
   seed = "${self}/nix/seeds/${seedName}";
   isDarwin = stdenv.isDarwin;
@@ -154,6 +155,6 @@ EOT
     description = "Poplog: incremental Pop-11, Prolog, Common Lisp and Standard ML";
     homepage = "https://github.com/truedat101/poplog";
     license = licenses.mit;  # Free Poplog licence (XFree86-style)
-    platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+    platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "riscv64-linux" ];
   };
 }

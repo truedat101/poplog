@@ -1,0 +1,43 @@
+#!/bin/sh
+# pop11-mcp — launch the Pop-11 MCP server (pop/mcp/pop11_mcp.p) on stdio.
+#
+#   pop11-mcp                     fresh session
+#   pop11-mcp --restore FILE.psv  resume a pop11_checkpoint image (~8 ms),
+#                                 native compiled helpers included
+#
+# Register with an MCP client, e.g. Claude Code:
+#   claude mcp add pop11 -- /path/to/poplog/tools/pop11-mcp
+#
+# Poplog tree resolved like the pop11 skill: $POPLOG_ROOT, then the config
+# persisted by install.sh (~/.cache/pop11-skill/config.json), then $usepop.
+# The server source comes from this checkout (next to this script), so the
+# engine and the script may live in different trees.
+set -e
+
+here="$(cd "$(dirname "$0")/.." && pwd)"
+
+root="$POPLOG_ROOT"
+config="$HOME/.cache/pop11-skill/config.json"
+if [ -z "$root" ] && [ -f "$config" ]; then
+    root="$(sed -n 's/.*"root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config")"
+fi
+[ -n "$root" ] || root="$usepop"
+[ -n "$root" ] || root="$here"
+basepop="$root/target/pop/basepop11"
+[ -x "$basepop" ] || { echo "pop11-mcp: $basepop not found" >&2; exit 2; }
+
+if [ "$1" = "--restore" ]; then
+    [ -n "$2" ] || { echo "usage: pop11-mcp [--restore image.psv]" >&2; exit 2; }
+    exec "$root/poplog" "$basepop" "-$2"
+fi
+
+script="$here/pop/mcp/pop11_mcp.p"
+[ -f "$script" ] || script="$root/pop/mcp/pop11_mcp.p"
+[ -f "$script" ] || { echo "pop11-mcp: pop11_mcp.p not found" >&2; exit 2; }
+
+# Documentation lives in the checkout even when the ENGINE root is a
+# tarball install (which ships pop/lib only).
+POP11_MCP_DOCROOT="$here"
+export POP11_MCP_DOCROOT
+
+exec "$root/poplog" "$basepop" "$script" ":sysexit();"

@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""teach2nb -- convert a Poplog TEACH file into a runnable Jupyter notebook.
+
+TEACH files have a wonderfully mechanical layout: prose is flush-left,
+code the reader should try is indented four spaces, and sections are
+ruled with `-- Section name ----`.  That maps straight onto notebook
+structure: prose becomes markdown, each indented block becomes a code
+cell, section rules become headings.
+
+    tools/jupyter/teach2nb.py pop/teach/lists [outdir]
+
+With --execute, the notebook is run through the pop11 kernel
+(allow_errors: TEACH files sometimes show mishaps on purpose, and the
+session survives them), so the committed outputs are genuine.
+"""
+
+import argparse
+import os
+import re
+import sys
+
+HEADER_RE = re.compile(r"^--\s+(.*?)\s*-{3,}\s*$")
+TITLE_RE = re.compile(r"^TEACH\s+(\S+)", re.IGNORECASE)
+
+
+def convert(path):
+    import nbformat as nbf
+
+    lines = open(path, errors="replace").read().splitlines()
+    nb = nbf.v4.new_notebook()
+    nb.metadata.kernelspec = {
+        "name": "pop11", "display_name": "Pop-11", "language": "pop11"}
+    nb.metadata.language_info = {"name": "pop11", "file_extension": ".p"}
+
+    name = os.path.basename(path)
+    m = TITLE_RE.match(lines[0]) if lines else None
+    title = (m.group(1) if m else name).upper()
+
+    cells = []
+    md_buf, code_buf = [], []
+
+    def flush_md():
+        text = "\n".join(md_buf).strip("\n")
+        md_buf.clear()
+        if text.strip():
+            cells.append(nbf.v4.new_markdown_cell(text))
+
+    pending = []          # code carried across prose while a define is open
+
+    # NB no "procedure": its typed-declaration use (`lvars procedure p;`)
+    # has no closer and would hold the balance open forever.
+    PAIRS = ["define", "if", "unless", "while", "until", "for", "repeat"]
+
+    def define_balance(text):
+        # TEACH files develop defines AND loops across several blocks;
+        # count every opener/closer pair the language has.
+        bal = 0
+        for w in PAIRS:
+            bal += len(re.findall(r"\b%s\b" % w, text))
+            bal -= len(re.findall(r"\bend%s\b" % w, text))
+        return bal
+
+    def flush_code():
+        text = "\n".join(code_buf).strip("\n")
+        code_buf.clear()
+        if not text.strip():
+            return
+        # Syntax TEMPLATES with <angle-bracket> placeholders are prose —
+        # fence them BEFORE balance accounting, or a `define <name …>`
+        # template opens the balance and swallows the rest of the file.
+        if re.search(r"<\s*[a-z][^>\n]*>", text):
+            cells.append(nbf.v4.new_markdown_cell("```\n" + text + "\n```"))
+            return
+        # TEACH files often develop ONE procedure across several indented
+        # blocks with prose between (header … body … enddefine).  Those
+        # fragments are not compilable alone, so accumulate while the
+        # define/enddefine balance is open and emit a single complete
+        # cell at the closing fragment.
+        if pending or define_balance(text) > 0:
+            pending.append(text)
+            if define_balance("\n".join(pending)) > 0:
+                return
+            text = "\n".join(pending)
+            pending.clear()
+        # Indented blocks that carry no statement machinery (no `;`, `=>`
+        # or `->`) are prose or reference lists — fenced markdown.  So are
+        # blocks that BEGIN with `->`: they are the second half of a
+        # pedagogically split assignment, and alone they would pop junk
+        # into the variable.
+        # …and so are non-terminating demos: TEACH files use bare
+        # `repeat`-forever loops to teach interruption, which a notebook
+        # cell cannot do.
+        never_ends = (re.search(r"\brepeat\b", text)
+                      and not re.search(r"\bquit(if|unless|loop)\b|\btimes\b",
+                                        text))
+        if not re.search(r"[;]|=>|->", text) \
+           or text.lstrip().startswith("->") or never_ends:
+            cells.append(nbf.v4.new_markdown_cell("```\n" + text + "\n```"))
+        else:
+            cells.append(nbf.v4.new_code_cell(text))
+
+    in_contents = False
+    for i, raw in enumerate(lines):
+        line = raw.rstrip()
+        if i == 0:
+            continue                       # the TEACH banner line
+        h = HEADER_RE.match(line)
+        if h:
+            flush_code(); flush_md()
+            in_contents = False
+            md_buf.append("## " + h.group(1))
+            continue
+        if re.match(r"^\s*CONTENTS\b", line):
+            in_contents = True
+            continue
+        if in_contents:
+            continue                       # the <ENTER> g index; menus not needed
+        if re.match(r"^    \S", raw):      # 4-space indent = code for the reader
+            if md_buf:
+                flush_md()
+            stripped = raw[4:]
+            # TEACH files inline the EXPECTED output after `=>` lines using
+            # the `** …` print convention.  In a live notebook the kernel
+            # regenerates the real output, and `**` is Pop-11's power
+            # operator, so these lines must not be compiled.
+            if stripped.lstrip().startswith("**"):
+                continue
+            code_buf.append(stripped)
+        elif not line.strip():
+            if code_buf:
+                code_buf.append("")
+            else:
+                md_buf.append("")
+        else:
+            if code_buf:
+                flush_code()
+            md_buf.append(line)
+    flush_code(); flush_md()
+    if pending:      # a define the file never closed: keep it, unexecuted
+        cells.append(nbf.v4.new_markdown_cell(
+            "```\n" + "\n".join(pending) + "\n```"))
+        pending.clear()
+
+    intro = nbf.v4.new_markdown_cell(
+        f"# TEACH {title}\n\n*Converted from the Poplog teaching corpus "
+        f"(`pop/teach/{name}`) by `tools/jupyter/teach2nb.py`. Every code "
+        f"cell runs in one persistent, natively-compiled Pop-11 session — "
+        f"edit and re-run them freely; a mishap is survivable and often "
+        f"intentional.*")
+    nb.cells = [intro] + cells
+    return nb
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("teach_file")
+    ap.add_argument("outdir", nargs="?", default="examples/notebooks/teach")
+    ap.add_argument("--execute", action="store_true",
+                    help="run the notebook through the pop11 kernel")
+    args = ap.parse_args()
+
+    import nbformat as nbf
+    nb = convert(args.teach_file)
+
+    if args.execute:
+        from nbclient import NotebookClient
+        NotebookClient(nb, kernel_name="pop11", timeout=180,
+                       allow_errors=True).execute()
+        ncode = sum(1 for c in nb.cells if c.cell_type == "code")
+        nerr = sum(1 for c in nb.cells if c.cell_type == "code"
+                   and any(o.output_type == "error" for o in c.outputs))
+        print(f"executed: {ncode} code cells, {nerr} with mishaps")
+
+    os.makedirs(args.outdir, exist_ok=True)
+    out = os.path.join(
+        args.outdir, os.path.basename(args.teach_file) + ".ipynb")
+    nbf.write(nb, out)
+    print("wrote", out)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -7,8 +7,12 @@ Quick install:
 3. Configure and build:
 
   ./configure
-  make
+  make all
   make buildclean
+
+(Use 'make all' rather than bare 'make': the first target in the
+Makefile is the optional gfx-smoke graphics check, which needs
+./tools/fetch-imgui.sh and fails on a fresh console-only tree.)
 
 More detailed information.
 
@@ -21,14 +25,34 @@ of X libraries and Motif.  For popvison install 'lapack'
 On Debian (or Ubuntu) you probably need: libx11-dev, libxt-dev,
 libice-dev, libsm-dev, libxau-dev, libxdmcp-dev, libxpm-dev,
 libmotif-dev, libncurses-dev, libopenblas-base, liblapacke.
+Optional: libssl-dev for LIB CRYPTO (digests/HMAC/random via a
+small shim -- see 'tools/build-popcrypto.sh' and HELP CRYPTO).
 
 Main part of Poplog is written in Pop-11, so to build Poplog,
 you need compiler for Pop-11.  Poplog contains compiler for
 Pop-11, but to minimise binary dependency we use 'corepop'
 binary (version of Poplog with minimal functionality).
 'corepop' is included in buidable tarball.  If you have
-reasonably new 'corepop' you can use it.  Alternatively,
-you can fetch 'corepop' like:
+reasonably new 'corepop' you can use it.
+
+For the platforms ported in this repository (x86-64 Linux,
+AArch64 Linux, Apple Silicon macOS, RISC-V RV64GC Linux) seed
+corepops are published as GitHub Releases, with checksums:
+
+  https://github.com/IoTone/poplog/releases
+
+e.g.
+
+  wget https://github.com/IoTone/poplog/releases/latest/download/corepop-riscv64-linux
+  mv corepop-riscv64-linux target/pop/corepop
+  chmod 755 target/pop/corepop
+
+(same scheme for corepop-x86_64-linux, corepop-aarch64-linux and
+corepop-aarch64-darwin; verify against the SHA256SUMS asset).
+The same binaries are vendored in-tree under nix/seeds/ for the
+Nix flake build.
+
+For the older upstream platforms you can fetch 'corepop' like:
 
   wget https://poplog.fricas.org/corepops/corepop.amd64
 

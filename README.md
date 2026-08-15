@@ -1,3 +1,5 @@
+*English | [日本語](README.ja.md)*
+
 POPLOG is a free, open source, multi-language software development
 environment providing incremental compilers for a number of interactive
 programming languages, notably:
@@ -81,12 +83,12 @@ Poplog builds and runs natively on a growing set of platforms
 | OS | Architecture | Status | Notes |
 | --- | --- | --- | --- |
 | **Linux** | x86-64 | ✅ Supported | Reference platform |
-| **Linux** | AArch64 (ARM64) | ✅ Supported | Validated on Raspberry Pi 5 — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so it ports readily to other ARM64 boards (MediaTek Genio, Qualcomm Snapdragon) |
+| **Linux** | AArch64 (ARM64) | ✅ Supported | Validated + benchmarked on **Raspberry Pi 5** and **MediaTek Genio 720** (MT8391, 2×A78+6×A55; GlobalScale Cortadodeck 720) — all four languages + saved images.  Generic `armv8-a`, no core-specific tuning, so other ARM64 boards (Qualcomm Snapdragon etc.) should follow readily |
 | **macOS** | Apple Silicon (arm64) | ✅ Supported | Native Mach-O port — self-hosting, all four languages, terminal VED, C↔Pop callbacks, and native graphics |
 | **Linux** | ARM32 (`armv6`/`armv7`) | ✅ Supported | Long-standing 32-bit ARM port (`pop/src/syscomp/arm`); Raspberry Pi 1–3 and other 32-bit ARM Linux.  Not benchmarked in this report |
 | **Solaris** | x86 (i386) | ✅ Supported | Upstream port (W. Hebisch); tested on Solaris 10 (`CC=gcc`, vendored `corepop_solaris.i386`).  Not benchmarked here |
 | **FreeBSD** | x86-64 | ✅ Supported | Upstream port (W. Hebisch); tested on x86-64.  Not benchmarked here |
-| **Linux** | RISC-V (`riscv64`, RV64GC) | ✅ Supported | Native RV64GC/LP64D port, self-hosting on a **StarFive VisionFive** (dual SiFive U74) — all four languages, saved images, terminal VED, and the FFI float ABI.  `tools/validate-riscv64.sh` = 14/14.  See `PORTING-RISCV64-LINUX.md` |
+| **Linux** | RISC-V (`riscv64`, RV64GC) | ✅ Supported | Native RV64GC/LP64D port, self-hosting on a **StarFive VisionFive** (dual SiFive U74) — all four languages, saved images, terminal VED, and the FFI float ABI.  `tools/validate-riscv64.sh` = 14/14; also bootstrapped from the released seed corepop on a cloud RV64 host (Ubuntu 24.04), where the `lib json`/`lib crypto` suites pass.  See `PORTING-RISCV64-LINUX.md` |
 | **Windows** | x86-64 | 🚧 TODO | Not yet ported (WSL2 runs the Linux build as an interim) |
 
 "Supported" means it builds and runs.  The first three rows plus RISC-V are
@@ -99,12 +101,84 @@ The one remaining 🚧 row (Windows) is genuinely not yet ported.  See the
 Per-platform porting notes: `PORTING-ARM64-LINUX-RPI5.md` and
 `PORTING-ARM64-M-SILICON-OSX.md`.
 
+## Install
+
+Three ways in, fastest first:
+
+**1. Binary one-liner (~2 MB download; also installs the
+[pop11 Claude skill](.claude/skills/pop11/SKILL.md)):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/IoTone/poplog/master/tools/install-skill.sh | sh
+```
+
+Detects your platform, pulls `pop11-skill-<os>-<arch>.tar.gz` from the
+latest GitHub release (macOS arm64 and Linux x86-64 to start), unpacks a
+relocatable runtime (`basepop11` + libraries) to `~/.local/share/pop11-skill`,
+and finishes with a live smoke test.  `POP11_SKILL_PREFIX` overrides the
+location; `POP11_SKILL_URL` pins a version (any curl-able URL, including
+`file://`).  Uninstall:
+`rm -rf ~/.local/share/pop11-skill ~/.claude/skills/pop11 ~/.cache/pop11-skill`.
+Tarballs are built by `tools/release-skill-tarball.sh` and published with
+checksums (`SHA256SUMS.pop11-skill`) on the releases page.
+
+**2. From source** — see [INSTALL](INSTALL): seed `target/pop/corepop`
+(binaries vendored under `nix/seeds/` for the four ported platforms),
+then `./configure && make all`.
+
+**3. Nix** — see the next section.
+
+## Agents: the MCP server
+
+Poplog ships an [MCP](https://modelcontextprotocol.io) server — written
+in Pop-11 itself (`pop/mcp/pop11_mcp.p`) — so any MCP-capable agent gets
+a **persistent, natively-compiled Pop-11 session** with four tools:
+`pop11_eval` (state and compiled procedures survive between calls;
+mishaps come back as diagnostics and the session survives),
+`pop11_help` (the real HELP/REF/TEACH corpus), `pop11_checkpoint`
+(freeze the whole session to a ~200 KB image, optionally gated on a
+verify expression) and `pop11_state`.  Measured: 100+ eval round trips
+in 0.04 s wall including engine startup.
+
+Register it with Claude Code (the tarball install ships the launcher
+too, at `~/.local/share/pop11-skill/tools/pop11-mcp`):
+
+```sh
+# every project on this machine:
+claude mcp add --scope user pop11 -- /path/to/poplog/tools/pop11-mcp
+
+# or one project (writes a committable .mcp.json):
+claude mcp add --scope project pop11 -- /path/to/poplog/tools/pop11-mcp
+```
+
+This checkout's own [.mcp.json](.mcp.json) registers it for sessions
+started here.  Resume a checkpointed session with
+`pop11-mcp --restore image.psv`.  Scope semantics and the `.mcp.json`
+format are documented in the
+[Claude Code MCP docs](https://docs.claude.com/en/docs/claude-code/mcp);
+other MCP clients configure the same stdio command their own way.
+
+## Editors: the LSP server
+
+The same idea for editors: a Language Server Protocol server written in
+Pop-11 (`pop/lsp/pop11_lsp.p`, launched by `tools/pop11-lsp`, also
+shipped in the tarball). Because the server *is* a Poplog session,
+diagnostics come from the **real compiler** — buffers are checked with
+`pop_syntax_only` set, so the VM plants nothing and nothing in your file
+executes — hover shows the actual HELP/REF/TEACH entry for the word
+under the cursor, and completion draws from the live dictionary. The
+[Neovim plugin](editors/nvim/) starts it automatically for `pop11`
+buffers; any LSP client can run the same stdio command. End-to-end
+protocol tests: `python3 tools/lsp/test-e2e.py`.
+
 ## Packaging (Nix)
 
 A self-contained **Nix flake** builds and bootstraps the whole system — all
 four languages and their saved images — from source, with no manual seed or
 toolchain setup.  Tested end-to-end on `x86_64-linux` and `aarch64-darwin`;
-`aarch64-linux` ships a vendored seed.
+the `aarch64-linux` build is deployed and benchmarked on a MediaTek Genio 720
+(the **G720** column in BENCHMARKS.md is the flake build running from a Nix
+profile).
 
 ```sh
 nix build .#poplog          # build; then ./result/bin/{pop11,clisp,prolog,pml,ved}
@@ -178,8 +252,33 @@ examples/tenprint.p` on a graphics build) — for instance the classic
 
 Poplog's incremental compilers emit fast native code on every backend.  For
 cross-platform and cross-language benchmark numbers (x86-64, Apple M-series,
-Raspberry Pi 5, with Python and Perl baselines for context), see
-**[BENCHMARKS.md](BENCHMARKS.md)**.
+Raspberry Pi 5, MediaTek Genio 720, RISC-V, with Python and Perl baselines for
+context), see **[BENCHMARKS.md](BENCHMARKS.md)**.
+
+## Documentation
+
+The full in-tree corpus — 900+ HELP, TEACH and REF files — is browsable
+at **<https://iotone.github.io/poplog/>** (with
+[`llms.txt`](https://iotone.github.io/poplog/llms.txt) for AI
+assistants).  The site is regenerated on every push by
+`tools/gen-docs.sh`, a Pop-11 program: Poplog builds its own docs site
+in CI, from a released seed corepop, in under a second of generator
+time.  Inside the system the same material is available as `help json`,
+`teach json`, `ref regexp` etc. in ved.
+
+## Learning material
+
+Decades of open Pop-11/Prolog teaching material — the Birmingham AI course
+TEACH files, the SimAgent toolkit, the Pop-11 Primer, and more — are one
+command away:
+
+```sh
+tools/fetch-learning.sh --all       # fetch into learn/ (gitignored)
+```
+
+The material is downloaded from public archives, never vendored here; a
+generated `learn/learn.p` wires it into `teach`/`help` inside Poplog.  See
+**[LEARNING.md](LEARNING.md)** for the pack list and usage.
 
 ---
 
@@ -189,7 +288,15 @@ core part.  It misses binary needed for bootstrap and extensions
 
   https://github.com/hebisch/poplog_packages
 
-You can find bootstrap binaries at:
+Bootstrap (`corepop`) binaries for the platforms ported here — x86-64
+Linux, AArch64 Linux, Apple Silicon macOS, and RISC-V RV64GC Linux — are
+published with checksums on this repository's releases page:
+
+  https://github.com/IoTone/poplog/releases
+
+(e.g. `releases/latest/download/corepop-aarch64-linux`; the same seeds
+are vendored under `nix/seeds/` for the Nix flake build).  For the older
+upstream platforms you can find bootstrap binaries at:
 
   https://poplog.fricas.org/corepops
 

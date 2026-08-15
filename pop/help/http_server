@@ -1,0 +1,55 @@
+HELP HTTP_SERVER                       Serve HTTP from pure Pop-11
+
+    uses http_server;
+
+A small, single-threaded HTTP/1.1 server over LIB * UNIX_SOCKETS: one
+accept loop, one request per connection (Connection: close).  It
+composes with LIB * JSON for API work — see examples/http_hello.p
+for a complete service.
+
+http_serve(PORT, HANDLER)
+http_serve_n(PORT, HANDLER, COUNT)
+    Listen on PORT and call HANDLER(REQUEST) -> RESPONSE for each
+    request.  http_serve runs forever; http_serve_n returns after
+    COUNT requests (false = forever).  If HANDLER returns false the
+    server answers 404; if HANDLER mishaps the server answers 500
+    and carries on.
+
+REQUEST is a property:
+
+    req('method')     'GET', 'POST', ... (upper case)
+    req('path')       '/hello'  (query string removed)
+    req('query')      'name=poplog'  (raw; '' if none)
+    req('headers')    property of header values, names lowercased:
+                      req('headers')('content-type')
+    req('body')       the request body ('' unless Content-Length)
+
+RESPONSE constructors:
+
+    http_response(STATUS, CTYPE, BODY) -> RESP
+    http_text(BODY) -> RESP               200 text/plain
+    http_json(ITEM) -> RESP               200 application/json,
+                                          body via json_generate
+
+Minimal service:
+
+    uses http_server;
+    define handler(req) -> resp;
+        if req('path') = '/hello' then
+            http_text('hello from Pop-11\n') -> resp
+        else
+            false -> resp               ;;; -> 404
+        endif;
+    enddefine;
+    http_serve(8080, handler);
+
+Limits (v1, by design): single-threaded (one request at a time), no
+keep-alive, no TLS (put a reverse proxy in front for production), no
+chunked request bodies, query strings are not URL-decoded.
+
+See also: REF * SOCKETS, LIB * JSON, examples/http_hello.p,
+tools/tests/test_http_server.p (which exercises a live server with
+curl via LIB * SHELL).
+
+--- pop/help/http_server
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

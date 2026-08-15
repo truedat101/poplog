@@ -1,0 +1,31 @@
+HELP FILEUTILS                      Whole-file access, stat and globbing
+
+    uses fileutils;
+
+file_to_string(FILE) -> S
+    The whole file as one (binary-safe) string.
+
+string_to_file(S, FILE)
+    Write S as the entire contents of FILE (created or truncated).
+
+file_append(S, FILE)
+    Append S (creating FILE if absent).
+
+file_lines(FILE) -> LIST
+    The file as a list of line strings (str_lines conventions: \n or
+    \r\n, no phantom last line).
+
+file_size(FILE) -> N or false
+file_mtime(FILE) -> EPOCH or false
+    Byte size / modification time (epoch seconds); false when the
+    file does not exist.  (Existence alone: sys_file_exists.)
+
+dir_files(PATTERN) -> LIST
+    Glob expansion to a sorted list of paths, e.g.
+    dir_files('pop/lib/lib/*.p').
+
+See also: LIB * STRUTILS, LIB * DATETIME (for formatting file_mtime),
+sysdelete, sys_file_match, and tools/tests/test_fileutils.p.
+
+--- pop/help/fileutils
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
