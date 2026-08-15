@@ -21,7 +21,8 @@ Both routines are now implemented (faithful ports of the x86-64
 versions: save the deepest LENGTH bytes ascending into the record,
 shift the retained top against `_userhi`, pop the freed space), and
 mirrored in `pop/src/riscv64/aprocess.s` (same self-tail stubs there;
-untested on hardware pending a VisionFive rebuild).
+validated 2026-08-15 on riscv64 hardware — clean rebuild under
+`setarch -R`, the consproc/suspend/runproc repro 3/3).
 
 Verified on macos-arm64 after a clean rebuild, repeatedly: the minimal
 consproc/suspend/runproc repro (5/5), `sys_file_match` from procedures

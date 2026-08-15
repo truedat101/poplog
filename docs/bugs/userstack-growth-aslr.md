@@ -50,8 +50,10 @@ rebuild:
   engine outright in `read_all`, same root cause).
 - Coroutine repro still 3/3 (no regression).
 
-riscv64 is mirrored but untested on hardware (pending VisionFive
-rebuild), same status as its coroutine fix.
+riscv64: validated 2026-08-15 on hardware — clean rebuild (under
+`setarch -R`; the CI script now self-wraps on riscv64), pushn 3/3,
+coroutines 3/3, SIGINT interrupts a hot loop, and the riscv64 tarball
+is published for the first time.
 
 ## Related fix: bounded hibernation (`pause_popintr`)
 

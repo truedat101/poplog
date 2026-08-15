@@ -38,6 +38,13 @@ case "$(uname -s)/$(uname -m)" in
 esac
 seeds="${POP11_SEED_BASE_URL:-https://github.com/IoTone/poplog/releases/latest/download}"
 
+# riscv64 Poplog must run with ASLR off (PORTING-RISCV64-LINUX.md);
+# that includes popc during the engine build, so re-exec the whole
+# script under setarch -R once.
+if [ "$(uname -m)" = riscv64 ] && [ -z "$POP11_CI_NOASLR" ]; then
+    POP11_CI_NOASLR=1 exec setarch -R sh "$0" "$@"
+fi
+
 sha256() {  # portable: sha256sum on Linux, shasum on macOS
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
     else shasum -a 256 "$@"; fi
