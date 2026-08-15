@@ -128,6 +128,36 @@ then `./configure && make all`.
 
 **3. Nix** — see the next section.
 
+## Agents: the MCP server
+
+Poplog ships an [MCP](https://modelcontextprotocol.io) server — written
+in Pop-11 itself (`pop/mcp/pop11_mcp.p`) — so any MCP-capable agent gets
+a **persistent, natively-compiled Pop-11 session** with four tools:
+`pop11_eval` (state and compiled procedures survive between calls;
+mishaps come back as diagnostics and the session survives),
+`pop11_help` (the real HELP/REF/TEACH corpus), `pop11_checkpoint`
+(freeze the whole session to a ~200 KB image, optionally gated on a
+verify expression) and `pop11_state`.  Measured: 100+ eval round trips
+in 0.04 s wall including engine startup.
+
+Register it with Claude Code (the tarball install ships the launcher
+too, at `~/.local/share/pop11-skill/tools/pop11-mcp`):
+
+```sh
+# every project on this machine:
+claude mcp add --scope user pop11 -- /path/to/poplog/tools/pop11-mcp
+
+# or one project (writes a committable .mcp.json):
+claude mcp add --scope project pop11 -- /path/to/poplog/tools/pop11-mcp
+```
+
+This checkout's own [.mcp.json](.mcp.json) registers it for sessions
+started here.  Resume a checkpointed session with
+`pop11-mcp --restore image.psv`.  Scope semantics and the `.mcp.json`
+format are documented in the
+[Claude Code MCP docs](https://docs.claude.com/en/docs/claude-code/mcp);
+other MCP clients configure the same stdio command their own way.
+
 ## Packaging (Nix)
 
 A self-contained **Nix flake** builds and bootstraps the whole system — all
