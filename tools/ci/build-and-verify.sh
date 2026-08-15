@@ -88,6 +88,7 @@ for path in target/pop/basepop11 poplog pop/lib skill/SKILL.md \
             skill/bin/build-popcurl skill/bin/build-popsqlite \
             skill/lib/popcurl_shim.c skill/lib/popsqlite_shim.c \
             pop/mcp/pop11_mcp.p tools/pop11-mcp \
+            pop/lsp/pop11_lsp.p tools/pop11-lsp \
             pop/lib/lib/json.p; do
     echo "$list" | grep -q "/$path" || {
         echo "ci: tarball missing $path" >&2; exit 1; }
@@ -123,6 +124,14 @@ printf '%s\n' \
   | HOME="$sandbox" TMPDIR="$sandbox/tmp" "$prefix/tools/pop11-mcp" \
   | grep -q '"text":"42' || {
     echo "ci: MCP smoke failed" >&2; exit 1; }
+
+# ---- 6. LSP server smoke over the real protocol ---------------------------
+echo "ci: LSP protocol smoke against the installed tarball"
+lspreq='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#lspreq}" "$lspreq" \
+  | HOME="$sandbox" TMPDIR="$sandbox/tmp" "$prefix/tools/pop11-lsp" \
+  | grep -q '"name":"pop11-lsp"' || {
+    echo "ci: LSP smoke failed" >&2; exit 1; }
 rm -rf "$sandbox"
 
 echo "ci: OK $out/$tarball"

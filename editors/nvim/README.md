@@ -36,3 +36,20 @@ so highlights work as soon as the parser is installed.
 
 LSP wiring (`poplog-lsp`) lands with phase P2 of
 `poplog-language-binding-plugins.md`.
+
+## Language server
+
+The checkout also ships a Pop-11 LSP server (`pop/lsp/pop11_lsp.p`, run
+via `tools/pop11-lsp`) — diagnostics from the real Poplog compiler
+(`pop_syntax_only`, so nothing in your buffer executes), HELP/REF hover,
+and dictionary completion. The plugin starts it automatically for
+`pop11` buffers when it can find the launcher (this plugin living
+inside a poplog checkout). To point at a different tree:
+
+```lua
+vim.g.pop11_lsp_cmd = '/path/to/poplog/tools/pop11-lsp'
+```
+
+It needs a built engine (`target/pop/basepop11`) resolved the same way
+the pop11 skill resolves one: `$POPLOG_ROOT`, then
+`~/.cache/pop11-skill/config.json`, then `$usepop`.

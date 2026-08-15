@@ -50,9 +50,12 @@ cp -R "$src/pop/lib" "$stage/$name/pop/lib"
 cp -R "$repo/.claude/skills/pop11" "$stage/$name/skill"
 # The MCP server ships too (its launcher falls back to $root/pop/mcp when
 # not run from a checkout).  Sources live in the repo, not the built tree.
-mkdir -p "$stage/$name/pop/mcp" "$stage/$name/tools"
+mkdir -p "$stage/$name/pop/mcp" "$stage/$name/pop/lsp" "$stage/$name/tools"
 cp "$repo/pop/mcp/pop11_mcp.p" "$stage/$name/pop/mcp/pop11_mcp.p"
 cp "$repo/tools/pop11-mcp" "$stage/$name/tools/pop11-mcp"
+# ... and the LSP server (same launcher fallback scheme)
+cp "$repo/pop/lsp/pop11_lsp.p" "$stage/$name/pop/lsp/pop11_lsp.p"
+cp "$repo/tools/pop11-lsp" "$stage/$name/tools/pop11-lsp"
 
 mkdir -p "$out"
 tar -C "$stage" -czf "$out/$name.tar.gz" "$name"

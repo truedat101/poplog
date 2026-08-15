@@ -422,3 +422,6 @@ define lconstant serve();
 enddefine;
 
 serve();
+;;; trapped eval mishaps set pop_exit_ok false; stdin EOF is an orderly
+;;; shutdown and must exit 0
+true -> pop_exit_ok;

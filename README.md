@@ -158,6 +158,19 @@ format are documented in the
 [Claude Code MCP docs](https://docs.claude.com/en/docs/claude-code/mcp);
 other MCP clients configure the same stdio command their own way.
 
+## Editors: the LSP server
+
+The same idea for editors: a Language Server Protocol server written in
+Pop-11 (`pop/lsp/pop11_lsp.p`, launched by `tools/pop11-lsp`, also
+shipped in the tarball). Because the server *is* a Poplog session,
+diagnostics come from the **real compiler** — buffers are checked with
+`pop_syntax_only` set, so the VM plants nothing and nothing in your file
+executes — hover shows the actual HELP/REF/TEACH entry for the word
+under the cursor, and completion draws from the live dictionary. The
+[Neovim plugin](editors/nvim/) starts it automatically for `pop11`
+buffers; any LSP client can run the same stdio command. End-to-end
+protocol tests: `python3 tools/lsp/test-e2e.py`.
+
 ## Packaging (Nix)
 
 A self-contained **Nix flake** builds and bootstraps the whole system — all
