@@ -1,10 +1,41 @@
-# macOS arm64: process/coroutine machinery broken (port rung-3 gate)
+# Coroutine machinery broken on arm64 AND riscv64 (port rung-3 gate)
 
-**Status:** open · **Severity:** high (blocks `sys_file_match` repeaters
-called from procedures, `make_indexes`, `simproc`/process users, and is a
-listed acceptance gate of the port) · **Area:** process save/restore
-(`aprocess.s` / `sr_incr.p` / W^X interplay) ·
+**Status:** FIXED 2026-08-14 · **Severity:** high ·
+**Area:** `pop/src/{arm64,riscv64}/aprocess.s` ·
 **Filed 2026-08-14 while fixing the dirent/stat struct bug**
+
+## Root cause and fix (2026-08-14)
+
+Not macOS-specific and not W^X: `_ussave` and `_userasund` in the
+arm64 (and riscv64) `aprocess.s` were **branch-to-self placeholder
+stubs** from the original port skeleton (`b C_LAB(_ussave)` directly
+under its own `DEF_C_LAB` — a literal `b .`), which survived the June
+2026 process-swap rewrite that implemented everything around them.
+Every `runproc`/`suspend` needing to swap out a non-empty user stack
+spun forever in that branch — on macOS *and* arm64 Linux (verified on
+raspi5: identical hang; earlier Linux successes only ever suspended
+with an empty stack). The `wx-decline` SIGBUS variant was downstream
+confusion, not the cause.
+
+Both routines are now implemented (faithful ports of the x86-64
+versions: save the deepest LENGTH bytes ascending into the record,
+shift the retained top against `_userhi`, pop the freed space), and
+mirrored in `pop/src/riscv64/aprocess.s` (same self-tail stubs there;
+validated 2026-08-15 on riscv64 hardware — clean rebuild under
+`setarch -R`, the consproc/suspend/runproc repro 3/3).
+
+Verified on macos-arm64 after a clean rebuild, repeatedly: the minimal
+consproc/suspend/runproc repro (5/5), `sys_file_match` from procedures
+and with `...`-recursion (3/3 ALL OK), `test_fileutils` (ALL PASS —
+previously spun 31 minutes), and `make_indexes` completes on macOS for
+the first time. A separate PRE-EXISTING flake found during validation
+is filed as `userstack-growth-aslr.md` — since diagnosed (not ASLR: the
+runtime assembler's `I_CHECK` was another port-skeleton stub) and FIXED
+2026-08-15; gen-docs now runs on macOS.
+
+Everything below is the original report.
+
+---
 
 This is the known-open item from `PORTING-ARM64-M-SILICON-OSX.md`:
 

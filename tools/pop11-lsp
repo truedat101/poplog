@@ -1,0 +1,35 @@
+#!/bin/sh
+# pop11-lsp — launch the Pop-11 language server (pop/lsp/pop11_lsp.p) on stdio.
+#
+# Wire into an editor, e.g. Neovim:
+#   vim.lsp.start { name = 'pop11', cmd = { '/path/to/poplog/tools/pop11-lsp' } }
+# (see editors/nvim/README.md)
+#
+# Poplog tree resolved like the pop11 skill: $POPLOG_ROOT, then the config
+# persisted by install.sh (~/.cache/pop11-skill/config.json), then $usepop.
+# The server source comes from this checkout (next to this script), so the
+# engine and the script may live in different trees.
+set -e
+
+here="$(cd "$(dirname "$0")/.." && pwd)"
+
+root="$POPLOG_ROOT"
+config="$HOME/.cache/pop11-skill/config.json"
+if [ -z "$root" ] && [ -f "$config" ]; then
+    root="$(sed -n 's/.*"root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config")"
+fi
+[ -n "$root" ] || root="$usepop"
+[ -n "$root" ] || root="$here"
+basepop="$root/target/pop/basepop11"
+[ -x "$basepop" ] || { echo "pop11-lsp: $basepop not found" >&2; exit 2; }
+
+script="$here/pop/lsp/pop11_lsp.p"
+[ -f "$script" ] || script="$root/pop/lsp/pop11_lsp.p"
+[ -f "$script" ] || { echo "pop11-lsp: pop11_lsp.p not found" >&2; exit 2; }
+
+# Documentation lives in the checkout even when the ENGINE root is a
+# tarball install (which ships pop/lib only).
+POP11_LSP_DOCROOT="$here"
+export POP11_LSP_DOCROOT
+
+exec "$root/poplog" "$basepop" "$script" ":sysexit();"

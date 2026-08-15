@@ -58,3 +58,4 @@ pop/extern/poppcre/*.dylib
 
 # Release/CI build output (tarballs, docs site, sandboxes)
 /dist/
+__pycache__/

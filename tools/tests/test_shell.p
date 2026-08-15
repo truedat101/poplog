@@ -43,10 +43,11 @@ shell_wait(job) -> (out, status);
 check('killed status', status, 143);
 
 ;;; timeout fires (sh may add a 'Terminated' notice to merged stderr,
-;;; so assert on what matters: the command was cut short)
+;;; and that notice quotes the command text -- including the word 'late'
+;;; -- so assert on echo's actual output line, not the bare word)
 shell_timeout('sleep 30; echo late', 1) -> (out, status);
 check('timeout status', status, 143);
-check_false('timeout cut short', issubstring('late', 1, out) and true);
+check_false('timeout cut short', issubstring('late\n', 1, out) and true);
 
 ;;; timeout does not delay a fast command (watchdog is detached)
 lconstant t0 = sys_real_time();

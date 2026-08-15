@@ -88,6 +88,19 @@ class Pop11Kernel(Kernel):
             os.unlink(spool)
 
         mishap = r.returncode != 0
+        if mishap and "TIMEOUT" in (r.stdout or ""):
+            # the engine is still stuck in that chunk: restart the session
+            # so later cells get a live engine (state is lost — say so).
+            try:
+                self._run("stop", timeout=30)
+            except Exception:
+                pass
+            self._started = False
+            self._ensure_session()
+            self._stream(
+                "stderr",
+                "cell timed out; the Pop-11 session was restarted "
+                "(session state reset)\n")
         out_lines, timing = [], None
         for line in (r.stdout or "").splitlines():
             if line.startswith(RAINBOW):

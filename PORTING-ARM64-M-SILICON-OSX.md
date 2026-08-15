@@ -501,7 +501,12 @@ writable+executable pages.
       is cooperatively single-threaded — holds).
 - [ ] Route the code-segment allocation through `pop_jit_alloc`, gated by a
       `W_XOR_X` flag in `sysdefs_darwin.p` (Phase 1).
-- [ ] Gates: process/coroutine machinery (rung 3) and the language images
+- [x] Gates *(process/coroutine machinery CLEARED 2026-08-14 — the blocker
+      was not W^X but branch-to-self `_ussave`/`_userasund` stubs in
+      aprocess.s, now implemented; see docs/bugs/macos-coroutines.md.
+      Verified: suspend/resume, sys_file_match recursion, make_indexes,
+      test_fileutils all pass on macOS)*: process/coroutine machinery
+      (rung 3) and the language images
       `clisp.psv`/`prolog.psv`/`pml.psv` (rung 5), which all use runtime codegen.
 
 ### Phase 5 — External-call ABI + full validation *(Part 4.5)* → ladder rungs 1–6 acceptance

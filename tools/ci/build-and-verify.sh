@@ -38,6 +38,13 @@ case "$(uname -s)/$(uname -m)" in
 esac
 seeds="${POP11_SEED_BASE_URL:-https://github.com/IoTone/poplog/releases/latest/download}"
 
+# riscv64 Poplog must run with ASLR off (PORTING-RISCV64-LINUX.md);
+# that includes popc during the engine build, so re-exec the whole
+# script under setarch -R once.
+if [ "$(uname -m)" = riscv64 ] && [ -z "$POP11_CI_NOASLR" ]; then
+    POP11_CI_NOASLR=1 exec setarch -R sh "$0" "$@"
+fi
+
 sha256() {  # portable: sha256sum on Linux, shasum on macOS
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
     else shasum -a 256 "$@"; fi
@@ -46,6 +53,18 @@ sha256() {  # portable: sha256sum on Linux, shasum on macOS
 # ---- 1. engine ------------------------------------------------------------
 if [ "${FORCE_ENGINE_REBUILD:-0}" = 1 ] || [ ! -x target/pop/basepop11 ]; then
     echo "ci: building engine for $plat"
+    if [ "${FORCE_ENGINE_REBUILD:-0}" = 1 ]; then
+        # A forced rebuild must be CLEAN: incremental make over stale
+        # popc-compiled objects does not reliably pick up .ph/.s source
+        # changes (field-learned twice). Keep only the corepop seed.
+        echo "ci: forced rebuild — clearing build products"
+        if [ -x target/pop/corepop ]; then
+            mv target/pop/corepop /tmp/ci-corepop.$$
+        fi
+        rm -rf target stamp_* Makefile poplog
+        mkdir -p target/pop
+        [ -f /tmp/ci-corepop.$$ ] && mv /tmp/ci-corepop.$$ target/pop/corepop
+    fi
     if [ ! -x target/pop/corepop ]; then
         mkdir -p target/pop
         curl -fsSL -o target/pop/corepop "$seeds/corepop-$plat"
@@ -76,6 +95,7 @@ for path in target/pop/basepop11 poplog pop/lib skill/SKILL.md \
             skill/bin/build-popcurl skill/bin/build-popsqlite \
             skill/lib/popcurl_shim.c skill/lib/popsqlite_shim.c \
             pop/mcp/pop11_mcp.p tools/pop11-mcp \
+            pop/lsp/pop11_lsp.p tools/pop11-lsp \
             pop/lib/lib/json.p; do
     echo "$list" | grep -q "/$path" || {
         echo "ci: tarball missing $path" >&2; exit 1; }
@@ -111,6 +131,14 @@ printf '%s\n' \
   | HOME="$sandbox" TMPDIR="$sandbox/tmp" "$prefix/tools/pop11-mcp" \
   | grep -q '"text":"42' || {
     echo "ci: MCP smoke failed" >&2; exit 1; }
+
+# ---- 6. LSP server smoke over the real protocol ---------------------------
+echo "ci: LSP protocol smoke against the installed tarball"
+lspreq='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#lspreq}" "$lspreq" \
+  | HOME="$sandbox" TMPDIR="$sandbox/tmp" "$prefix/tools/pop11-lsp" \
+  | grep -q '"name":"pop11-lsp"' || {
+    echo "ci: LSP smoke failed" >&2; exit 1; }
 rm -rf "$sandbox"
 
 echo "ci: OK $out/$tarball"

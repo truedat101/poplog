@@ -58,3 +58,33 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.bo.commentstring = ';;; %s'
   end,
 })
+
+-- Language server: pop/lsp/pop11_lsp.p via tools/pop11-lsp.
+-- Diagnostics (real compiler, pop_syntax_only so nothing executes),
+-- HELP/REF hover, dictionary completion.  Started automatically when
+-- the launcher can be found: set g:pop11_lsp_cmd, or rely on the
+-- launcher living two directories above this plugin (a poplog checkout).
+local function lsp_cmd()
+  if vim.g.pop11_lsp_cmd then
+    return { vim.g.pop11_lsp_cmd }
+  end
+  local here = debug.getinfo(1, 'S').source:sub(2)
+  local launcher = vim.fn.fnamemodify(here, ':h:h:h:h') .. '/tools/pop11-lsp'
+  if vim.fn.executable(launcher) == 1 then
+    return { launcher }
+  end
+  return nil
+end
+
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'pop11',
+  callback = function(args)
+    local cmd = lsp_cmd()
+    if not cmd then return end
+    vim.lsp.start {
+      name = 'pop11',
+      cmd = cmd,
+      root_dir = vim.fs.root(args.buf, { '.git', 'poplog' }) or vim.fn.getcwd(),
+    }
+  end,
+})
