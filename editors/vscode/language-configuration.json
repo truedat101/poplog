@@ -1,0 +1,30 @@
+{
+  "comments": {
+    "lineComment": ";;;",
+    "blockComment": ["/*", "*/"]
+  },
+  "brackets": [
+    ["[", "]"],
+    ["{", "}"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "[", "close": "]" },
+    { "open": "{", "close": "}" },
+    { "open": "(", "close": ")" },
+    { "open": "'", "close": "'", "notIn": ["string", "comment"] },
+    { "open": "/*", "close": " */", "notIn": ["string"] }
+  ],
+  "surroundingPairs": [
+    ["[", "]"],
+    ["{", "}"],
+    ["(", ")"],
+    ["'", "'"],
+    ["\"", "\""]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(?:define|procedure|if|unless|while|until|for|fast_for|foreach|forevery|repeat|fast_repeat|section|lblock|switchon|go_on|defmethod|flavour|vedset|exload)\\b(?!.*\\bend)|.*\\b(?:then|do|else)\\s*$",
+    "decreaseIndentPattern": "^\\s*(?:end(?:define|procedure|if|unless|while|until|for|fast_for|foreach|forevery|repeat|fast_repeat|section|lblock|switchon|go_on|defmethod|flavour|vedset|exload)|else|elseif|elseunless)\\b"
+  },
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*"
+}

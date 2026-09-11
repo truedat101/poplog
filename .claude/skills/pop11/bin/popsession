@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""popsession — persistent Pop-11 session manager for the pop11 Claude skill.
+
+A session is a background basepop11 process whose stdin is a FIFO and whose
+stdout+stderr append to a log. It survives across separate shell invocations
+(each `send` is a new process talking to the same live session). Code chunks
+are written to spool files and compiled inside `skill_run`, which dlocal-traps
+`interrupt` so mishaps print, emit an __ERROR__ marker, and return to the
+listen loop instead of killing the batch-mode session.
+
+Commands:
+  popsession start   [--name N] [--poplog-root DIR] [--image FILE.psv]
+  popsession send    [--name N] [-c CODE | -f FILE | (reads stdin)] [--timeout S]
+  popsession checkpoint [--name N] PATH.psv
+  popsession restore [--name N] PATH.psv        (stop + start --image)
+  popsession status  [--name N]
+  popsession stop    [--name N]
+
+Exit codes: 0 ok; 1 the chunk raised a Pop-11 mishap; 2 session/protocol error.
+"""
+
+import argparse, json, os, signal, subprocess, sys, time
+
+CACHE = os.path.expanduser("~/.cache/pop11-skill")
+STATS = os.path.join(CACHE, "stats.json")
+SENT = "__POPSESSION_DONE_"
+ERRMARK = "__ERROR__"
+
+RAINBOW_COLS = (196, 208, 226, 46, 51, 27, 129)  # red→violet, 256-color
+
+
+def rainbow(s):
+    """ANSI-rainbow a string on ttys; 🌈-prefix it elsewhere (tool output
+    displays would show raw escape codes)."""
+    if sys.stdout.isatty():
+        return ("".join("\033[38;5;%dm%s" % (RAINBOW_COLS[i % len(RAINBOW_COLS)], c)
+                        for i, c in enumerate(s)) + "\033[0m")
+    return "🌈 " + s
+
+
+def fmt_ms(ms):
+    return "%.2f ms" % ms if ms < 1000 else "%.2f s" % (ms / 1000)
+
+
+def load_stats():
+    try:
+        with open(STATS) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"total_ms": 0.0, "sends": 0}
+
+
+def save_stats(s):
+    os.makedirs(CACHE, exist_ok=True)
+    with open(STATS, "w") as f:
+        json.dump(s, f)
+
+# skill_run takes the completion SENTINEL as an argument and prints it
+# itself. This is load-bearing, not a convenience: when the sentinel was a
+# separate trailing statement on the same FIFO line, the outer stdin
+# compiler still held that queued statement in its itemiser (which buffers
+# state on the shared user stack) WHILE the user's chunk executed — so a
+# chunk that popped an empty stack (e.g. a bare `-> x;`) underflowed into
+# the compiler's own state and killed the whole engine. With the sentinel
+# consumed as an argument before execution starts, the same chunk now dies
+# with an ordinary trapped mishap and the session survives.
+# The stack repair below is equally load-bearing: the user stack has no
+# underflow guard, so a chunk that pops more than it pushes (`-> x;` on an
+# empty stack) silently drives the stack pointer below base and the NEXT
+# chunk's itemiser dies on it. Refilling to the entry depth keeps the
+# engine sane; the popped-junk values were garbage anyway.
+# Bump whenever BOOTSTRAP changes shape: running sessions (and restored
+# images, which carry their era's skill_run) are re-bootstrapped on the
+# next send when their stamp is older.
+BOOT_VERSION = 2
+
+BOOTSTRAP = """
+define skill_run(file, sentinel);
+    lvars _base = stacklength();
+    dlocal interrupt =
+        procedure;
+            while stacklength() fi_< _base do false endwhile;
+            npr('%s'); npr(sentinel); sysflush(popdevout);
+            exitfrom(skill_run);
+        endprocedure;
+    pop11_compile(file);
+    while stacklength() fi_< _base do false endwhile;
+    npr(sentinel); sysflush(popdevout);
+enddefine;
+npr('__POPSESSION_READY__'); sysflush(popdevout);
+""" % ERRMARK
+
+
+def sdir(name):
+    return os.path.join(CACHE, "session-" + name)
+
+
+def meta_path(name):
+    return os.path.join(sdir(name), "meta.json")
+
+
+def load_meta(name):
+    try:
+        with open(meta_path(name)) as f:
+            return json.load(f)
+    except OSError:
+        return None
+
+
+def save_meta(name, meta):
+    with open(meta_path(name), "w") as f:
+        json.dump(meta, f, indent=1)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def resolve_root(cli_root, name):
+    root = cli_root or os.environ.get("POPLOG_ROOT")
+    if not root:
+        m = load_meta(name)
+        if m:
+            root = m.get("root")
+    if not root:
+        try:  # persisted by install.sh
+            with open(os.path.join(CACHE, "config.json")) as f:
+                root = json.load(f).get("root")
+        except OSError:
+            pass
+    if not root and os.environ.get("usepop"):
+        root = os.environ["usepop"]
+    if not root or not os.path.exists(os.path.join(root, "target", "pop", "basepop11")):
+        sys.exit("popsession: cannot find a built Poplog tree. Pass --poplog-root "
+                 "or set $POPLOG_ROOT (needs ./poplog and ./target/pop/basepop11). ")
+    return os.path.abspath(root)
+
+
+def capture_env(root):
+    out = subprocess.run([os.path.join(root, "poplog"), "/usr/bin/env"],
+                         capture_output=True, text=True, check=True).stdout
+    env = dict(os.environ)
+    for line in out.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            env[k] = v
+    return env
+
+
+# ------------------------------------------------------------------ send core
+
+def fifo_write(name, text):
+    """Append text to the session FIFO; error out if no live reader."""
+    fifo = os.path.join(sdir(name), "stdin.fifo")
+    try:
+        fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    except OSError:
+        sys.exit("popsession: session '%s' is not running (start it first)" % name)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
+def await_sentinel(name, marker, timeout):
+    """Stream new log lines until marker; return (saw_error, lines)."""
+    log = os.path.join(sdir(name), "out.log")
+    offp = os.path.join(sdir(name), "offset")
+    try:
+        with open(offp) as f:
+            off = int(f.read().strip() or 0)
+    except OSError:
+        off = 0
+    deadline = time.time() + timeout
+    lines, saw_err, buf = [], False, b""
+    # Binary mode: session output is arbitrary bytes (shelled-out commands
+    # write straight into out.log). Offset arithmetic must be in bytes;
+    # decoding (with replacement) happens per line. Text mode here mixed
+    # tell()'s byte cookie with a character count and raised
+    # UnicodeDecodeError on any non-UTF-8/multibyte output.
+    with open(log, "rb") as f:
+        f.seek(off)
+        while time.time() < deadline:
+            chunk = f.read()
+            if chunk:
+                buf += chunk
+                while b"\n" in buf:
+                    bline, buf = buf.split(b"\n", 1)
+                    line = bline.decode("utf-8", "replace")
+                    if line.strip() == marker:
+                        with open(offp, "w") as of:
+                            of.write(str(f.tell() - len(buf)))
+                        return saw_err, lines
+                    if line.strip() == ERRMARK:
+                        saw_err = True
+                    if line.rstrip():
+                        lines.append(line.rstrip())
+            else:
+                time.sleep(0.005)
+    with open(offp, "w") as of:
+        of.write(str(off))
+    lines.append("popsession: TIMEOUT after %ss waiting for the session" % timeout)
+    return True, lines
+
+
+def do_send(name, code, timeout, raw=False, show_timing=True):
+    m = load_meta(name)
+    if not m or not alive(m["pid"]):
+        sys.exit("popsession: session '%s' is not running" % name)
+    # Auto-heal across CLI upgrades: a running session whose skill_run
+    # predates this CLI's bootstrap would wedge on the sentinel protocol
+    # (field-hit 2026-08-14 when the underflow fix changed skill_run's
+    # signature). Redefinition is instant, so just re-send the bootstrap.
+    if not raw and m.get("boot") != BOOT_VERSION:
+        do_send(name, BOOTSTRAP, timeout, raw=True, show_timing=False)
+        m = load_meta(name) or m
+        m["boot"] = BOOT_VERSION
+        save_meta(name, m)
+    m["seq"] = m.get("seq", 0) + 1
+    save_meta(name, m)
+    marker = "%s%d_%d__" % (SENT, m["seq"], os.getpid())
+    if raw:
+        payload = code + "\nnpr('%s'); sysflush(popdevout);\n" % marker
+    else:
+        spool = os.path.join(sdir(name), "spool%d.p" % m["seq"])
+        with open(spool, "w") as f:
+            f.write(code if code.endswith("\n") else code + "\n")
+        # one single statement per line: skill_run prints the sentinel
+        # itself (see BOOTSTRAP for why a trailing npr would be fatal)
+        payload = "skill_run('%s', '%s');\n" % (spool, marker)
+    t0 = time.perf_counter()
+    fifo_write(name, payload)
+    saw_err, lines = await_sentinel(name, marker, timeout)
+    dt = (time.perf_counter() - t0) * 1000
+    m = load_meta(name) or m
+    m["total_ms"] = m.get("total_ms", 0.0) + dt
+    save_meta(name, m)
+    stats = load_stats()
+    stats["total_ms"] += dt
+    stats["sends"] += 1
+    save_stats(stats)
+    for line in lines:
+        print(line)
+    if show_timing:
+        print(rainbow("pop %s │ session %s over %d runs │ all-time %s"
+                      % (fmt_ms(dt), fmt_ms(m["total_ms"]), m["seq"],
+                         fmt_ms(stats["total_ms"]))))
+    return 1 if saw_err else 0
+
+
+# ------------------------------------------------------------------ commands
+
+def cmd_start(args):
+    name = args.name
+    d = sdir(name)
+    m = load_meta(name)
+    if m and alive(m.get("pid", -1)):
+        print("popsession: session '%s' already running (pid %d)" % (name, m["pid"]))
+        return 0
+    os.makedirs(d, exist_ok=True)
+    root = resolve_root(args.poplog_root, name)
+    env = capture_env(root)
+    fifo = os.path.join(d, "stdin.fifo")
+    log = os.path.join(d, "out.log")
+    if os.path.exists(fifo):
+        os.unlink(fifo)
+    os.mkfifo(fifo)
+    for p in ("offset",):
+        with open(os.path.join(d, p), "w") as f:
+            f.write("0")
+    open(log, "w").close()
+    basepop = os.path.join(root, "target", "pop", "basepop11")
+    argv = [basepop]
+    if args.image:
+        argv.append("-" + os.path.abspath(args.image))
+    # O_RDWR: the child itself holds a writer on its own stdin FIFO, so it
+    # never sees EOF between sends; later writers open/close freely.
+    fd_in = os.open(fifo, os.O_RDWR)
+    fd_out = os.open(log, os.O_WRONLY | os.O_APPEND)
+    p = subprocess.Popen(argv, stdin=fd_in, stdout=fd_out, stderr=fd_out,
+                         env=env, start_new_session=True)
+    os.close(fd_in)
+    os.close(fd_out)
+    save_meta(name, {"pid": p.pid, "root": root, "seq": 0,
+                     "boot": BOOT_VERSION,
+                     "image": args.image, "started": time.time()})
+    rc = do_send(name, BOOTSTRAP, args.timeout, raw=True, show_timing=False)
+    if rc == 0:
+        print("popsession: session '%s' up (pid %d%s)"
+              % (name, p.pid, ", image " + args.image if args.image else ""))
+    else:
+        print("popsession: session started but bootstrap did not confirm")
+    return rc
+
+
+def cmd_send(args):
+    if args.code is not None:
+        code = args.code
+    elif args.file:
+        with open(args.file) as f:
+            code = f.read()
+    else:
+        code = sys.stdin.read()
+    if not code.strip():
+        sys.exit("popsession send: empty chunk")
+    return do_send(args.name, code, args.timeout)
+
+
+def cmd_checkpoint(args):
+    if getattr(args, "verify", None):
+        # Validation gate: a checkpoint records state, not quality. Run the
+        # expression through the normal mishap-trapped path first; a mishap
+        # inside it or a false result means no image is written, and the
+        # transcript shows exactly what the gate was.
+        gate = ("if not(%s) then\n"
+                "    mishap('checkpoint --verify gate returned false', []);\n"
+                "endif;" % args.verify)
+        rc = do_send(args.name, gate, args.timeout, show_timing=False)
+        if rc != 0:
+            print("popsession: --verify gate failed; no checkpoint written")
+            return 1
+    # Raw (not via a spool file): a restored image must not wake up inside a
+    # skill_run still reading a spool device that no longer exists. Stdin is
+    # fd 0 in both lives, so the restored process resumes reading the new
+    # session's FIFO seamlessly.
+    path = os.path.abspath(args.path)
+    code = ("sysgarbage();\n"
+            "if syssave('%s') then\n"
+            "    npr('__POPSESSION_RESTORED__'); sysflush(popdevout);\n"
+            "else\n"
+            "    npr('checkpoint saved: %s');\n"
+            "endif;" % (path, path))
+    return do_send(args.name, code, args.timeout, raw=True)
+
+
+def cmd_restore(args):
+    m = load_meta(args.name)
+    if m and alive(m.get("pid", -1)):
+        cmd_stop(args)
+    args.image = args.path
+    args.poplog_root = getattr(args, "poplog_root", None)
+    return cmd_start(args)
+
+
+def cmd_status(args):
+    m = load_meta(args.name)
+    if not m:
+        print("popsession: no session '%s'" % args.name)
+        return 2
+    up = alive(m["pid"])
+    print("session:  %s" % args.name)
+    print("pid:      %d (%s)" % (m["pid"], "running" if up else "DEAD"))
+    print("root:     %s" % m["root"])
+    print("image:    %s" % (m.get("image") or "-"))
+    print("sends:    %d" % m.get("seq", 0))
+    if m.get("started"):
+        print("uptime:   %.0f s" % (time.time() - m["started"]))
+    return 0 if up else 2
+
+
+def cmd_report(args):
+    stats = load_stats()
+    m = load_meta(args.name)
+    if m and alive(m.get("pid", -1)):
+        print(rainbow("session '%s': %s over %d runs"
+                      % (args.name, fmt_ms(m.get("total_ms", 0.0)), m.get("seq", 0))))
+    print(rainbow("poplog all-time: %s over %d runs"
+                  % (fmt_ms(stats["total_ms"]), stats["sends"])))
+    return 0
+
+
+def cmd_claude_hook(args):
+    """SessionStart/SessionEnd hooks: report Pop-11 time per Claude session."""
+    try:
+        payload = json.load(sys.stdin)
+    except (ValueError, OSError):
+        payload = {}
+    sid = str(payload.get("session_id", "unknown"))[:64]
+    baseline_p = os.path.join(CACHE, "claude-%s.baseline.json" % sid)
+    stats = load_stats()
+    if args.phase == "start":
+        os.makedirs(CACHE, exist_ok=True)
+        with open(baseline_p, "w") as f:
+            json.dump(stats, f)
+        return 0
+    base = {"total_ms": 0.0, "sends": 0}
+    try:
+        with open(baseline_p) as f:
+            base = json.load(f)
+        os.unlink(baseline_p)
+    except (OSError, ValueError):
+        pass
+    dms = stats["total_ms"] - base["total_ms"]
+    druns = stats["sends"] - base["sends"]
+    if druns > 0:
+        print(json.dumps({"systemMessage":
+                          "🌈 Poplog this Claude session: %s over %d runs (all-time %s over %d)"
+                          % (fmt_ms(dms), druns, fmt_ms(stats["total_ms"]), stats["sends"])}))
+    return 0
+
+
+def cmd_stop(args):
+    m = load_meta(args.name)
+    if not m or not alive(m.get("pid", -1)):
+        print("popsession: session '%s' not running" % args.name)
+        return 0
+    try:
+        fifo_write(args.name, "sysexit();\n")
+        for _ in range(50):
+            if not alive(m["pid"]):
+                break
+            time.sleep(0.05)
+    except SystemExit:
+        pass
+    if alive(m["pid"]):
+        try:
+            os.kill(m["pid"], signal.SIGKILL)
+        except OSError:
+            pass
+    print("popsession: session '%s' stopped" % args.name)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="popsession")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(p):
+        p.add_argument("--name", default="default")
+        p.add_argument("--timeout", type=float, default=60)
+
+    p = sub.add_parser("start")
+    common(p)
+    p.add_argument("--poplog-root")
+    p.add_argument("--image")
+    p.set_defaults(fn=cmd_start)
+
+    p = sub.add_parser("send")
+    common(p)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("-c", dest="code")
+    g.add_argument("-f", dest="file")
+    p.set_defaults(fn=cmd_send)
+
+    p = sub.add_parser("checkpoint")
+    p.add_argument("--verify", metavar="EXPR",
+                   help="Pop-11 expression gating the checkpoint: a mishap "
+                        "or false result aborts without writing an image")
+    common(p)
+    p.add_argument("path")
+    p.set_defaults(fn=cmd_checkpoint)
+
+    p = sub.add_parser("restore")
+    common(p)
+    p.add_argument("path")
+    p.add_argument("--poplog-root")
+    p.set_defaults(fn=cmd_restore)
+
+    p = sub.add_parser("status")
+    common(p)
+    p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("report")
+    common(p)
+    p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("claude-hook")
+    common(p)
+    p.add_argument("phase", choices=["start", "end"])
+    p.set_defaults(fn=cmd_claude_hook)
+
+    p = sub.add_parser("stop")
+    common(p)
+    p.set_defaults(fn=cmd_stop)
+
+    args = ap.parse_args()
+    sys.exit(args.fn(args))
+
+
+if __name__ == "__main__":
+    main()

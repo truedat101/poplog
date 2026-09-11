@@ -355,8 +355,40 @@ DEF_C_LAB (_swap_in_continue)
 #_ENDIF
 usrhi_lab:
     .xword I_LAB(_userhi)
+    ;;; _USSAVE: _ussave(_BYTE_LENGTH, _DST_ADDR)
+    ;;;
+    ;;; Swap out the DEEPEST _BYTE_LENGTH bytes of the user stack (the
+    ;;; part next to _userhi, i.e. everything UNDER the retained top
+    ;;; words) into the save area at _DST_ADDR, ascending so that
+    ;;; _usrestore can read the record back verbatim; then shift the
+    ;;; retained top up against _userhi and pop the freed space.
+    ;;; Faithful port of the x86-64 version (which uses two descending
+    ;;; `rep smovq`s for the same effect).  Until 2026-08 this was a
+    ;;; branch-to-self placeholder from the original port skeleton --
+    ;;; the cause of every "coroutine hangs at 100% cpu" report.
 DEF_C_LAB (_ussave)
-    b C_LAB (_ussave)
+    ldr   x1, [USP, #8]                 ;;; x1 = byte length
+    ldr   x0, [USP], #16                ;;; x0 = destination
+    cbz   x1, uss_done
+    adr_l x2, I_LAB(_userhi)
+    ldr   x2, [x2]                      ;;; x2 = _userhi (stack base end)
+    sub   x3, x2, x1                    ;;; x3 = start of block to save
+uss_save:
+    ldr   x12, [x3], #8                 ;;; copy block -> save area, ascending
+    str   x12, [x0], #8
+    cmp   x3, x2
+    b.ne  uss_save
+    sub   x3, x2, x1                    ;;; x3 = shift source end (exclusive)
+uss_shift:
+    cmp   x3, USP                       ;;; move retained top up by length,
+    b.eq  uss_set                       ;;; copying high-to-low (overlap safe)
+    ldr   x12, [x3, #-8]!
+    str   x12, [x2, #-8]!
+    b     uss_shift
+uss_set:
+    mov   USP, x2                       ;;; = old USP + length
+uss_done:
+    ret
 
 DEF_C_LAB (_usrestore)
     ldr   x0, [USP, #8]
@@ -382,5 +414,25 @@ usr_loop2:
 usr_done:
     ret
 
+    ;;; _USERASUND: _userasund(_BYTE_LENGTH)
+    ;;;
+    ;;; Erase the DEEPEST _BYTE_LENGTH bytes of the user stack (same
+    ;;; block _ussave saves) without saving them: shift the retained
+    ;;; top up against _userhi and pop the freed space.  Was also a
+    ;;; branch-to-self placeholder.
 DEF_C_LAB (_userasund)
-    b C_LAB (_userasund)
+    ldr   x1, [USP], #8                 ;;; x1 = byte length
+    cbz   x1, uer_done
+    adr_l x2, I_LAB(_userhi)
+    ldr   x2, [x2]                      ;;; x2 = _userhi
+    sub   x3, x2, x1                    ;;; x3 = shift source end (exclusive)
+uer_shift:
+    cmp   x3, USP
+    b.eq  uer_set
+    ldr   x12, [x3, #-8]!
+    str   x12, [x2, #-8]!
+    b     uer_shift
+uer_set:
+    mov   USP, x2
+uer_done:
+    ret

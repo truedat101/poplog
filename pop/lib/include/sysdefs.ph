@@ -135,6 +135,9 @@ dest(sys_os_type) -> (h, t);
         #_IF lmember("elf", t)
             iconstant UNIX_ELF = true;
         #_ENDIF
+    #_ELSEIF h == "darwin"
+        iconstant DARWIN = hd(t);
+        iconstant BERKELEY = 4.3;   ;;; Darwin is 4.4BSD-derived
     #_ELSEIF h == "netbsd"
         iconstant NETBSD = hd(t);
         iconstant BERKELEY = 4.3;

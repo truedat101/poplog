@@ -1,0 +1,43 @@
+HELP UTF8                    Code-point operations over UTF-8 byte strings
+
+    uses utf8;
+
+Poplog strings are byte strings; this library treats their bytes as
+UTF-8 text.  Validation is strict (RFC 3629): overlong encodings,
+surrogates, values above U+10FFFF, truncated sequences and stray
+continuation bytes are rejected.  Everything except utf8_valid
+mishaps on malformed input.
+
+utf8_valid(S) -> BOOL
+
+utf8_length(S) -> N
+    Code points, not bytes: length('日本語') is 9, utf8_length is 3.
+
+utf8_code(I, S) -> CODEPOINT
+    The I-th code point (1-based).
+
+utf8_substring(I, N, S) -> S
+    N code points starting at the I-th — the code-point analogue of
+    substring.
+
+utf8_explode(S)
+    Push every code point on the stack (pair with consutf8 or count
+    with #| ... |#).
+
+consutf8(N) -> S
+    Build a UTF-8 string from N code points on the stack:
+        consutf8(16:65E5, 16:672C, 2) -> '日本'
+    Rejects surrogates and out-of-range values.
+
+utf8_appcodes(S, P)
+    Apply P to each code point in order.
+
+Interplay with LIB * JSON: json_parse decodes \uXXXX escapes to
+UTF-8 bytes, so utf8_* is the right toolkit for examining what it
+returns.
+
+See also: LIB * STRUTILS (byte-level operations), pop/extern/unicode
+(C codecs for legacy encodings), tools/tests/test_utf8.p.
+
+--- pop/help/utf8
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

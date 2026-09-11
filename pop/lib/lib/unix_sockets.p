@@ -22,6 +22,24 @@ include unix_errno.ph;
 
 l_typespec
 
+#_IF DEF DARWIN
+    ;;; 4.4BSD sockaddr: a one-byte sa_len field precedes a ONE-BYTE
+    ;;; address family (offsets of everything after them are unchanged)
+    sockaddr_un
+      { sun_len     :byte,
+        sun_family  :byte,
+        sun_path    :byte[].exacc_ntstring
+      },
+
+    sockaddr_in
+      { sin_len     :byte,
+        sin_family  :byte,
+        sin_port    :ushort,
+        sin_addr_b  :byte[0],   ;;; dummy for getting byte addr of sin_addr
+        sin_addr    :uint,
+        sin_zero    :byte[8]
+      },
+#_ELSE
     sockaddr_un
       { sun_family  :short,
         sun_path    :byte[].exacc_ntstring
@@ -34,6 +52,7 @@ l_typespec
         sin_addr    :uint,
         sin_zero    :byte[8]
       },
+#_ENDIF
 
     hostent
       { h_name      !exptr,
@@ -107,7 +126,11 @@ lconstant
 endexload;
 
 lconstant macro (
-    SOL_SOCKET      = 16:FFFF,  ;;; options for socket level
+    ;;; The socket option LEVEL, like the option numbers in
+    ;;; unix_sockets.ph, is 4.4BSD's here and something else on Linux
+    ;;; (1, from asm-generic/socket.h).  Getting it wrong makes every
+    ;;; setsockopt fail with ENOPROTOOPT.
+    SOL_SOCKET      = #_IF DEF LINUX 1 #_ELSE 16:FFFF #_ENDIF,
     ;;; see $popsrc/errors.p for definition of DO_ERRNO_VAL
     ERRNO           = [DO_ERRNO_VAL],
     NAMEBUF_SIZE    = 256,
@@ -145,6 +168,9 @@ define lconstant name_to_sa_UNIX(name) -> (sockaddr_un, namesize);
     SIZEOFTYPE(:short) + datalength(name) -> namesize;
     initexptr_mem(namesize+1) -> sockaddr_un;
     AF_UNIX -> exacc sockaddr_un.sun_family;
+#_IF DEF DARWIN
+    namesize -> exacc sockaddr_un.sun_len;
+#_ENDIF
     name    -> exacc sockaddr_un.sun_path
 enddefine;
 ;;;
@@ -256,6 +282,9 @@ define lconstant inet_name_to_sa(name) -> (sockaddr_in, namesize, proto);
 
     HTONS(port) -> exacc sockaddr_in.sin_port;
     set_bytes(0, 1, exacc[nc] sockaddr_in.sin_zero, 8);
+#_IF DEF DARWIN
+    namesize -> exacc sockaddr_in.sin_len;
+#_ENDIF
     AF_INET -> exacc sockaddr_in.sin_family
 enddefine;
 
@@ -299,7 +328,11 @@ define lconstant name_to_sockaddr(name, af) /* -> (namebuf, namesize) */;
 enddefine;
 
 define lconstant sockaddr_to_name(namebuf, namesize) /* -> name */;
-    lvars namebuf, namesize, trans_p, af = exacc :short namebuf;
+    lvars namebuf, namesize, trans_p;
+    ;;; read the family through the sockaddr_in spec so the 4.4BSD
+    ;;; sa_len-byte layout (Darwin) and the plain 16-bit-family layout
+    ;;; both decode correctly
+    lvars sockaddr_in = namebuf, af = exacc sockaddr_in.sin_family;
     if sys_socket_name_trans(af) ->> trans_p then
         chain(namebuf, namesize, updater(trans_p))
     elseif af == AF_UNSPEC then

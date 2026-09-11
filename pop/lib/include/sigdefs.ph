@@ -158,8 +158,8 @@ iconstant macro (
         );
     #_ENDIF
 
-    #_IF DEF SUNOS or DEF OSF1 or DEF DYNIX or DEF ULTRIX or DEF AIX or DEF ALPHA_LINUX or DEF FREEBSD or DEF NETBSD
-        #_IF not(DEF FREEBSD or DEF NETBSD)
+    #_IF DEF SUNOS or DEF OSF1 or DEF DYNIX or DEF ULTRIX or DEF AIX or DEF ALPHA_LINUX or DEF FREEBSD or DEF NETBSD or DEF DARWIN
+        #_IF not(DEF FREEBSD or DEF NETBSD or DEF DARWIN)
             iconstant macro SIG_LOST    = 29;
         #_ENDIF
         iconstant macro (

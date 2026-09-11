@@ -1914,18 +1914,30 @@ enddefine;
 ;;;     plant checks on backward jumps.
 
 define I_CHECK();
-    ;;; TODO: implement interrupt and stack overflow checking for AArch64.
-    ;;; On AArch64, the pattern is:
-    ;;;   LDR X0, [_trap]
-    ;;;   CBNZ X0, call_checkall
-    ;;;   LDR X0, [_userlim]
-    ;;;   CMP USP, X0
-    ;;;   B.HS skip
-    ;;; call_checkall:
-    ;;;   BLR _checkall
+    ;;; Call _checkall when the interrupt trap flag is set or the user
+    ;;; stack has grown below _userlim (backward jumps are the only check
+    ;;; sites inside loops, so leaving this out lets an in-loop push run
+    ;;; the user stack straight down over the open segment -- including
+    ;;; the code being executed -- and makes loops uninterruptable).
+    ;;; RISC-V notes: drop_cmp_reg only RECORDS its operands (no flags),
+    ;;; so each cmp/branch pair stays adjacent and nothing may write the
+    ;;; compared registers in between; drop_br_cond plants a fixed 8-byte
+    ;;; `b.!cc +8 ; j target` pair, so the first branch's skip target is
+    ;;; +16 (its own 8 bytes + the second 8-byte branch) and the second
+    ;;; branch's is +12 (8 + the single 4-byte JALR).
+    load_literal(_WK, _checkall);
+    load_literal(_X1, ident _trap);
+    drop_load_off(_X1, _X1, _0);
+    load_literal(_X2, ident _userlim);
+    drop_load_off(_X2, _X2, _0);
+    ;;; trap set: skip the userlim test, straight to the call
+    drop_cmp_reg(_X1, _ZERO);
+    drop_br_cond(_cc_NE, _asm_code_offset _add _16);
+    ;;; _userlim <= USP means the stack is fine: skip the single call
+    drop_cmp_reg(_X2, _USP);
+    drop_br_cond(_cc_LS, _asm_code_offset _add _12);
+    drop_blr(_WK);
     ;;; skip:
-    ;;;
-    ;;; Currently unimplemented (matches ARM32 which also had it commented out).
 enddefine;
 
 

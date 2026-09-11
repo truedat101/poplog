@@ -1,0 +1,91 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Pop-11",
+  "scopeName": "source.pop11",
+  "fileTypes": ["p", "pop11", "ph"],
+  "patterns": [
+    { "include": "#comment-block" },
+    { "include": "#comment-line" },
+    { "include": "#string" },
+    { "include": "#character" },
+    { "include": "#word" },
+    { "include": "#number" },
+    { "include": "#directive" },
+    { "include": "#define-header" },
+    { "include": "#keywords" },
+    { "include": "#declarations" },
+    { "include": "#control-builtins" },
+    { "include": "#boolean" },
+    { "include": "#section-path" },
+    { "include": "#matchvar" }
+  ],
+  "repository": {
+    "comment-line": {
+      "name": "comment.line.semicolon.pop11",
+      "match": ";;;.*$"
+    },
+    "comment-block": {
+      "name": "comment.block.pop11",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [{ "include": "#comment-block" }]
+    },
+    "string": {
+      "name": "string.quoted.single.pop11",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "name": "constant.character.escape.pop11", "match": "\\\\." }
+      ]
+    },
+    "word": {
+      "name": "constant.other.symbol.pop11",
+      "match": "\"\"\"|\"[^\"\\s\\[\\]()]*\"|\"[A-Za-z0-9_]+"
+    },
+    "character": {
+      "name": "constant.character.pop11",
+      "match": "```|`\\\\``|`(?:\\\\[^`\\n]|[^`\\\\\\n])+`|`(?:\\\\[^`\\n]|[^`\\\\\\n])"
+    },
+    "number": {
+      "name": "constant.numeric.pop11",
+      "match": "\\b\\d+:[0-9A-Za-z]+\\b|\\b\\d+\\.\\d+(?:[esd][+-]?\\d+)?\\b|\\b\\d+(?:[esd][+-]?\\d+)?\\b"
+    },
+    "directive": {
+      "name": "keyword.control.directive.pop11",
+      "match": "#_(?:INCLUDE|IF|ELSEIF|ELSE_ERROR|ELSE|ENDIF|TERMIN_IF)\\b|#_<|>_#"
+    },
+    "define-header": {
+      "match": "\\b(define)\\b((?:\\s+(?:updaterof|active|macro|syntax|global|constant|lconstant|vars|lvars|dlvars|procedure))*)(?:\\s+(:\\w+))?(?:\\s+([A-Za-z_]\\w*))?",
+      "captures": {
+        "1": { "name": "keyword.control.define.pop11" },
+        "2": { "name": "storage.modifier.pop11" },
+        "3": { "name": "storage.modifier.form.pop11" },
+        "4": { "name": "entity.name.function.pop11" }
+      }
+    },
+    "keywords": {
+      "name": "keyword.control.pop11",
+      "match": "\\b(?:enddefine|procedure|endprocedure|if|endif|unless|endunless|then|do|else|elseif|elseunless|while|endwhile|until|enduntil|for|endfor|fast_for|endfast_for|foreach|endforeach|forevery|endforevery|repeat|endrepeat|fast_repeat|endfast_repeat|section|endsection|lblock|endlblock|exload|endexload|defmethod|enddefmethod|flavour|endflavour|vedset|endvedset|switchon|endswitchon|go_on|endgo_on|uses|fastprocs|nonsyntax)\\b"
+    },
+    "declarations": {
+      "name": "storage.type.pop11",
+      "match": "\\b(?:vars|lvars|dlvars|dlocal|constant|lconstant|global|compile_mode)\\b"
+    },
+    "control-builtins": {
+      "name": "keyword.control.transfer.pop11",
+      "match": "\\b(?:quitif|quitunless|quitloop|nextif|nextunless|nextloop|return|returnif|returnunless|goto|chain|chainfrom)\\b"
+    },
+    "boolean": {
+      "name": "constant.language.boolean.pop11",
+      "match": "\\b(?:true|false)\\b"
+    },
+    "section-path": {
+      "name": "entity.name.namespace.pop11",
+      "match": "\\$-(?:\\w+\\$-)*\\w+"
+    },
+    "matchvar": {
+      "name": "variable.parameter.matchvar.pop11",
+      "match": "\\?\\??[A-Za-z_]\\w*"
+    }
+  }
+}

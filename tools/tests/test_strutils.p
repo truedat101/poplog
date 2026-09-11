@@ -1,0 +1,42 @@
+;;; test_strutils.p — suite for LIB * STRUTILS (run via tools/test-libs.sh)
+uses poptest;
+uses strutils;
+
+check('split basic', str_split('a,b,c', `,`), ['a' 'b' 'c']);
+check('split string sep', str_split('a::b::c', '::'), ['a' 'b' 'c']);
+check('split adjacent seps', str_split('a,,c', `,`), ['a' '' 'c']);
+check('split no sep', str_split('abc', `,`), ['abc']);
+check('split empty', str_split('', `,`), ['']);
+check('join', str_join(['a' 'b' 'c'], ', '), 'a, b, c');
+check('join char sep', str_join(['x' 'y'], `-`), 'x-y');
+check('join empty list', str_join([], ','), '');
+check('join round trip', str_join(str_split('p/q/r', `/`), `/`), 'p/q/r');
+check('trim', str_trim('  hi \t\n'), 'hi');
+check('trim all white', str_trim(' \t '), '');
+check('ltrim', str_ltrim('  x '), 'x ');
+check('rtrim', str_rtrim('  x '), '  x');
+check_true('starts', str_starts('pop', 'poplog'));
+check_false('starts no', str_starts('log', 'poplog'));
+check_true('starts empty', str_starts('', 'x'));
+check_false('starts longer', str_starts('poplog11', 'poplog'));
+check_true('ends', str_ends('log', 'poplog'));
+check_false('ends no', str_ends('pop', 'poplog'));
+check('replace', str_replace('a-b-c', '-', '=>'), 'a=>b=>c');
+check('replace none', str_replace('abc', 'x', 'y'), 'abc');
+check('replace grows', str_replace('aa', 'a', 'aaa'), 'aaaaaa');
+check('lines lf', str_lines('a\nb\nc'), ['a' 'b' 'c']);
+check('lines trailing nl', str_lines('a\nb\n'), ['a' 'b']);
+check('lines crlf', str_lines('a\r\nb\r\n'), ['a' 'b']);
+check('lines empty middle', str_lines('a\n\nb'), ['a' '' 'b']);
+check('repeat', str_repeat('ab', 3), 'ababab');
+check('repeat zero', str_repeat('ab', 0), '');
+check('padl', str_padl('7', 3, `0`), '007');
+check('padl no-op', str_padl('1234', 3, `0`), '1234');
+check('padr', str_padr('x', 3, `.`), 'x..');
+check('lower', str_lower('MiXeD 123'), 'mixed 123');
+check('upper', str_upper('MiXeD 123'), 'MIXED 123');
+check_mishaps('split empty sep', procedure; str_split('x', '').erase endprocedure);
+check_mishaps('replace empty old', procedure; str_replace('x', '', 'y').erase endprocedure);
+check_mishaps('repeat negative', procedure; str_repeat('x', -1).erase endprocedure);
+
+test_summary();

@@ -318,8 +318,41 @@ DEF_C_LAB (_swap_in_continue)
 	.balign 8
 usrhi_lab:
     .quad I_LAB(_userhi)
+    ;;; _USSAVE: _ussave(_BYTE_LENGTH, _DST_ADDR)
+    ;;;
+    ;;; Swap out the DEEPEST _BYTE_LENGTH bytes of the user stack (the
+    ;;; block next to _userhi, i.e. everything UNDER the retained top
+    ;;; words) into the save area at _DST_ADDR ascending (so _usrestore
+    ;;; reads the record back verbatim), then shift the retained top up
+    ;;; against _userhi and pop the freed space.  Same algorithm as the
+    ;;; arm64/x86-64 versions.  Until 2026-08 this was a tail-to-self
+    ;;; placeholder from the port skeleton -- coroutines spun forever.
 DEF_C_LAB (_ussave)
-    tail C_LAB (_ussave)
+    ld    a1, 8(USP)                    ;;; a1 = byte length
+    ld    a0, 0(USP)                    ;;; a0 = destination
+    addi  USP, USP, 16
+    beqz  a1, uss_done
+    adr_l a2, I_LAB(_userhi)
+    ld    a2, 0(a2)                     ;;; a2 = _userhi (stack base end)
+    sub   a3, a2, a1                    ;;; a3 = start of block to save
+uss_save:
+    ld    t1, 0(a3)                     ;;; copy block -> save area, ascending
+    addi  a3, a3, 8
+    sd    t1, 0(a0)
+    addi  a0, a0, 8
+    bne   a3, a2, uss_save
+    sub   a3, a2, a1                    ;;; a3 = shift source end (exclusive)
+uss_shift:
+    beq   a3, USP, uss_set              ;;; move retained top up by length,
+    addi  a3, a3, -8                    ;;; copying high-to-low (overlap safe)
+    addi  a2, a2, -8
+    ld    t1, 0(a3)
+    sd    t1, 0(a2)
+    j     uss_shift
+uss_set:
+    mv    USP, a2                       ;;; = old USP + length
+uss_done:
+    ret
 
 DEF_C_LAB (_usrestore)
     ld    a0, 8(USP)
@@ -347,5 +380,24 @@ usr_loop2:
 usr_done:
     ret
 
+    ;;; _USERASUND: _userasund(_BYTE_LENGTH)
+    ;;; Erase the deepest _BYTE_LENGTH bytes (the block _ussave saves)
+    ;;; without saving them.  Was also a tail-to-self placeholder.
 DEF_C_LAB (_userasund)
-    tail C_LAB (_userasund)
+    ld    a1, 0(USP)                    ;;; a1 = byte length
+    addi  USP, USP, 8
+    beqz  a1, uer_done
+    adr_l a2, I_LAB(_userhi)
+    ld    a2, 0(a2)                     ;;; a2 = _userhi
+    sub   a3, a2, a1                    ;;; a3 = shift source end (exclusive)
+uer_shift:
+    beq   a3, USP, uer_set
+    addi  a3, a3, -8
+    addi  a2, a2, -8
+    ld    t1, 0(a3)
+    sd    t1, 0(a2)
+    j     uer_shift
+uer_set:
+    mv    USP, a2
+uer_done:
+    ret

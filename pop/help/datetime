@@ -1,0 +1,39 @@
+HELP DATETIME                    Epoch seconds <-> ISO 8601, all in UTC
+
+    uses datetime;
+
+Pure-integer date/time conversions (the standard civil-date
+algorithms), so results are identical on every platform and there is
+no timezone state: everything is UTC ("Z").
+
+dt_now() -> EPOCH
+    Current time as integer epoch seconds (sys_real_time).
+
+dt_iso(EPOCH) -> S
+    'YYYY-MM-DDTHH:MM:SSZ', e.g. dt_iso(0) = '1970-01-01T00:00:00Z'.
+    Negative (pre-1970) values work.
+
+dt_parse_iso(S) -> EPOCH
+    Accepts 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM:SS', an optional trailing
+    'Z', and a space instead of 'T'.  Mishaps on anything else.
+    Round trip: dt_parse_iso(dt_iso(t)) == t.
+
+dt_fields(EPOCH) -> {YEAR MONTH DAY HOUR MINUTE SECOND}
+
+dt_days_from_civil(Y, M, D) -> DAYS
+    Days since 1970-01-01 for a (proleptic Gregorian) civil date —
+    the building block, exported for calendar arithmetic.
+
+Example — age of a file in whole days:
+
+    uses datetime, fileutils;
+    (dt_now() - file_mtime('README.md')) div 86400 =>
+
+Note there is no timezone or locale handling; convert at the edges of
+your program if you need local time.
+
+See also: sys_real_time, LIB * FILEUTILS, tools/tests/test_datetime.p
+(vectors cross-checked against Python's calendar.timegm).
+
+--- pop/help/datetime
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026

@@ -1,0 +1,42 @@
+# Publish the vendored seed corepops (nix/seeds/) as a GitHub Release.
+#
+# Trigger by pushing a tag named corepops-YYYY.MM (e.g. corepops-2026.07),
+# or manually via workflow_dispatch with a tag name.  The seeds are
+# hand-blessed bootstrap binaries; this workflow packages the ones already
+# vendored in the tagged commit -- it does not rebuild them, so the
+# release provenance is exactly that commit.
+name: corepops-release
+
+on:
+  push:
+    tags:
+      - 'corepops-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create (e.g. corepops-2026.07)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble assets
+        run: tools/release-corepops.sh dist/corepops
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "Seed corepops $TAG" \
+            --notes-file dist/corepops/RELEASE_NOTES.md \
+            dist/corepops/corepop-* \
+            dist/corepops/SHA256SUMS \
+            dist/corepops/manifest.json

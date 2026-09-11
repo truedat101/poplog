@@ -1,0 +1,35 @@
+{
+  "name": "pop11",
+  "displayName": "Pop-11 (Poplog)",
+  "description": "Pop-11 language support: syntax highlighting and editing basics for Poplog .p files",
+  "version": "0.1.0",
+  "publisher": "iotone",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IoTone/poplog",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "pop11",
+        "aliases": ["Pop-11", "pop11", "POP-11"],
+        "extensions": [".p", ".pop11", ".ph"],
+        "firstLine": "^\\s*(;;;|/\\*|compile_mode|section\\b|define\\b)",
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pop11",
+        "scopeName": "source.pop11",
+        "path": "./syntaxes/pop11.tmLanguage.json"
+      }
+    ]
+  }
+}

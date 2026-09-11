@@ -2086,18 +2086,26 @@ enddefine;
 ;;;     plant checks on backward jumps.
 
 define I_CHECK();
-    ;;; TODO: implement interrupt and stack overflow checking for AArch64.
-    ;;; On AArch64, the pattern is:
-    ;;;   LDR X0, [_trap]
-    ;;;   CBNZ X0, call_checkall
-    ;;;   LDR X0, [_userlim]
-    ;;;   CMP USP, X0
-    ;;;   B.HS skip
-    ;;; call_checkall:
-    ;;;   BLR _checkall
+    ;;; Call _checkall when the interrupt trap flag is set or the user
+    ;;; stack has grown below _userlim (backward jumps are the only check
+    ;;; sites inside loops, so leaving this out lets an in-loop push run
+    ;;; the user stack straight down over the open segment -- including
+    ;;; the code being executed -- and makes loops uninterruptable).
+    ;;; load_literal is VARIABLE length, so all loads come before the
+    ;;; branches and every branch skips a fixed number of instructions.
+    load_literal(_WK, _checkall);
+    load_literal(_X1, ident _trap);
+    drop_load_off(_X1, _X1, _0);
+    load_literal(_X2, ident _userlim);
+    drop_load_off(_X2, _X2, _0);
+    drop_cmp_imm(_X1, _0);
+    ;;; trap set: skip the userlim test, straight to the call
+    drop_br_cond(_cc_NE, _asm_code_offset _add _12);
+    drop_cmp_reg(_X2, _USP);
+    ;;; _userlim <= USP means the stack is fine: skip the single BLR
+    drop_br_cond(_cc_LS, _asm_code_offset _add _8);
+    drop_w(_BLR _biset _shift(_WK, _5));
     ;;; skip:
-    ;;;
-    ;;; Currently unimplemented (matches ARM32 which also had it commented out).
 enddefine;
 
 

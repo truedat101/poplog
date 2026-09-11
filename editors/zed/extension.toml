@@ -1,0 +1,11 @@
+id = "pop11"
+name = "Pop-11"
+description = "Pop-11 (Poplog) language support: tree-sitter highlighting, outline, brackets"
+version = "0.1.0"
+schema_version = 1
+authors = ["IoTone <info@iotone.io>"]
+repository = "https://github.com/IoTone/poplog"
+
+[grammars.pop11]
+repository = "https://github.com/IoTone/tree-sitter-pop11"
+commit = "cc2666a0d3162031dc63e634c3bf45afd00ee890"

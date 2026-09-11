@@ -1,0 +1,17 @@
+name = "Pop-11"
+grammar = "pop11"
+# `.p` is contested (Pascal, Gnuplot, OpenEdge); Zed has no content
+# sniffing, so `.p` is claimed here — override per-project with the
+# `file_types` setting if a project mixes languages.
+path_suffixes = ["p", "ph", "pop11"]
+line_comments = [";;; "]
+block_comment = ["/* ", " */"]
+autoclose_before = ";:.,=}])>"
+word_characters = ["_"]
+
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "'", end = "'", close = true, newline = false, not_in = ["comment", "string"] },
+]

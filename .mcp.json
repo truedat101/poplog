@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "pop11": {
+      "command": "tools/pop11-mcp",
+      "args": []
+    }
+  }
+}

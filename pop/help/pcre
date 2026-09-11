@@ -1,0 +1,47 @@
+HELP PCRE                      Perl-compatible regular expressions
+
+    uses pcre;
+
+Full modern regex syntax — \d \w \b, + ? {n,m}, capture groups,
+alternation, (?i), lookaround — via a small PCRE2 shim.  One-time
+setup:
+
+    $ tools/build-poppcre.sh        (needs libpcre2-dev)
+
+LIB * REGEXP is the zero-dependency sibling (the built-in Ved engine,
+@-syntax); this library is for when you want the syntax the rest of
+the world writes.  The two expose the same shape of API.
+
+pcre_search(PAT, S, I) -> (START, NCHARS)
+    First match at or after byte position I; both false if none.
+
+pcre_matches(PAT, S) -> BOOL
+pcre_first(PAT, S) -> SUBSTRING or false
+
+pcre_groups(PAT, S) -> VECTOR or false
+    Whole match plus each capture group as substrings (false for a
+    group that did not participate):
+
+        pcre_groups('(\\w+)@(\\w+)', 'bob@example') =>
+        ** {bob@example bob example}
+
+pcre_all(PAT, S) -> LIST
+pcre_split(PAT, S) -> LIST
+pcre_replace(PAT, S, NEW) -> S
+    All matches / split around matches / every match replaced by the
+    literal string NEW.
+
+pcre_version() -> STRING
+
+Remember Pop-11 string escapes: backslash-d is written '\\d' inside
+a string literal.  Patterns are byte-oriented; put (*UTF) at the
+front of a pattern for UTF-8 mode.  A malformed pattern mishaps with
+PCRE2's error message and offset.
+
+The most recently compiled pattern is cached in the shim, so loops
+over one pattern compile it once.
+
+See also: LIB * REGEXP, LIB * STRUTILS, tools/tests/test_pcre.p.
+
+--- pop/help/pcre
+--- Author: D.Kordsmeier (@truedat101) and Claude (@claude), Aug 2026
