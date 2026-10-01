@@ -37,6 +37,29 @@ check('choice keeps a description',  c('criteria')('red'), 'the red one');
 check('choice sends null for the word false', c('criteria')('blue'), json_null);
 check('choice sends null for boolean false',   c('criteria')('green'), json_null);
 
+;;; choice options must reach the wire in the order written: a model
+;;; reads them as a sequence, so a reordered set is a different question.
+;;; Five keys, because with two or three a hash order can match by luck.
+lvars q5 = ts_choice('Who?', [[billing false] [technical false] [sales false]
+                              [legal false] [hr false]]);
+lvars wire = ts_request('s', [[d ^q5]]);
+check('choice options keep their order',
+      issubstring('"criteria":{"billing":null,"technical":null,"sales":null,'
+                  <> '"legal":null,"hr":null}', wire) and true, true);
+check('choice criteria still read like a property', q5('criteria')('sales'), json_null);
+
+;;; questions keep their order too: a local model batches them as they
+;;; arrive, and batch-mates move a question's probabilities slightly
+lvars many = ts_request('s', [[q5 ^q1] [q3 ^q1] [q9 ^q1] [q1 ^q1] [q7 ^q1]]);
+check('questions keep their order',
+      issubstring('"questions":{"q5":', many) and issubstring('},"q3":', many)
+      and issubstring('},"q9":', many) and issubstring('},"q1":', many)
+      and issubstring('},"q7":', many)
+      and issubstring('q5', many) < issubstring('q3', many)
+      and issubstring('q3', many) < issubstring('q9', many)
+      and issubstring('q9', many) < issubstring('q1', many)
+      and issubstring('q1', many) < issubstring('q7', many), true);
+
 ;;; score: criteria must be an ORDERED array, because the answer is an
 ;;; index into it
 lvars q3 = ts_score('Rate it', ['bad' 'ok' 'good']);
@@ -151,6 +174,31 @@ false -> ts_api_key;
 check_mishaps('no key means no request',
               procedure; ts_eval('s', [[safety ^q1]]) -> ; endprocedure);
 check('nothing was sent without a key', calls, 0);
+'test-key' -> ts_api_key;
+
+;;; a local backend needs no key, and must not be sent one
+lvars saved_url = ts_base_url;
+false -> ts_api_key;
+'http://127.0.0.1:8765/v1' -> ts_base_url;
+0 -> calls;
+[[200 ^SAMPLE]] -> script;
+ts_eval('s', [[safety ^q1]]) -> ;
+check('loopback needs no key', calls, 1);
+'test-key' -> ts_api_key;
+[[200 ^SAMPLE]] -> script;
+ts_eval('s', [[safety ^q1]]) -> ;
+check('loopback is not sent the key',
+      member('Authorization: Bearer test-key', seen_headers), false);
+saved_url -> ts_base_url;
+
+;;; ts_require_key false: for transports that are not HTTP at all
+false -> ts_require_key;
+false -> ts_api_key;
+0 -> calls;
+[[200 ^SAMPLE]] -> script;
+ts_eval('s', [[safety ^q1]]) -> ;
+check('ts_require_key false needs no key', calls, 1);
+true -> ts_require_key;
 'test-key' -> ts_api_key;
 
 ;;; a non-JSON body is a mishap, not a wrong answer
