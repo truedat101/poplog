@@ -177,6 +177,13 @@ ts_last_usage('input_tokens') =>    ** 12
 Question ids and choice keys may be words or strings — `[[safety ^q]]` and
 `[['safety' ^q]]` both work.
 
+Choice options and questions go out **in the order you wrote them**. A
+model reads the options as a sequence, so reordering them asks a different
+question. Measured on Laya, reordering three options changed the pick in 5
+of 6 orderings. A Pop-11 property is a hash table and would scramble them,
+so the request is built with `json_object` (`LIB JSON`), which keeps
+insertion order. `q('criteria')('billing')` still reads as before.
+
 ### Settings
 
 | variable | default |
@@ -187,6 +194,14 @@ Question ids and choice keys may be words or strings — `[[safety ^q]]` and
 | `ts_timeout` | 60 seconds |
 | `ts_max_retries` | 4 |
 | `ts_transport` | `http_request` |
+| `ts_require_key` | `true` |
+
+`ts_require_key` and a loopback `ts_base_url` (`http://127.0.0.1…`,
+`http://localhost…`, `http://[::1]…`) both mean "no key". The key check is
+skipped and no `Authorization` header is sent, because a local backend has
+nothing to check and does not need to be sent a key. That covers a local
+`laya-mlx serve --port`, and [`lib laya`](../laya/README.md), which swaps in
+its own transport and runs Laya on this machine.
 
 A key that does not start with `apikey_` gets a warning, not a refusal —
 it is almost always the wrong variable rather than a wrong key, and saying

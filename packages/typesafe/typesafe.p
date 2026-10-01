@@ -29,12 +29,12 @@ uses json;
 ;;; value is false, and false in a property is indistinguishable from an
 ;;; absent key -- so a null criterion silently became a missing one.
 section $-typesafe
-    http_request json_parse json_generate json_null
+    http_request json_parse json_generate json_null json_object
 =>
     ts_eval ts_request ts_decode ts_version ts_last_model
     ts_noul ts_choice ts_score
     ts_api_key ts_model ts_base_url ts_timeout ts_max_retries ts_transport
-    ts_last_usage
+    ts_last_usage ts_require_key
 ;
 
 ;;; ------------------------------------------------------------- settings
@@ -57,6 +57,11 @@ vars ts_model     = 'jev-latest';
 vars ts_base_url  = 'https://api.typesafe.ai/v1';
 vars ts_timeout   = 60;
 vars ts_max_retries = 4;
+
+;;; The hosted API needs a key; a local backend (laya-mlx serve, LIB LAYA)
+;;; has none to check.  A loopback ts_base_url never needs one, and a
+;;; library that installs its own transport sets this false.
+vars ts_require_key = true;
 
 ;;; Token counts from the last call, as a property with 'input_tokens' and
 ;;; 'output_tokens'.  Kept separate so ts_eval can return just the answers
@@ -113,7 +118,11 @@ define lconstant nullish(x);
 enddefine;
 
 define ts_choice(instructions, options) -> q;
-    lvars c = obj(), o;
+    ;;; json_object, not a property: options must reach the wire in the
+    ;;; order written.  A model reads them as a sequence, and a reordered
+    ;;; set is a different question -- measured on Laya, it changed the
+    ;;; pick for the same text and options.
+    lvars c = json_object(), o;
     for o in options do
         (if nullish(hd(tl(o))) then json_null else hd(tl(o)) endif)
             -> c(key(hd(o)));
@@ -140,7 +149,12 @@ enddefine;
 ;;; QUESTIONS is a list of [id question] pairs.
 
 define ts_request(state, questions) -> body;
-    lvars qs = obj(), q, root = obj();
+    ;;; Questions go out in the order given, as choice options do.  Answers
+    ;;; are keyed by id, so order looks irrelevant -- but a local model
+    ;;; batches questions in arrival order, and on a GPU a question's
+    ;;; probabilities move slightly (~1e-4) with its batch-mates.  The same
+    ;;; call from Pop-11 and from Python should get the same numbers.
+    lvars qs = json_object(), q, root = obj();
     for q in questions do
         hd(tl(q)) -> qs(key(hd(q)));
     endfor;
@@ -189,26 +203,37 @@ enddefine;
 ;;; Exponential backoff, doubling from a quarter second.  The API docs say
 ;;; SDKs are expected to do this; it is not optional politeness.
 
+define lconstant loopback(url);
+    isstartstring('http://127.0.0.1', url)
+    or isstartstring('http://localhost', url)
+    or isstartstring('http://[::1]', url)
+enddefine;
+
 define ts_eval(state, questions) -> answers;
     lvars body = ts_request(state, questions), tries = 0, wait = 25;
     lvars resp, hdrs, status, usage;
-    unless ts_api_key then
+    lvars need_key = ts_require_key and not(loopback(ts_base_url));
+    if need_key and not(ts_api_key) then
         mishap(0, 'typesafe: no API key -- set TYPESAFE_API_KEY or ts_api_key')
-    endunless;
+    endif;
     ;;; Keys look like apikey_...  A wrong-looking key is usually a wrong
     ;;; variable rather than a wrong key, and saying so beats spending a
     ;;; round trip to be told 401.  A warning, not a refusal: the prefix is
     ;;; an observation about today's keys, not a rule the server promised.
-    unless isstartstring('apikey_', ts_api_key) then
+    if need_key and not(isstartstring('apikey_', ts_api_key)) then
         printf(';;; typesafe: key does not start with apikey_ -- wrong variable?\n',
                [])
-    endunless;
+    endif;
     lvars url = ts_base_url <> '/systemone';
     ;;; [% ... %], not [ ... ]: a list literal does NOT evaluate its items,
     ;;; so the bracket form builds a list containing the word `<>` and the
     ;;; header never says Bearer anything.  Every live call would have come
     ;;; back 401 with a perfectly plausible-looking request in the log.
-    lvars headers = [% 'Authorization: Bearer ' <> ts_api_key,
+    ;;; No key, no Authorization header: a local backend has nothing to
+    ;;; check, and a key sent to one is a key sent somewhere it need not go.
+    lvars headers = [% if need_key then
+                           'Authorization: Bearer ' <> ts_api_key
+                       endif,
                        'Content-Type: application/json',
                        'User-Agent: poplog-typesafe/' <> ts_version
                            <> ' (Pop-11)' %];
