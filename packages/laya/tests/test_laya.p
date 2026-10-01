@@ -3,8 +3,8 @@
 ;;;     sh tools/test-libs.sh packages/laya/tests/test_laya.p
 ;;;
 ;;; tests/fake_laya_server.py speaks the same protocol as
-;;; `laya-mlx serve --stdio`.  What it cannot check -- that real answers
-;;; match Python's -- is tests/parity_live.p.
+;;; `laya_serve.py --stdio`.  What it cannot check -- that real answers
+;;; match Python's -- is experiments/parity.p.
 
 extend_searchlist('packages/typesafe', popuseslist) -> popuseslist;
 extend_searchlist('packages/laya', popuseslist) -> popuseslist;
@@ -15,6 +15,13 @@ sysfileok('packages/laya/tests/fake_laya_server.py') -> laya_command;
 false -> ts_api_key;            ;;; a local backend needs none
 
 ;;; ------------------------------------------------------------- startup
+
+;;; by default the server is laya_serve.py, run by uv from this package
+check('laya_home is absolute', isstartstring('/', laya_home) and true, true);
+check('laya_home holds the server',
+      sys_file_exists(laya_home dir_>< 'laya_serve.py'), true);
+check('laya_home holds the uv project',
+      sys_file_exists(laya_home dir_>< 'uv.lock'), true);
 
 check('not running before first use', laya_running(), false);
 check('health names the checkpoint',  laya_health()('model'),
@@ -68,7 +75,10 @@ laya_install();
 check('install swaps the transport back', ts_transport == laya_transport, true);
 
 ;;; a command that does not exist fails at start, not on the first answer
-'/nonexistent/laya-mlx' -> laya_command;
+'/nonexistent/laya_serve' -> laya_command;
 check_mishaps('missing command mishaps', laya_start);
+'no-such-laya-server-on-path' -> laya_command;
+check_mishaps('command missing from PATH mishaps', laya_start);
+check('and no child was started', laya_running(), false);
 
 test_summary();

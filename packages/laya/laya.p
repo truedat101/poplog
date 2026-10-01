@@ -2,7 +2,8 @@
  > File:            packages/laya/laya.p
  > Purpose:         Answer ts_eval locally with Laya on Apple Silicon (MLX)
  > Documentation:   packages/laya/README.md
- > Related Files:   packages/typesafe/typesafe.p, LIB * RUN_UNIX_PROGRAM
+ > Related Files:   packages/typesafe/typesafe.p, packages/laya/laya_serve.py,
+ >                  LIB * RUN_UNIX_PROGRAM
  >
  > NOT part of the Poplog release; out-of-tree like LIB TYPESAFE.
  >
@@ -10,8 +11,10 @@
  > the hosted /v1/systemone -- state plus a map of noul/choice/score
  > questions -- and returns the same answers.  So nothing new is needed at
  > the call site: this library swaps ts_transport for one that talks to a
- > `laya-mlx serve --stdio` child over a pipe, and ts_eval, ts_noul,
- > ts_choice and ts_score work unchanged.
+ > `laya_serve.py --stdio` child over a pipe, and ts_eval, ts_noul,
+ > ts_choice and ts_score work unchanged.  The Python environment is this
+ > package's own uv project (pyproject.toml, uv.lock), which pins laya-mlx
+ > unmodified from PyPI.
  >
  > Why a child process and not HTTP: no port to choose, nothing listening
  > that another user could reach, and the child's lifetime is ours -- when
@@ -33,16 +36,30 @@ section $-laya
     ts_transport ts_require_key ts_model http_request
     json_parse json_generate
 =>
-    laya_command laya_model laya_router laya_dtype laya_extra_args
+    laya_home laya_command laya_model laya_router laya_dtype laya_extra_args
     laya_start laya_stop laya_running laya_pid laya_health
     laya_transport laya_install laya_uninstall
 ;
 
 ;;; ------------------------------------------------------------- settings
-;;; The command is searched for on $PATH unless it starts with '/'.  Point
-;;; LAYA_MLX at a venv's bin/laya-mlx to use one without activating it.
 
-vars laya_command    = systranslate('LAYA_MLX') or 'laya-mlx';
+;;; This package's directory: laya_serve.py and the uv project that pins
+;;; laya-mlx live here.  Taken from where this file was loaded, made absolute
+;;; because the child may start after a change of directory; LAYA_HOME
+;;; overrides it, for a copy of laya.p installed somewhere else.
+define lconstant loaded_from() -> dir;
+    false -> dir;
+    returnunless(isstring(popfilename));
+    sys_fname_path(popfilename) -> dir;
+    unless isstartstring('/', dir) then current_directory dir_>< dir -> dir endunless;
+enddefine;
+vars laya_home = systranslate('LAYA_HOME') or loaded_from();
+
+;;; false (the normal case): run laya_serve.py in laya_home's uv project.
+;;; A command instead (LAYA_SERVER): run that with the same server arguments
+;;; -- a stand-in server in tests, or a wrapper that adds timing.  Searched
+;;; for on $PATH unless it starts with '/'.
+vars laya_command    = systranslate('LAYA_SERVER') or false;
 vars laya_model      = 'aac6fef/laya-mlx';
 vars laya_router     = false;   ;;; true: route by language over all three
 vars laya_dtype      = 'float16';
@@ -120,15 +137,58 @@ define lconstant call(method, params_json) -> msg;
     endunless;
 enddefine;
 
+;;; Make laya_home/.venv match uv.lock exactly (--frozen: never re-resolve on
+;;; the way to answering a question).  A no-op taking milliseconds when it
+;;; already does; the first time, it creates the environment.
+;;;
+;;; Then the server is started with that environment's python directly, NOT
+;;; with `uv run`: uv run does not exec, it keeps itself as the parent of
+;;; python.  The child -- laya_pid(), the process whose pipes we hold and
+;;; whose death we detect -- would be uv, and signals to it (kill -9 in
+;;; particular) would leave the real server running and answering.
+define lconstant sync_environment();
+    lvars status;
+    unless laya_home and sys_file_exists(laya_home dir_>< 'pyproject.toml') then
+        mishap(laya_home, 1,
+               'laya: no pyproject.toml in laya_home -- set LAYA_HOME to packages/laya')
+    endunless;
+    unless sys_search_unix_path('uv', systranslate('PATH') or '') then
+        mishap(0, 'laya: uv not found on $PATH -- see https://docs.astral.sh/uv/')
+    endunless;
+    run_unix_program('uv', ['sync' '--project' ^laya_home '--frozen' '--quiet'],
+                     false, false, false, true) -> (, , , status, );
+    unless status == 0 then
+        mishap(laya_home, 1, 'laya: uv sync failed (see its output above)')
+    endunless;
+enddefine;
+
 define laya_start();
     returnif(child);
-    lvars args =
-        [% 'serve', '--stdio', '--dtype', laya_dtype,
-           if laya_router then '--router' else '--model', laya_model endif,
-           explode(laya_extra_args) %];
+    lvars program, args,
+        server_args =
+            [% '--stdio', '--dtype', laya_dtype,
+               if laya_router then '--router' else '--model', laya_model endif,
+               explode(laya_extra_args) %];
+    if laya_command then
+        laya_command -> program;
+        server_args -> args;
+    else
+        sync_environment();
+        laya_home dir_>< '.venv/bin/python' -> program;
+        [% laya_home dir_>< 'laya_serve.py', explode(server_args) %] -> args;
+    endif;
+    ;;; Find the program before forking.  If exec fails in the child,
+    ;;; run_unix_program's child mishaps -- and a mishap handler further up
+    ;;; (any caller's, a test's) can catch it IN THE CHILD, which then carries
+    ;;; on as a second copy of this Poplog, reading the same input.
+    unless (if isstartstring('/', program) then sys_file_exists(program)
+            else sys_search_unix_path(program, systranslate('PATH') or '')
+            endif) then
+        mishap(program, 1, 'laya: server command not found')
+    endunless;
     ;;; stderr is inherited (false): load progress, warnings and tracebacks
     ;;; go where the user can see them, and never into the protocol
-    run_unix_program(laya_command, args, true, true, false, false)
+    run_unix_program(program, args, true, true, false, false)
         -> (indev, outdev, , , child);
     ;;; The first answer waits for the model to load -- seconds, more on a
     ;;; first download -- so ask for it here, where a failure to start is
@@ -136,7 +196,7 @@ define laya_start();
     lvars msg = call('health', false);
     if msg == termin then
         forget();
-        mishap(laya_command, 1,
+        mishap(program, 1,
                'laya: server exited while starting (see its output above)')
     endif;
 enddefine;
@@ -174,7 +234,7 @@ define laya_transport(method, url, body, headers, timeout)
         ;;; ts_eval, because a model that crashes on a request will very
         ;;; likely crash on it again.
         forget();
-        'laya-mlx server exited during the request (see its output above)'
+        'laya server exited during the request (see its output above)'
             -> rbody;
         503 -> status;
     elseif msg('error') ->> err then

@@ -200,7 +200,7 @@ insertion order. `q('criteria')('billing')` still reads as before.
 `http://localhost…`, `http://[::1]…`) both mean "no key". The key check is
 skipped and no `Authorization` header is sent, because a local backend has
 nothing to check and does not need to be sent a key. That covers a local
-`laya-mlx serve --port`, and [`lib laya`](../laya/README.md), which swaps in
+`laya_serve.py --port` (in `packages/laya`), and [`lib laya`](../laya/README.md), which swaps in
 its own transport and runs Laya on this machine.
 
 A key that does not start with `apikey_` gets a warning, not a refusal —

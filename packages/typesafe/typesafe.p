@@ -58,7 +58,7 @@ vars ts_base_url  = 'https://api.typesafe.ai/v1';
 vars ts_timeout   = 60;
 vars ts_max_retries = 4;
 
-;;; The hosted API needs a key; a local backend (laya-mlx serve, LIB LAYA)
+;;; The hosted API needs a key; a local backend (laya_serve.py, LIB LAYA)
 ;;; has none to check.  A loopback ts_base_url never needs one, and a
 ;;; library that installs its own transport sets this false.
 vars ts_require_key = true;
