@@ -153,7 +153,7 @@ The options from the first version of this document, now settled by measurement:
 ## 6. Open items
 
 - **laya-mlx is used, not changed.** Upgrading means bumping `laya-mlx` (and `mlx` to match its range) in `pyproject.toml`, `uv lock`, then rerunning E1. E1 is what shows a new version still answers identically through Pop-11. `checkpoint(agent)` reads `model_id`, `model_dir` and `dtype` from `Agent`, so a release that renames those breaks it loudly in the tests.
-- **`run_unix_program` can clone Poplog.** If exec fails in its child, the child mishaps, and a mishap handler further up the stack (anyone's) can catch it there. The child then runs on as a second Poplog reading the same input. `lib laya` avoids this by finding the command before forking. The library itself (`pop/lib/auto/run_unix_program.p`) could exit the child on any exec failure; that fix is not made here.
+- ~~`run_unix_program` can clone Poplog~~ Fixed in #35 (2026-10-01): a failed exec now always ends the child (status 127, reason on its own stderr), with a regression suite in `tools/tests/test_run_unix_program.p`. `lib laya` still checks for the command before forking, for a clearer error in the parent. The same fork-then-exec pattern in `pipein`, `pipeout`, `sys_popen`, LIB SHELL and `ptyfork` is unchanged.
 - ~~`lib laya` has no timeout~~ Done (2026-10-01): each call is bounded by `ts_timeout`, and startup by `laya_start_timeout`. A child that misses its deadline is killed, not waited for. Waiting is `sys_device_wait` (select) on the pipe, so stdio overhead is unchanged (0.105 ms P50).
 - `--router` is tested by a unit test and one live run (Chinese → multilingual, English → English), not by E1.
   - It loads upstream `convaiinnovations/laya`, not the `aac6fef` conversions.
