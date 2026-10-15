@@ -81,8 +81,7 @@ define global run_unix_program(name, args, input, output, errs, wait);
         if errs == true then
             sysclose(parent_errs)
         endif;
-        sysexecute(consref(name), name :: args, false);
-        fast_sysexit()
+        sysexecute_or_exit(consref(name), name :: args, false)
     endif;
 
     /* Results (5) */
@@ -113,6 +112,13 @@ endsection;
 
 
 /* --- Revision History ---------------------------------------------------
+--- D.Kordsmeier (@truedat101) and Claude (@claude), Oct 3 2026
+        The exec-or-die logic moved to LIB * SYSEXECUTE_OR_EXIT, shared with
+        the other fork-and-exec sites.
+--- D.Kordsmeier (@truedat101) and Claude (@claude), Oct 1 2026
+        A failed exec now always ends the child (status 127).  Before, the
+        child's mishap could be caught by a handler in the copied call stack,
+        and the child carried on running the parent's code.
 --- John Williams, Apr 30 1996
         First arg to sysexecute now a ref (i.e. use execvp).
 --- John Gibson, Jun  9 1994
